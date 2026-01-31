@@ -1,8 +1,167 @@
 # PLAN_TO_CREATE_FRANKENTUI__OPUS.md
 
-## FrankenTUI: The Mathematically Optimal Terminal UI Kernel
+## FrankenTUI (ftui): The Optimal Terminal UI Kernel
 
-**Version 4.0 — First-Principles Architecture with Extracted Implementations**
+**Version 5.0 — Mathematical Core + Pragmatic Workspace Architecture (Ultimate Hybrid Plan)**
+
+> Design goal: **scrollback-native, zero-flicker, agent-ergonomic, and high-performance** Rust terminal apps
+> (agent harnesses, REPLs, dashboards, pagers) built on a *tiny sacred kernel* plus feature-gated layers.
+
+---
+
+# PART 0: EXECUTIVE BLUEPRINT
+
+## 0.1 Executive Summary
+
+FrankenTUI ("ftui") is a deliberately minimal, high-performance terminal UI kernel that fuses the best
+surviving abstractions from three Rust codebases (rich_rust, charmed_rust, opentui_rust) into one coherent system.
+
+This is **not** a 1:1 port, and it is **not** "a widget zoo." ftui is:
+- **Inline-first** by default (native scrollback preserved)
+- **Flicker-free by construction** (diffed, buffered, state-tracked output; synchronized output when available)
+- **Deterministic and testable** (simulator + snapshot tests + PTY correctness tests)
+- **Fast under real loads** (cache-local buffers, pooled graphemes, minimal ANSI churn)
+- **Layered** so the kernel stays small and stable while widgets/extras can evolve rapidly
+
+### Primary "real world" targets
+- **Agent harness UIs**: Claude Code / Codex-style interactive sessions with:
+  - streaming output (log area) + stable UI chrome (status/tool/inputs)
+  - native scrollback (inline mode) + optional alt-screen
+  - mouse + links + selections
+  - no flicker, no cursor corruption, reliable cleanup on crash
+- **Traditional TUIs**: dashboards, monitors, pickers, forms
+- **Export / replay** (optional): capture frames or segment streams for HTML/SVG/text export and tests
+
+## 0.2 Mission and Non-Goals
+
+### Mission
+- Create the smallest possible **kernel** that makes terminal apps *pleasant and robust*:
+  - input → canonical events → (optional runtime) → frame → diff → minimal ANSI output
+- Provide an API surface that is **agent-ergonomic**:
+  - easy to stream logs while showing structured UI
+  - easy to build components without fighting the renderer
+- Make correctness **provable by tests**:
+  - cursor policy, inline mode invariants, width correctness, diff correctness
+
+### Non-goals (explicit)
+- Backwards compatibility with upstream APIs (we keep concepts, not types)
+- A monolithic crate bundling every widget and integration
+- "Prove global minimal ANSI output for all cases"
+  - We instead target: *minimal enough* (grouped writes, style-run grouping, state tracking) and
+    validate via measurable output-size baselines.
+- Full terminal emulation (we target output correctness for supported sequences)
+
+## 0.3 The Three-Ring Architecture (Kernel → Widgets → Extras)
+
+ftui is organized into three rings:
+
+1) **Kernel (sacred)**: stable, minimal, deterministic
+   - Frame/Buffer/Cell primitives
+   - Diff engine
+   - ANSI presenter (state tracked)
+   - Input parser + canonical Event
+   - Capability detection
+   - Screen modes (Inline vs AltScreen) policy
+
+2) **Widgets (reusable)**: built strictly on kernel primitives
+   - Panels, lists, tables, viewports, inputs, text areas
+   - Hit testing for mouse interaction
+
+3) **Extras (feature-gated)**:
+   - Markdown, syntax highlighting, forms, SSH/PTY integration, export (HTML/SVG), images (optional)
+
+This separation ensures the kernel stays "obviously correct" while UX layers can evolve without destabilizing it.
+
+## 0.4 Workspace Layout (Crates)
+
+Use a workspace (recommended) to enforce layering boundaries:
+
+1) `ftui-core`
+   - Raw mode + terminal lifecycle guards (RAII)
+   - Capability detection (env heuristics + optional queries)
+   - Input parsing into canonical `Event`
+   - Screen mode policy helpers (Inline/AltScreen)
+
+2) `ftui-render`
+   - `Cell`, `Buffer`, `Frame` (Frame = buffer + optional hit grid + metadata)
+   - `GraphemePool`, `LinkRegistry`, optional `HitGrid`
+   - Diff engine (cell-level scan + run grouping)
+   - `Presenter` (ANSI writer, state tracked, single write per frame)
+   - Optional `simd` feature (unsafe isolated)
+
+3) `ftui-style`
+   - Visual styling model (`TextStyle`, `CellStyle`, `Theme`, semantic colors)
+   - Color downgrade (TrueColor → 256 → 16 → ASCII)
+   - Deterministic style merge semantics (mask/props)
+
+4) `ftui-text`
+   - `Text`, `Span`, `Segment` (+ markup parser as optional)
+   - Width measurement, wrapping, truncation, alignment
+   - Caches (LRU widths) and grapheme segmentation helpers
+
+5) `ftui-layout`
+   - `Rect`, constraints, row/col/grid layout, measurement protocol
+
+6) `ftui-runtime` (optional ring-2 "standard runtime")
+   - Bubbletea/Elm-like `Program`, `Model`, `Cmd`, scheduler/ticks
+   - Deterministic simulator
+
+7) `ftui-widgets` (feature-gated)
+   - Component library on top of kernel + style/text/layout
+
+8) `ftui-extras` (feature-gated)
+   - Markdown, syntax highlighting, export, SSH, forms, etc.
+
+9) `ftui-harness` (examples / demos)
+   - Agent harness reference implementation
+
+## 0.5 Kernel Invariants (Must Always Hold)
+
+- **All UI rendering is diffed and buffered** (Frame/Buffer → diff → presenter). No ad-hoc writes.
+- **Inline mode never clears the full screen** (preserve scrollback). Only clears a bounded UI region.
+- **Cursor correctness**: after any present(), cursor position is restored per the active policy.
+- **Style correctness**: presenter never leaves terminal in a "dangling" style/link state after exit.
+- **Width correctness**: grapheme width accounting is correct for all drawn glyphs (including ZWJ sequences).
+- **Input parsing is lossless** for supported sequences and robust against malformed input (limits enforced).
+- **Cleanup is guaranteed**: raw mode, cursor visibility, bracketed paste, mouse modes, alt screen are restored
+  even on panic (panic hook + RAII guards).
+
+## 0.6 Design Decisions to Lock Early (Decision Records / ADRs)
+
+1) **Frame is the canonical render target**
+   - Segment/text pipelines are intermediates; everything converges to Frame for diffing.
+
+2) **Inline-first**
+   - AltScreen is explicit, opt-in, and never required to use the library.
+
+3) **Presenter emits grouped runs**
+   - Changes are emitted in row-major runs (not per-cell cursor move) to reduce ANSI bytes and reduce flicker.
+
+4) **Unsafe containment policy**
+   - Default build uses fully safe scalar paths.
+   - `simd` / "hot loops" can use unsafe but MUST be:
+     - isolated in one module/crate
+     - feature gated
+     - tested + benchmarked
+     - audited (document invariants; forbid "creative" unsafe)
+
+5) **Style is split by responsibility**
+   - `CellStyle` is tiny and renderer-facing (packed fg/bg/attrs/link-id).
+   - Higher-level style (theme/semantic colors/layout) resolves into `CellStyle` before drawing.
+
+## 0.7 Quality Gates (Stop-Ship if Failing)
+
+- **Gate 1: Inline mode stability**
+  - Re-rendering UI region while streaming logs cannot corrupt scrollback or cursor placement.
+
+- **Gate 2: Diff/presenter correctness**
+  - Property tests: applying presenter output to a terminal-model yields the expected grid for supported ops.
+
+- **Gate 3: Unicode width correctness**
+  - Test suite includes emoji/ZWJ/combining marks; no off-by-one wrapping errors allowed.
+
+- **Gate 4: Terminal cleanup**
+  - PTY tests verify raw mode + cursor visibility + alt screen restoration after normal exit and panic.
 
 ---
 
@@ -29,10 +188,21 @@ Render: (Grid_current, Grid_desired) → Byte*
 such that Terminal(State, Render(G_c, G_d)) = (_, G_d)
 ```
 
-This immediately implies:
+This immediately implies (as a guiding principle):
 1. **Diff-based rendering is optimal** — producing bytes for unchanged cells is wasteful
 2. **State tracking is essential** — we must know the terminal's current state to emit minimal sequences
 3. **Cell equality must be fast** — we compare O(w×h) cells per frame
+
+⚠️ Practical note: "globally minimal" ANSI output is not always attainable without solving
+hard sequencing problems (cursor moves, clears, style resets, terminal quirks).
+ftui's objective is:
+- **correct output**
+- **bounded flicker**
+- **near-minimal bytes** via:
+  - row-major run grouping
+  - style-run coalescing
+  - state-tracked SGR and cursor position
+  - heuristics (full redraw vs diff)
 
 ### 1.2 The Fundamental Operations
 
@@ -58,12 +228,19 @@ A terminal UI library is **optimal** if and only if:
 3. **Minimal memory**: Data structures use asymptotically optimal space
 4. **Minimal latency**: No unnecessary blocking or synchronization
 
-**Corollary**: The optimal architecture must:
+**Corollary** (practical): the optimal architecture must:
 - Use cell-level diffing (not region-level)
 - Track terminal state to avoid redundant SGR codes
 - Use bitwise cell comparison (not field-by-field)
 - Cache computed values (widths, styles)
 - Pool complex content (graphemes, links)
+
+**Additional real-world constraints (often ignored by "optimal" proofs):**
+- Terminals differ in support and correctness; we must feature-detect and provide fallbacks.
+- "No flicker" depends on:
+  - synchronized output support, and/or
+  - a strict output policy (single buffered write per frame) and avoiding full-screen clears in inline mode.
+- Robustness depends on cleanup discipline and crash recovery.
 
 ### 1.4 The Three-Library Synthesis
 
@@ -74,6 +251,30 @@ FrankenTUI extracts the optimal kernel from three Rust TUI libraries:
 | **opentui_rust** | Cell grid, diff algorithm, alpha blending, scissor/opacity stacks, grapheme pool | Cache-optimal 16-byte cells, bitwise comparison, Porter-Duff compositing |
 | **rich_rust** | Segment abstraction, markup parser, measurement protocol, Renderable trait, Live display | Cow<str> for zero-copy, event-driven span rendering, LRU width cache |
 | **charmed_rust** | LipGloss styling, CSS-like properties, theme system, Elm architecture | Bitflags property tracking, shorthand tuple conversion, adaptive colors |
+
+### 1.5 What Survives vs What Gets Dropped (Explicit)
+
+This plan keeps only what strengthens the kernel:
+
+**From opentui_rust (survives)**
+- Cache-local buffers, pooled graphemes, scissor/opacity, alpha blending (opt-in)
+- State-tracked ANSI presenter
+- Input parsing patterns and safety limits
+- Hit testing grid concept (mouse affordances)
+
+**From rich_rust (survives)**
+- Segment/text modeling and measurement protocol (min/max)
+- Markup parsing (optional layer, not kernel)
+- Export-friendly intermediate representations (Segments as optional output format)
+
+**From charmed_rust (survives)**
+- Bubbletea/Elm runtime model as an *optional* standard runtime crate
+- Lipgloss-like ergonomics (builders), BUT with responsibility-separated structs
+- Semantic theme slots and style inheritance semantics (explicit masks/props)
+
+**Dropped / de-scoped from kernel**
+- Widget zoo, markdown, syntax highlighting, forms: moved to feature-gated layers
+- "View returns String" as the only API: supported via adapter, not as the core abstraction
 
 ---
 
@@ -287,23 +488,32 @@ unsafe fn compare_cells_avx2(old: &[Cell; 4], new: &[Cell; 4]) -> u8 {
     !cell_mask & 0x0F
 }
 
-/// Scalar fallback for non-AVX2 systems
+/// Scalar fallback for non-AVX2 systems (ALWAYS AVAILABLE)
 #[inline]
 fn compare_cells_scalar(old: &Cell, new: &Cell) -> bool {
-    // Transmute to [u32; 4] for branchless comparison
-    unsafe {
-        let a: [u32; 4] = std::mem::transmute_copy(old);
-        let b: [u32; 4] = std::mem::transmute_copy(new);
-        a != b
-    }
+    // Safe version: compare as 4 u32 values
+    // Compiler can vectorize this
+    old.content != new.content ||
+    old.fg != new.fg ||
+    old.bg != new.bg ||
+    old.attrs != new.attrs
 }
 ```
+
+**NOTE ON UNSAFE POLICY:**
+The plan originally used `unsafe` transmute/read for bitwise comparisons.
+In ftui v5, we require:
+- a safe default implementation (compiler can vectorize 4×u32 compares)
+- optional `simd` feature uses isolated unsafe for AVX/SSE paths
+
+This preserves Opus-level performance without making the whole codebase "unsafe by default".
 
 ### 4.3 ASCII Width with SIMD
 
 ```rust
 /// Check if string is pure ASCII and return width in one pass
 /// For ASCII, width = byte length (huge optimization)
+#[cfg(all(target_arch = "x86_64", feature = "simd"))]
 #[target_feature(enable = "avx2")]
 unsafe fn ascii_width_simd(s: &[u8]) -> Option<usize> {
     let len = s.len();
@@ -329,1014 +539,69 @@ unsafe fn ascii_width_simd(s: &[u8]) -> Option<usize> {
 
     Some(len)  // ASCII width = byte length
 }
-```
 
----
-
-## Chapter 5: Extracted Implementations
-
-### 5.1 From rich_rust: Segment System
-
-The Segment is the atomic unit of styled text. Key insight: use `Cow<str>` to avoid allocation when borrowing.
-
-```rust
-/// Atomic rendering unit - styled text slice
-/// From rich_rust/src/segment.rs
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Segment<'a> {
-    pub text: Cow<'a, str>,              // Borrowed when possible
-    pub style: Option<Style>,
-    pub control: Option<SmallVec<[ControlCode; 2]>>,  // Stack-allocated for 0-2 codes
-}
-
-/// Control codes for cursor/screen manipulation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum ControlType {
-    Bell = 1,
-    CarriageReturn = 2,
-    Home = 3,
-    Clear = 4,
-    ShowCursor = 5,
-    HideCursor = 6,
-    EnableAltScreen = 7,
-    DisableAltScreen = 8,
-    CursorUp = 9,
-    CursorDown = 10,
-    CursorForward = 11,
-    CursorBack = 12,
-    CursorNextLine = 13,
-    CursorPrevLine = 14,
-    EraseLine = 15,
-    SetTitle = 16,
-}
-
-impl<'a> Segment<'a> {
-    /// Split segment at cell position (not byte position!)
-    /// Critical for correct text wrapping with wide chars
-    pub fn split_at_cell(&self, cell_pos: usize) -> (Self, Self) {
-        if self.is_control() {
-            return (self.clone(), Self::default());
-        }
-
-        let mut width = 0;
-        let mut byte_pos = 0;
-
-        for (i, c) in self.text.char_indices() {
-            let char_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-            if width + char_width > cell_pos {
-                break;
-            }
-            width += char_width;
-            byte_pos = i + c.len_utf8();
-        }
-
-        // Optimized split using Cow to avoid unnecessary allocation
-        let (left, right) = match &self.text {
-            Cow::Borrowed(s) => {
-                let (l, r) = s.split_at(byte_pos);
-                (Cow::Borrowed(l), Cow::Borrowed(r))
-            }
-            Cow::Owned(s) => {
-                let (l, r) = s.split_at(byte_pos);
-                (Cow::Owned(l.to_string()), Cow::Owned(r.to_string()))
-            }
-        };
-
-        (
-            Self::new(left, self.style.clone()),
-            Self::new(right, self.style.clone()),
-        )
+/// Safe scalar fallback (always available)
+fn ascii_width_scalar(s: &[u8]) -> Option<usize> {
+    if s.iter().all(|&b| b & 0x80 == 0) {
+        Some(s.len())
+    } else {
+        None
     }
-
-    /// Cell width (display width, not byte length)
-    pub fn cell_length(&self) -> usize {
-        if self.is_control() { return 0; }
-        crate::unicode::display_width(&self.text)
-    }
-}
-```
-
-### 5.2 From rich_rust: Markup Parser
-
-Regex-based parser for Rich-style markup like `[bold red]text[/]`.
-
-```rust
-use std::sync::LazyLock;
-use regex::Regex;
-
-/// Markup tag pattern: [style] or [/style] or [/]
-static TAG_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(\\*)\[([A-Za-z#/@][^\[\]]*?)\]").expect("invalid regex")
-});
-
-/// Parsed tag from markup
-#[derive(Debug, Clone)]
-pub struct Tag {
-    pub name: String,
-    pub parameters: Option<String>,
-}
-
-impl Tag {
-    pub fn is_closing(&self) -> bool {
-        self.name.starts_with('/')
-    }
-
-    pub fn base_name(&self) -> &str {
-        self.name.trim_start_matches('/')
-    }
-}
-
-/// Parse markup with style stack for nesting
-/// Handles escape sequences: \\[ becomes literal [
-pub fn parse_markup<'a>(markup: &'a str, base_style: Style) -> Vec<Segment<'a>> {
-    // Fast path: no markup tags
-    if !markup.contains('[') {
-        return vec![Segment::new(Cow::Borrowed(markup), Some(base_style))];
-    }
-
-    let mut segments = Vec::new();
-    let mut style_stack: Vec<(usize, Style)> = vec![(0, base_style.clone())];
-    let mut current_text = String::new();
-    let mut last_end = 0;
-
-    for cap in TAG_PATTERN.captures_iter(markup) {
-        let full_match = cap.get(0).unwrap();
-        let backslashes = cap.get(1).map_or("", |m| m.as_str());
-        let tag_content = cap.get(2).map_or("", |m| m.as_str());
-        let match_start = full_match.start();
-
-        // Text before this match
-        if match_start > last_end {
-            current_text.push_str(&markup[last_end..match_start]);
-        }
-
-        // Handle escape sequences
-        let num_backslashes = backslashes.len();
-        let escaped = num_backslashes % 2 == 1;
-
-        // Add literal backslashes (pairs become singles)
-        if num_backslashes > 0 {
-            current_text.push_str(&"\\".repeat(num_backslashes / 2));
-        }
-
-        if escaped {
-            // Escaped bracket: literal text
-            current_text.push('[');
-            current_text.push_str(tag_content);
-            current_text.push(']');
-        } else {
-            // Emit accumulated text with current style
-            if !current_text.is_empty() {
-                let style = style_stack.last().map(|(_, s)| s.clone());
-                segments.push(Segment::new(
-                    Cow::Owned(std::mem::take(&mut current_text)),
-                    style,
-                ));
-            }
-
-            // Process tag
-            let tag = parse_tag(tag_content);
-            if tag.is_closing() {
-                // Pop matching style from stack
-                let close_name = tag.base_name().trim();
-                if close_name.is_empty() {
-                    // [/] closes most recent
-                    style_stack.pop();
-                } else {
-                    // [/name] closes specific
-                    if let Some(pos) = style_stack.iter().rposition(|(_, s)| {
-                        // Match by style name (simplified)
-                        true // In real impl, match tag name
-                    }) {
-                        style_stack.truncate(pos);
-                    }
-                }
-            } else {
-                // Opening tag: push new style
-                let new_style = parse_style_tag(&tag, style_stack.last().map(|(_, s)| s));
-                style_stack.push((segments.len(), new_style));
-            }
-        }
-
-        last_end = full_match.end();
-    }
-
-    // Remaining text
-    if last_end < markup.len() {
-        current_text.push_str(&markup[last_end..]);
-    }
-    if !current_text.is_empty() {
-        let style = style_stack.last().map(|(_, s)| s.clone());
-        segments.push(Segment::new(Cow::Owned(current_text), style));
-    }
-
-    segments
-}
-
-fn parse_tag(content: &str) -> Tag {
-    let trimmed = content.trim();
-
-    // Parameter syntax: name=value
-    if let Some(eq_pos) = trimmed.find('=') {
-        return Tag {
-            name: trimmed[..eq_pos].trim().to_string(),
-            parameters: Some(trimmed[eq_pos + 1..].trim().to_string()),
-        };
-    }
-
-    Tag {
-        name: trimmed.to_string(),
-        parameters: None,
-    }
-}
-```
-
-### 5.3 From rich_rust: Measurement Protocol
-
-```rust
-/// Measurement for layout negotiation
-/// Tracks minimum (tightest) and maximum (ideal) widths
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Measurement {
-    pub minimum: usize,  // Minimum cells required (tightest compression)
-    pub maximum: usize,  // Maximum cells required (ideal unconstrained)
-}
-
-impl Measurement {
-    pub const ZERO: Self = Self { minimum: 0, maximum: 0 };
-
-    /// Union: take max of both bounds (for side-by-side layout)
-    pub fn union(self, other: Self) -> Self {
-        Self {
-            minimum: self.minimum.max(other.minimum),
-            maximum: self.maximum.max(other.maximum),
-        }
-    }
-
-    /// Stack: add both bounds (for vertical stacking)
-    pub fn stack(self, other: Self) -> Self {
-        Self {
-            minimum: self.minimum + other.minimum,
-            maximum: self.maximum + other.maximum,
-        }
-    }
-
-    /// Intersect: find overlapping range (returns None if no overlap)
-    pub fn intersect(self, other: Self) -> Option<Self> {
-        let min_val = self.minimum.max(other.minimum);
-        let max_val = self.maximum.min(other.maximum);
-        if min_val <= max_val {
-            Some(Self { minimum: min_val, maximum: max_val })
-        } else {
-            None
-        }
-    }
-
-    /// Clamp to constraints
-    pub fn clamp(self, min_width: Option<usize>, max_width: Option<usize>) -> Self {
-        let mut result = self;
-        if let Some(min_w) = min_width {
-            result.minimum = result.minimum.max(min_w);
-            result.maximum = result.maximum.max(min_w);
-        }
-        if let Some(max_w) = max_width {
-            result.minimum = result.minimum.min(max_w);
-            result.maximum = result.maximum.min(max_w);
-        }
-        result
-    }
-
-    pub fn span(&self) -> usize {
-        self.maximum.saturating_sub(self.minimum)
-    }
-}
-```
-
-### 5.4 From charmed_rust: CSS-Like Shorthand
-
-```rust
-/// Four-sided values (like CSS padding/margin)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Sides<T> {
-    pub top: T,
-    pub right: T,
-    pub bottom: T,
-    pub left: T,
-}
-
-// CSS-style shorthand conversions:
-// 1 value:  padding(1)       → all sides = 1
-// 2 values: padding((1, 2))  → vertical = 1, horizontal = 2
-// 3 values: padding((1, 2, 3)) → top = 1, horizontal = 2, bottom = 3
-// 4 values: padding((1, 2, 3, 4)) → top, right, bottom, left (clockwise)
-
-impl<T: Copy> From<T> for Sides<T> {
-    fn from(all: T) -> Self {
-        Self { top: all, right: all, bottom: all, left: all }
-    }
-}
-
-impl<T: Copy> From<(T, T)> for Sides<T> {
-    fn from((vertical, horizontal): (T, T)) -> Self {
-        Self { top: vertical, right: horizontal, bottom: vertical, left: horizontal }
-    }
-}
-
-impl<T: Copy> From<(T, T, T)> for Sides<T> {
-    fn from((top, horizontal, bottom): (T, T, T)) -> Self {
-        Self { top, right: horizontal, bottom, left: horizontal }
-    }
-}
-
-impl<T: Copy> From<(T, T, T, T)> for Sides<T> {
-    fn from((top, right, bottom, left): (T, T, T, T)) -> Self {
-        Self { top, right, bottom, left }
-    }
-}
-
-impl<T: Copy + std::ops::Add<Output = T>> Sides<T> {
-    pub fn horizontal(&self) -> T { self.left + self.right }
-    pub fn vertical(&self) -> T { self.top + self.bottom }
-}
-```
-
-### 5.5 From charmed_rust: Style with Bitflags Property Tracking
-
-```rust
-use bitflags::bitflags;
-
-bitflags! {
-    /// Tracks which properties have been explicitly set
-    /// Enables proper inheritance: unset properties inherit from parent
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub struct Props: u64 {
-        const BOLD = 1 << 0;
-        const ITALIC = 1 << 1;
-        const UNDERLINE = 1 << 2;
-        const STRIKETHROUGH = 1 << 3;
-        const BLINK = 1 << 4;
-        const REVERSE = 1 << 5;
-        const DIM = 1 << 6;
-        const HIDDEN = 1 << 7;
-
-        const FG_COLOR = 1 << 8;
-        const BG_COLOR = 1 << 9;
-
-        const WIDTH = 1 << 10;
-        const HEIGHT = 1 << 11;
-        const MAX_WIDTH = 1 << 12;
-        const MAX_HEIGHT = 1 << 13;
-
-        const PADDING_TOP = 1 << 14;
-        const PADDING_RIGHT = 1 << 15;
-        const PADDING_BOTTOM = 1 << 16;
-        const PADDING_LEFT = 1 << 17;
-
-        const MARGIN_TOP = 1 << 18;
-        const MARGIN_RIGHT = 1 << 19;
-        const MARGIN_BOTTOM = 1 << 20;
-        const MARGIN_LEFT = 1 << 21;
-
-        const BORDER_STYLE = 1 << 22;
-        const BORDER_TOP = 1 << 23;
-        const BORDER_RIGHT = 1 << 24;
-        const BORDER_BOTTOM = 1 << 25;
-        const BORDER_LEFT = 1 << 26;
-
-        const ALIGN_H = 1 << 27;
-        const ALIGN_V = 1 << 28;
-
-        const LINK = 1 << 29;
-        const TAB_WIDTH = 1 << 30;
-    }
-}
-
-bitflags! {
-    /// Boolean text attributes
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-    pub struct Attrs: u8 {
-        const BOLD = 1 << 0;
-        const DIM = 1 << 1;
-        const ITALIC = 1 << 2;
-        const UNDERLINE = 1 << 3;
-        const BLINK = 1 << 4;
-        const REVERSE = 1 << 5;
-        const HIDDEN = 1 << 6;
-        const STRIKETHROUGH = 1 << 7;
-    }
-}
-
-/// Full style with all properties
-#[derive(Clone, Default)]
-pub struct Style {
-    props: Props,              // Which properties are explicitly set
-    attrs: Attrs,              // Boolean attributes
-    fg_color: Option<Color>,
-    bg_color: Option<Color>,
-    width: u16,
-    height: u16,
-    max_width: u16,
-    max_height: u16,
-    padding: Sides<u16>,
-    margin: Sides<u16>,
-    border_style: BorderStyle,
-    border_edges: BorderEdges,
-    border_fg: Option<Color>,
-    border_bg: Option<Color>,
-    align_h: HAlign,
-    align_v: VAlign,
-    link: Option<String>,
-    tab_width: u8,
-}
-
-impl Style {
-    pub fn new() -> Self { Self::default() }
-
-    // Fluent builders that track which properties are set
-
-    pub fn fg(mut self, color: impl Into<Color>) -> Self {
-        self.fg_color = Some(color.into());
-        self.props |= Props::FG_COLOR;
-        self
-    }
-
-    pub fn bg(mut self, color: impl Into<Color>) -> Self {
-        self.bg_color = Some(color.into());
-        self.props |= Props::BG_COLOR;
-        self
-    }
-
-    pub fn bold(mut self) -> Self {
-        self.attrs |= Attrs::BOLD;
-        self.props |= Props::BOLD;
-        self
-    }
-
-    pub fn italic(mut self) -> Self {
-        self.attrs |= Attrs::ITALIC;
-        self.props |= Props::ITALIC;
-        self
-    }
-
-    pub fn underline(mut self) -> Self {
-        self.attrs |= Attrs::UNDERLINE;
-        self.props |= Props::UNDERLINE;
-        self
-    }
-
-    pub fn padding<E: Into<Sides<u16>>>(mut self, edges: E) -> Self {
-        self.padding = edges.into();
-        self.props |= Props::PADDING_TOP | Props::PADDING_RIGHT |
-                      Props::PADDING_BOTTOM | Props::PADDING_LEFT;
-        self
-    }
-
-    pub fn margin<E: Into<Sides<u16>>>(mut self, edges: E) -> Self {
-        self.margin = edges.into();
-        self.props |= Props::MARGIN_TOP | Props::MARGIN_RIGHT |
-                      Props::MARGIN_BOTTOM | Props::MARGIN_LEFT;
-        self
-    }
-
-    pub fn border(mut self, style: BorderStyle) -> Self {
-        self.border_style = style;
-        self.border_edges = BorderEdges::all();
-        self.props |= Props::BORDER_STYLE | Props::BORDER_TOP |
-                      Props::BORDER_RIGHT | Props::BORDER_BOTTOM | Props::BORDER_LEFT;
-        self
-    }
-
-    pub fn width(mut self, w: u16) -> Self {
-        self.width = w;
-        self.props |= Props::WIDTH;
-        self
-    }
-
-    pub fn height(mut self, h: u16) -> Self {
-        self.height = h;
-        self.props |= Props::HEIGHT;
-        self
-    }
-
-    pub fn link(mut self, url: impl Into<String>) -> Self {
-        self.link = Some(url.into());
-        self.props |= Props::LINK;
-        self
-    }
-
-    /// Inherit unset properties from parent
-    pub fn inherit(mut self, parent: &Style) -> Self {
-        // Only inherit properties NOT set on self
-        let unset = !self.props;
-
-        if unset.contains(Props::FG_COLOR) {
-            self.fg_color = parent.fg_color.clone();
-        }
-        if unset.contains(Props::BG_COLOR) {
-            self.bg_color = parent.bg_color.clone();
-        }
-        // ... inherit other properties
-
-        // Merge attributes (always combine, don't replace)
-        if unset.intersects(Props::BOLD | Props::ITALIC | Props::UNDERLINE /* ... */) {
-            self.attrs |= parent.attrs;
-        }
-
-        self
-    }
-}
-```
-
-### 5.6 From charmed_rust: Border System
-
-```rust
-/// Complete border definition with all corners and edges
-#[derive(Clone, Debug)]
-pub struct Border {
-    pub top: char,
-    pub bottom: char,
-    pub left: char,
-    pub right: char,
-    pub top_left: char,
-    pub top_right: char,
-    pub bottom_left: char,
-    pub bottom_right: char,
-    // For tables with internal dividers
-    pub middle_left: char,
-    pub middle_right: char,
-    pub middle: char,
-    pub middle_top: char,
-    pub middle_bottom: char,
-}
-
-impl Border {
-    pub fn rounded() -> Self {
-        Self {
-            top: '─', bottom: '─', left: '│', right: '│',
-            top_left: '╭', top_right: '╮',
-            bottom_left: '╰', bottom_right: '╯',
-            middle_left: '├', middle_right: '┤',
-            middle: '┼', middle_top: '┬', middle_bottom: '┴',
-        }
-    }
-
-    pub fn square() -> Self {
-        Self {
-            top: '─', bottom: '─', left: '│', right: '│',
-            top_left: '┌', top_right: '┐',
-            bottom_left: '└', bottom_right: '┘',
-            middle_left: '├', middle_right: '┤',
-            middle: '┼', middle_top: '┬', middle_bottom: '┴',
-        }
-    }
-
-    pub fn double() -> Self {
-        Self {
-            top: '═', bottom: '═', left: '║', right: '║',
-            top_left: '╔', top_right: '╗',
-            bottom_left: '╚', bottom_right: '╝',
-            middle_left: '╠', middle_right: '╣',
-            middle: '╬', middle_top: '╦', middle_bottom: '╩',
-        }
-    }
-
-    pub fn heavy() -> Self {
-        Self {
-            top: '━', bottom: '━', left: '┃', right: '┃',
-            top_left: '┏', top_right: '┓',
-            bottom_left: '┗', bottom_right: '┛',
-            middle_left: '┣', middle_right: '┫',
-            middle: '╋', middle_top: '┳', middle_bottom: '┻',
-        }
-    }
-
-    pub fn ascii() -> Self {
-        Self {
-            top: '-', bottom: '-', left: '|', right: '|',
-            top_left: '+', top_right: '+',
-            bottom_left: '+', bottom_right: '+',
-            middle_left: '+', middle_right: '+',
-            middle: '+', middle_top: '+', middle_bottom: '+',
-        }
-    }
-
-    pub fn hidden() -> Self {
-        Self {
-            top: ' ', bottom: ' ', left: ' ', right: ' ',
-            top_left: ' ', top_right: ' ',
-            bottom_left: ' ', bottom_right: ' ',
-            middle_left: ' ', middle_right: ' ',
-            middle: ' ', middle_top: ' ', middle_bottom: ' ',
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub enum BorderStyle {
-    #[default]
-    None,
-    Rounded,
-    Square,
-    Double,
-    Heavy,
-    Ascii,
-    Hidden,
-    Custom(Border),
-}
-
-bitflags! {
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-    pub struct BorderEdges: u8 {
-        const TOP = 1 << 0;
-        const RIGHT = 1 << 1;
-        const BOTTOM = 1 << 2;
-        const LEFT = 1 << 3;
-    }
-}
-
-impl BorderEdges {
-    pub fn all() -> Self {
-        Self::TOP | Self::RIGHT | Self::BOTTOM | Self::LEFT
-    }
-
-    pub fn horizontal() -> Self {
-        Self::TOP | Self::BOTTOM
-    }
-
-    pub fn vertical() -> Self {
-        Self::LEFT | Self::RIGHT
-    }
-}
-```
-
-### 5.7 From charmed_rust: Color System with Profile Detection
-
-```rust
-/// Color profile (terminal capability level)
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ColorProfile {
-    Ascii,      // No color (1-bit)
-    Ansi,       // 16 colors (4-bit)
-    Ansi256,    // 256 colors (8-bit)
-    TrueColor,  // 16 million colors (24-bit)
-}
-
-impl ColorProfile {
-    /// Detect from environment
-    pub fn detect() -> Self {
-        // Check NO_COLOR first (standard for disabling color)
-        if std::env::var("NO_COLOR").is_ok() {
-            return Self::Ascii;
-        }
-
-        // Check COLORTERM for true color
-        if let Ok(colorterm) = std::env::var("COLORTERM") {
-            if colorterm == "truecolor" || colorterm == "24bit" {
-                return Self::TrueColor;
-            }
-        }
-
-        // Check TERM
-        if let Ok(term) = std::env::var("TERM") {
-            // Known true-color terminals
-            if term.contains("kitty") || term.contains("wezterm") ||
-               term.contains("alacritty") || term.contains("ghostty") {
-                return Self::TrueColor;
-            }
-            if term.contains("256color") {
-                return Self::Ansi256;
-            }
-            if term.contains("color") || term.starts_with("xterm") {
-                return Self::Ansi;
-            }
-            if term == "dumb" {
-                return Self::Ascii;
-            }
-        }
-
-        // Conservative default
-        Self::TrueColor
-    }
-
-    /// Check if this profile supports another
-    pub fn supports(&self, other: Self) -> bool {
-        *self >= other
-    }
-}
-
-/// Color that can be resolved against a profile
-#[derive(Clone, Debug)]
-pub enum Color {
-    /// Direct RGB value
-    Rgb(u8, u8, u8),
-    /// ANSI color index (0-255)
-    Ansi(u8),
-    /// Named color (resolved from theme)
-    Named(String),
-    /// Semantic color slot
-    Semantic(SemanticColor),
-    /// Adaptive color (different for light/dark)
-    Adaptive { light: Box<Color>, dark: Box<Color> },
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum SemanticColor {
-    Foreground,
-    Background,
-    Primary,
-    Secondary,
-    Success,
-    Warning,
-    Error,
-    Muted,
-    Link,
-    Selection,
-    CodeBg,
-}
-
-impl Color {
-    /// Parse from string: "#RGB", "#RRGGBB", "red", "123" (ANSI)
-    pub fn parse(s: &str) -> Option<Self> {
-        let s = s.trim();
-
-        // Hex color
-        if s.starts_with('#') {
-            let hex = &s[1..];
-            return match hex.len() {
-                3 => {
-                    let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
-                    let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
-                    let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
-                    Some(Self::Rgb(r, g, b))
-                }
-                6 => {
-                    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-                    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-                    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-                    Some(Self::Rgb(r, g, b))
-                }
-                _ => None,
-            };
-        }
-
-        // ANSI index
-        if let Ok(n) = s.parse::<u8>() {
-            return Some(Self::Ansi(n));
-        }
-
-        // Named color
-        Some(Self::Named(s.to_string()))
-    }
-
-    /// Generate ANSI escape for foreground
-    pub fn to_ansi_fg(&self, profile: ColorProfile, dark_bg: bool) -> String {
-        match (self, profile) {
-            (Self::Rgb(r, g, b), ColorProfile::TrueColor) => {
-                format!("\x1b[38;2;{};{};{}m", r, g, b)
-            }
-            (Self::Rgb(r, g, b), ColorProfile::Ansi256) => {
-                let idx = rgb_to_256(*r, *g, *b);
-                format!("\x1b[38;5;{}m", idx)
-            }
-            (Self::Rgb(r, g, b), ColorProfile::Ansi) => {
-                let idx = rgb_to_16(*r, *g, *b);
-                if idx < 8 {
-                    format!("\x1b[{}m", 30 + idx)
-                } else {
-                    format!("\x1b[{}m", 90 + idx - 8)
-                }
-            }
-            (Self::Ansi(n), ColorProfile::TrueColor | ColorProfile::Ansi256) => {
-                format!("\x1b[38;5;{}m", n)
-            }
-            (Self::Ansi(n), ColorProfile::Ansi) => {
-                let n = if *n >= 8 && *n < 16 { n - 8 + 90 } else { 30 + n };
-                format!("\x1b[{}m", n.min(37))
-            }
-            (Self::Adaptive { light, dark }, _) => {
-                let color = if dark_bg { dark } else { light };
-                color.to_ansi_fg(profile, dark_bg)
-            }
-            (_, ColorProfile::Ascii) => String::new(),
-            _ => String::new(), // Named/Semantic resolved elsewhere
-        }
-    }
-}
-
-/// Convert RGB to 256-color palette index
-fn rgb_to_256(r: u8, g: u8, b: u8) -> u8 {
-    // Check grayscale first (more accurate for grays)
-    if r == g && g == b {
-        if r < 8 { return 16; }  // Black
-        if r > 248 { return 231; }  // White
-        return 232 + ((r - 8) / 10).min(23);  // Grayscale ramp
-    }
-
-    // 6×6×6 color cube
-    let r6 = (r as u16 * 6 / 256) as u8;
-    let g6 = (g as u16 * 6 / 256) as u8;
-    let b6 = (b as u16 * 6 / 256) as u8;
-    16 + 36 * r6 + 6 * g6 + b6
-}
-
-/// Convert RGB to 16-color ANSI index
-fn rgb_to_16(r: u8, g: u8, b: u8) -> u8 {
-    let brightness = ((r as u16 + g as u16 + b as u16) / 3) as u8;
-    let bright = brightness > 127;
-
-    let base = match (r > 127, g > 127, b > 127) {
-        (false, false, false) => 0,  // black
-        (true, false, false) => 1,   // red
-        (false, true, false) => 2,   // green
-        (true, true, false) => 3,    // yellow
-        (false, false, true) => 4,   // blue
-        (true, false, true) => 5,    // magenta
-        (false, true, true) => 6,    // cyan
-        (true, true, true) => 7,     // white
-    };
-
-    if bright { base + 8 } else { base }
 }
 ```
 
 ---
 
-## Chapter 6: The Optimal Cell and Buffer
+## Chapter 5: Core Type Implementations
 
-### 6.1 Cell Structure (16 bytes, derived from opentui_rust)
+### 5.1 CellContent: Grapheme Encoding
 
 ```rust
-/// A single terminal cell.
-///
-/// # Memory Layout (16 bytes total)
-/// ```text
-/// ┌─────────────────┬─────────────────┬─────────────────┬─────────────────┐
-/// │  content (4B)   │    fg (4B)      │    bg (4B)      │   attrs (4B)    │
-/// └─────────────────┴─────────────────┴─────────────────┴─────────────────┘
-/// ```
-///
-/// # Performance Characteristics
-/// - 4 cells per 64-byte cache line
-/// - Single 128-bit SIMD comparison
-/// - No heap allocation for BMP characters
-#[repr(C, align(16))]
-#[derive(Clone, Copy)]
-pub struct Cell {
-    content: CellContent,
-    fg: PackedRgba,
-    bg: PackedRgba,
-    attrs: CellAttrs,
-}
-
-/// Cell content: character, grapheme reference, or placeholder
-#[repr(u32)]
+/// Cell content: char (BMP) or GraphemeId (complex sequences)
+/// Layout: [31: type bit][30-0: data]
+/// - If bit 31 == 0: char (Unicode scalar value up to U+7FFFFFFF)
+/// - If bit 31 == 1: GraphemeId (pool slot in bits 0-23, width in bits 24-30)
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum CellContent {
-    Empty = 0,
-    Char(char),           // Unicode scalar (up to 0x10FFFF, fits in u32)
-    Grapheme(GraphemeId), // Pool reference with cached width
-    Continuation,         // Wide char occupancy marker
-}
+#[repr(transparent)]
+pub struct CellContent(u32);
 
 impl CellContent {
-    /// Display width of this content
+    pub const EMPTY: Self = Self(0);
+
+    /// Create from single char (fast path for ASCII/BMP)
+    #[inline]
+    pub fn from_char(c: char) -> Self {
+        Self(c as u32)
+    }
+
+    /// Create from GraphemeId (for complex sequences like emoji)
+    #[inline]
+    pub fn from_grapheme(id: GraphemeId) -> Self {
+        Self(0x8000_0000 | id.0)
+    }
+
+    /// Is this a complex grapheme (not single char)?
+    #[inline]
+    pub fn is_grapheme(&self) -> bool {
+        self.0 & 0x8000_0000 != 0
+    }
+
+    /// Display width (1 for most chars, 2 for wide, encoded for graphemes)
+    #[inline]
     pub fn width(&self) -> usize {
-        match self {
-            Self::Empty | Self::Continuation => 0,
-            Self::Char(c) => unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0),
-            Self::Grapheme(id) => id.width(),
+        if self.is_grapheme() {
+            ((self.0 >> 24) & 0x7F) as usize
+        } else if self.0 == 0 {
+            0
+        } else {
+            unicode_width::UnicodeWidthChar::width(char::from_u32(self.0).unwrap_or(' '))
+                .unwrap_or(1)
         }
     }
 }
 
-/// Packed RGBA color (4 bytes)
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub struct PackedRgba(u32);
-
-impl PackedRgba {
-    pub const TRANSPARENT: Self = Self(0);
-    pub const BLACK: Self = Self(0xFF000000);  // Alpha = 255
-    pub const WHITE: Self = Self(0xFFFFFFFF);
-
-    #[inline]
-    pub fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
-        Self((r as u32) | ((g as u32) << 8) | ((b as u32) << 16) | ((a as u32) << 24))
-    }
-
-    #[inline] pub fn r(self) -> u8 { self.0 as u8 }
-    #[inline] pub fn g(self) -> u8 { (self.0 >> 8) as u8 }
-    #[inline] pub fn b(self) -> u8 { (self.0 >> 16) as u8 }
-    #[inline] pub fn a(self) -> u8 { (self.0 >> 24) as u8 }
-
-    /// Multiply alpha by factor (for opacity stack)
-    #[inline]
-    pub fn with_alpha_multiplied(self, factor: f32) -> Self {
-        let new_a = ((self.a() as f32) * factor) as u8;
-        Self((self.0 & 0x00FFFFFF) | ((new_a as u32) << 24))
-    }
-
-    /// Porter-Duff "over" compositing
-    /// self over bg: result = self + bg * (1 - self.alpha)
-    pub fn over(self, bg: Self) -> Self {
-        let sa = self.a() as f32 / 255.0;
-        let da = bg.a() as f32 / 255.0;
-
-        let out_a = sa + da * (1.0 - sa);
-        if out_a == 0.0 {
-            return Self::TRANSPARENT;
-        }
-
-        let inv_sa = 1.0 - sa;
-        let out_r = ((self.r() as f32 * sa + bg.r() as f32 * da * inv_sa) / out_a) as u8;
-        let out_g = ((self.g() as f32 * sa + bg.g() as f32 * da * inv_sa) / out_a) as u8;
-        let out_b = ((self.b() as f32 * sa + bg.b() as f32 * da * inv_sa) / out_a) as u8;
-
-        Self::new(out_r, out_g, out_b, (out_a * 255.0) as u8)
-    }
-}
-
-/// Cell attributes: text styling + hyperlink ID
-/// Bits 0-7:  Style flags (bold, italic, underline, etc.)
-/// Bits 8-31: Hyperlink ID (24-bit, 0 = no link)
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub struct CellAttrs(u32);
-
-impl CellAttrs {
-    pub const BOLD: u32       = 1 << 0;
-    pub const DIM: u32        = 1 << 1;
-    pub const ITALIC: u32     = 1 << 2;
-    pub const UNDERLINE: u32  = 1 << 3;
-    pub const BLINK: u32      = 1 << 4;
-    pub const REVERSE: u32    = 1 << 5;
-    pub const HIDDEN: u32     = 1 << 6;
-    pub const STRIKE: u32     = 1 << 7;
-
-    #[inline]
-    pub fn flags(self) -> u8 { self.0 as u8 }
-
-    #[inline]
-    pub fn link_id(self) -> u32 { self.0 >> 8 }
-
-    #[inline]
-    pub fn with_link(self, id: u32) -> Self {
-        debug_assert!(id < (1 << 24), "Link ID overflow");
-        Self((self.0 & 0xFF) | (id << 8))
-    }
-
-    pub fn has(&self, flag: u32) -> bool {
-        (self.0 & flag) != 0
-    }
-
-    pub fn set(&mut self, flag: u32) {
-        self.0 |= flag;
-    }
-
-    pub fn clear(&mut self, flag: u32) {
-        self.0 &= !flag;
-    }
-}
-
-impl Cell {
-    pub const EMPTY: Self = Self {
-        content: CellContent::Empty,
-        fg: PackedRgba::WHITE,
-        bg: PackedRgba::TRANSPARENT,
-        attrs: CellAttrs(0),
-    };
-
-    /// Bitwise equality (3-4× faster than derived PartialEq)
-    #[inline(always)]
-    pub fn bits_eq(&self, other: &Self) -> bool {
-        // Safety: Cell is repr(C) with known layout, all fields are Copy
-        unsafe {
-            let a = std::ptr::read(self as *const _ as *const [u32; 4]);
-            let b = std::ptr::read(other as *const _ as *const [u32; 4]);
-            a == b
-        }
-    }
-
-    pub fn width(&self) -> usize {
-        self.content.width()
-    }
-}
-
-// Implement PartialEq using bits_eq for consistency
-impl PartialEq for Cell {
-    fn eq(&self, other: &Self) -> bool {
-        self.bits_eq(other)
-    }
-}
-impl Eq for Cell {}
-```
-
-### 6.2 GraphemePool (Reference-Counted Interning)
-
-```rust
-/// Grapheme ID: 32-bit with cached width
-/// Layout: [31: reserved][30-24: width (7 bits)][23-0: slot (24 bits)]
+/// Grapheme ID: reference to interned string in GraphemePool
+/// Layout: [30-24: width (7 bits)][23-0: pool slot (24 bits)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct GraphemeId(u32);
@@ -1344,119 +609,1617 @@ pub struct GraphemeId(u32);
 impl GraphemeId {
     #[inline]
     pub fn new(slot: u32, width: u8) -> Self {
-        debug_assert!(slot < (1 << 24), "Slot overflow");
-        debug_assert!(width < 128, "Width overflow");
-        Self(slot | ((width as u32) << 24))
+        debug_assert!(slot < 0x00FF_FFFF, "slot overflow");
+        debug_assert!(width < 128, "width overflow");
+        Self((slot & 0x00FF_FFFF) | ((width as u32) << 24))
     }
 
     #[inline]
-    pub fn slot(self) -> u32 { self.0 & 0x00FFFFFF }
+    pub fn slot(&self) -> usize {
+        (self.0 & 0x00FF_FFFF) as usize
+    }
 
     #[inline]
-    pub fn width(self) -> usize { ((self.0 >> 24) & 0x7F) as usize }
+    pub fn width(&self) -> usize {
+        ((self.0 >> 24) & 0x7F) as usize
+    }
+}
+```
+
+### 5.2 PackedRgba: Color with Alpha
+
+```rust
+/// RGBA color packed into 4 bytes
+/// Layout: [R:8][G:8][B:8][A:8] (native endian)
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[repr(transparent)]
+pub struct PackedRgba(pub u32);
+
+impl PackedRgba {
+    pub const TRANSPARENT: Self = Self(0);
+    pub const BLACK: Self = Self::rgb(0, 0, 0);
+    pub const WHITE: Self = Self::rgb(255, 255, 255);
+
+    #[inline]
+    pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
+        Self(((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | 255)
+    }
+
+    #[inline]
+    pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self(((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | (a as u32))
+    }
+
+    #[inline]
+    pub fn r(&self) -> u8 { (self.0 >> 24) as u8 }
+    #[inline]
+    pub fn g(&self) -> u8 { (self.0 >> 16) as u8 }
+    #[inline]
+    pub fn b(&self) -> u8 { (self.0 >> 8) as u8 }
+    #[inline]
+    pub fn a(&self) -> u8 { self.0 as u8 }
+
+    /// Porter-Duff "over" compositing: src over dst
+    /// Result = src + dst × (1 - src.alpha)
+    #[inline]
+    pub fn over(self, dst: Self) -> Self {
+        let src_a = self.a() as u32;
+        if src_a == 255 { return self; }
+        if src_a == 0 { return dst; }
+
+        let inv_a = 255 - src_a;
+        let r = ((self.r() as u32 * 255) + (dst.r() as u32 * inv_a)) / 255;
+        let g = ((self.g() as u32 * 255) + (dst.g() as u32 * inv_a)) / 255;
+        let b = ((self.b() as u32 * 255) + (dst.b() as u32 * inv_a)) / 255;
+        let a = src_a + ((dst.a() as u32 * inv_a) / 255);
+
+        Self::rgba(r as u8, g as u8, b as u8, a as u8)
+    }
+
+    /// Apply uniform opacity [0.0, 1.0]
+    #[inline]
+    pub fn with_opacity(self, opacity: f32) -> Self {
+        let a = ((self.a() as f32) * opacity.clamp(0.0, 1.0)) as u8;
+        Self((self.0 & 0xFFFF_FF00) | (a as u32))
+    }
+}
+```
+
+### 5.3 CellAttrs: Packed Attributes
+
+```rust
+/// Cell attributes packed into 4 bytes
+/// Layout: [31-24: flags][23-0: link_id]
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[repr(transparent)]
+pub struct CellAttrs(u32);
+
+bitflags::bitflags! {
+    /// Text style flags (8 bits)
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub struct StyleFlags: u8 {
+        const BOLD          = 0b0000_0001;
+        const DIM           = 0b0000_0010;
+        const ITALIC        = 0b0000_0100;
+        const UNDERLINE     = 0b0000_1000;
+        const BLINK         = 0b0001_0000;
+        const REVERSE       = 0b0010_0000;
+        const STRIKETHROUGH = 0b0100_0000;
+        const HIDDEN        = 0b1000_0000;
+    }
 }
 
-/// Slot in the grapheme pool
-struct Slot {
-    bytes: Box<str>,    // UTF-8 grapheme content
-    refcount: u32,      // Reference count (0 = free)
-    width: u8,          // Cached display width
+impl CellAttrs {
+    pub const NONE: Self = Self(0);
+
+    #[inline]
+    pub fn new(flags: StyleFlags, link_id: u32) -> Self {
+        debug_assert!(link_id < 0x00FF_FFFF, "link_id overflow");
+        Self(((flags.bits() as u32) << 24) | (link_id & 0x00FF_FFFF))
+    }
+
+    #[inline]
+    pub fn flags(&self) -> StyleFlags {
+        StyleFlags::from_bits_truncate((self.0 >> 24) as u8)
+    }
+
+    #[inline]
+    pub fn link_id(&self) -> u32 {
+        self.0 & 0x00FF_FFFF
+    }
+
+    #[inline]
+    pub fn with_flags(self, flags: StyleFlags) -> Self {
+        Self((self.0 & 0x00FF_FFFF) | ((flags.bits() as u32) << 24))
+    }
+
+    #[inline]
+    pub fn with_link(self, link_id: u32) -> Self {
+        Self((self.0 & 0xFF00_0000) | (link_id & 0x00FF_FFFF))
+    }
+}
+```
+
+### 5.4 Complete Cell Implementation
+
+```rust
+/// The atomic unit of terminal display: 16 bytes
+#[repr(C, align(16))]
+#[derive(Clone, Copy)]
+pub struct Cell {
+    pub content: CellContent,
+    pub fg: PackedRgba,
+    pub bg: PackedRgba,
+    pub attrs: CellAttrs,
 }
 
-/// Interned storage for multi-codepoint grapheme clusters
+impl Default for Cell {
+    fn default() -> Self {
+        Self {
+            content: CellContent::EMPTY,
+            fg: PackedRgba::WHITE,
+            bg: PackedRgba::TRANSPARENT,
+            attrs: CellAttrs::NONE,
+        }
+    }
+}
+
+impl Cell {
+    /// Continuation cell for wide characters (placeholder)
+    pub const CONTINUATION: Self = Self {
+        content: CellContent(0xFFFF_FFFF),
+        fg: PackedRgba::TRANSPARENT,
+        bg: PackedRgba::TRANSPARENT,
+        attrs: CellAttrs::NONE,
+    };
+
+    #[inline]
+    pub fn is_continuation(&self) -> bool {
+        self.content.0 == 0xFFFF_FFFF
+    }
+
+    /// Bitwise equality (fast path)
+    #[inline]
+    pub fn bits_eq(&self, other: &Self) -> bool {
+        self.content == other.content &&
+        self.fg == other.fg &&
+        self.bg == other.bg &&
+        self.attrs == other.attrs
+    }
+
+    #[inline]
+    pub fn width(&self) -> usize {
+        self.content.width()
+    }
+}
+
+impl PartialEq for Cell {
+    fn eq(&self, other: &Self) -> bool {
+        self.bits_eq(other)
+    }
+}
+
+impl Eq for Cell {}
+```
+
+---
+
+## Chapter 6: Buffer and Frame Implementation
+
+### 6.1 Buffer: The Grid
+
+```rust
+/// Double-buffered grid of cells
+pub struct Buffer {
+    width: u16,
+    height: u16,
+    cells: Vec<Cell>,
+    scissor_stack: Vec<Rect>,
+    opacity_stack: Vec<f32>,
+}
+
+impl Buffer {
+    pub fn new(width: u16, height: u16) -> Self {
+        let size = (width as usize) * (height as usize);
+        Self {
+            width,
+            height,
+            cells: vec![Cell::default(); size],
+            scissor_stack: vec![Rect::new(0, 0, width, height)],
+            opacity_stack: vec![1.0],
+        }
+    }
+
+    #[inline]
+    pub fn width(&self) -> u16 { self.width }
+
+    #[inline]
+    pub fn height(&self) -> u16 { self.height }
+
+    /// Get cell at (x, y), returns None if out of bounds
+    #[inline]
+    pub fn get(&self, x: u16, y: u16) -> Option<&Cell> {
+        if x < self.width && y < self.height {
+            Some(&self.cells[(y as usize) * (self.width as usize) + (x as usize)])
+        } else {
+            None
+        }
+    }
+
+    /// Get cell at (x, y) without bounds check
+    /// # Safety: x < width && y < height
+    #[inline]
+    pub fn get_unchecked(&self, x: u16, y: u16) -> &Cell {
+        &self.cells[(y as usize) * (self.width as usize) + (x as usize)]
+    }
+
+    /// Set cell at (x, y), respecting scissor and opacity
+    pub fn set(&mut self, x: u16, y: u16, mut cell: Cell) {
+        if !self.in_scissor(x, y) { return; }
+
+        // Apply opacity stack
+        let opacity = self.current_opacity();
+        if opacity < 1.0 {
+            cell.fg = cell.fg.with_opacity(opacity);
+            cell.bg = cell.bg.with_opacity(opacity);
+        }
+
+        // Apply alpha compositing if bg has transparency
+        if cell.bg.a() < 255 {
+            if let Some(existing) = self.get(x, y) {
+                cell.bg = cell.bg.over(existing.bg);
+            }
+        }
+
+        let idx = (y as usize) * (self.width as usize) + (x as usize);
+        self.cells[idx] = cell;
+
+        // Handle wide characters
+        if cell.width() == 2 && x + 1 < self.width {
+            self.cells[idx + 1] = Cell::CONTINUATION;
+        }
+    }
+
+    /// Push scissor rect (intersection with current)
+    pub fn push_scissor(&mut self, rect: Rect) {
+        let current = self.current_scissor();
+        let intersected = current.intersection(&rect);
+        self.scissor_stack.push(intersected);
+    }
+
+    /// Pop scissor rect
+    pub fn pop_scissor(&mut self) {
+        if self.scissor_stack.len() > 1 {
+            self.scissor_stack.pop();
+        }
+    }
+
+    /// Push opacity (multiplicative with current)
+    pub fn push_opacity(&mut self, opacity: f32) {
+        let current = self.current_opacity();
+        self.opacity_stack.push(current * opacity.clamp(0.0, 1.0));
+    }
+
+    /// Pop opacity
+    pub fn pop_opacity(&mut self) {
+        if self.opacity_stack.len() > 1 {
+            self.opacity_stack.pop();
+        }
+    }
+
+    #[inline]
+    fn current_scissor(&self) -> Rect {
+        *self.scissor_stack.last().unwrap()
+    }
+
+    #[inline]
+    fn current_opacity(&self) -> f32 {
+        *self.opacity_stack.last().unwrap()
+    }
+
+    #[inline]
+    fn in_scissor(&self, x: u16, y: u16) -> bool {
+        self.current_scissor().contains(x, y)
+    }
+
+    /// Clear buffer to default cells
+    pub fn clear(&mut self) {
+        self.cells.fill(Cell::default());
+    }
+
+    /// Raw slice access for diffing
+    pub fn cells(&self) -> &[Cell] {
+        &self.cells
+    }
+}
+
+/// Frame = Buffer + metadata for a render pass
+pub struct Frame {
+    pub buffer: Buffer,
+    pub hit_grid: Option<HitGrid>,
+    pub cursor_position: Option<(u16, u16)>,
+    pub cursor_visible: bool,
+}
+```
+
+### 6.2 Diff Engine
+
+```rust
+/// Diff between two buffers: list of changed positions
+pub struct BufferDiff {
+    changes: Vec<(u16, u16)>,
+}
+
+impl BufferDiff {
+    /// Compute diff between old and new buffers
+    pub fn compute(old: &Buffer, new: &Buffer) -> Self {
+        debug_assert_eq!(old.width(), new.width());
+        debug_assert_eq!(old.height(), new.height());
+
+        let mut changes = Vec::new();
+        let width = old.width();
+        let height = old.height();
+
+        // Row-major scan for cache efficiency
+        for y in 0..height {
+            for x in 0..width {
+                let old_cell = old.get_unchecked(x, y);
+                let new_cell = new.get_unchecked(x, y);
+                if !old_cell.bits_eq(new_cell) {
+                    changes.push((x, y));
+                }
+            }
+        }
+
+        Self { changes }
+    }
+
+    /// Number of changed cells
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.changes.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.changes.is_empty()
+    }
+
+    /// Access raw changes
+    pub fn changes(&self) -> &[(u16, u16)] {
+        &self.changes
+    }
+
+    /// Convert point changes into row-major runs for efficient emission
+    pub fn runs(&self, _width: u16) -> Vec<ChangeRun> {
+        let mut runs = Vec::new();
+        if self.changes.is_empty() {
+            return runs;
+        }
+
+        // Sort changes row-major
+        let mut sorted: Vec<_> = self.changes.iter().copied().collect();
+        sorted.sort_by_key(|(x, y)| (*y, *x));
+
+        let mut i = 0;
+        while i < sorted.len() {
+            let (x0, y) = sorted[i];
+            let mut x1 = x0;
+            i += 1;
+
+            // Coalesce consecutive x positions
+            while i < sorted.len() {
+                let (x, yy) = sorted[i];
+                if yy != y || x != x1 + 1 {
+                    break;
+                }
+                x1 = x;
+                i += 1;
+            }
+
+            runs.push(ChangeRun { y, x0, x1 });
+        }
+
+        runs
+    }
+}
+
+/// A contiguous run of changed cells on a single row
+pub struct ChangeRun {
+    pub y: u16,
+    pub x0: u16,
+    pub x1: u16,
+}
+```
+
+---
+
+## Chapter 7: GraphemePool and LinkRegistry
+
+### 7.1 GraphemePool: Interned Complex Strings
+
+```rust
+/// Pool for complex grapheme clusters (emoji, ZWJ sequences)
+/// Reference-counted slots for memory efficiency
 pub struct GraphemePool {
-    slots: Vec<Slot>,
+    strings: Vec<Option<GraphemeSlot>>,
+    lookup: HashMap<String, GraphemeId>,
     free_list: Vec<u32>,
-    index: HashMap<Box<str>, u32>,
+}
+
+struct GraphemeSlot {
+    text: String,
+    width: u8,
+    refcount: u32,
 }
 
 impl GraphemePool {
     pub fn new() -> Self {
         Self {
-            slots: Vec::with_capacity(256),
+            strings: Vec::new(),
+            lookup: HashMap::new(),
             free_list: Vec::new(),
-            index: HashMap::with_capacity(256),
         }
     }
 
-    /// Intern a grapheme, returning its ID with cached width
-    pub fn intern(&mut self, grapheme: &str) -> GraphemeId {
-        // Fast path: already interned
-        if let Some(&slot) = self.index.get(grapheme) {
-            self.slots[slot as usize].refcount += 1;
-            return GraphemeId::new(slot, self.slots[slot as usize].width);
+    /// Intern a grapheme cluster, returning existing ID if present
+    pub fn intern(&mut self, s: &str) -> GraphemeId {
+        // Check if already interned
+        if let Some(&id) = self.lookup.get(s) {
+            self.incref(id);
+            return id;
         }
 
-        // Slow path: allocate new slot
-        let width = unicode_width::UnicodeWidthStr::width(grapheme)
+        // Calculate display width
+        let width = unicode_width::UnicodeWidthStr::width(s)
             .min(127) as u8;
-        let slot = self.alloc_slot(grapheme.into(), width);
-        self.index.insert(grapheme.into(), slot);
-        GraphemeId::new(slot, width)
-    }
 
-    /// Increment reference count
-    #[inline]
-    pub fn incref(&mut self, id: GraphemeId) {
-        self.slots[id.slot() as usize].refcount += 1;
-    }
-
-    /// Decrement reference count, returns true if still alive
-    #[inline]
-    pub fn decref(&mut self, id: GraphemeId) -> bool {
-        let slot = &mut self.slots[id.slot() as usize];
-        slot.refcount = slot.refcount.saturating_sub(1);
-        if slot.refcount == 0 {
-            self.free_list.push(id.slot());
-            false
+        // Find or create slot
+        let slot_idx = if let Some(idx) = self.free_list.pop() {
+            idx
         } else {
-            true
+            let idx = self.strings.len() as u32;
+            self.strings.push(None);
+            idx
+        };
+
+        let id = GraphemeId::new(slot_idx, width);
+        self.strings[slot_idx as usize] = Some(GraphemeSlot {
+            text: s.to_string(),
+            width,
+            refcount: 1,
+        });
+        self.lookup.insert(s.to_string(), id);
+
+        id
+    }
+
+    /// Get string for ID
+    pub fn get(&self, id: GraphemeId) -> Option<&str> {
+        self.strings.get(id.slot())
+            .and_then(|slot| slot.as_ref())
+            .map(|s| s.text.as_str())
+    }
+
+    /// Increment refcount
+    fn incref(&mut self, id: GraphemeId) {
+        if let Some(Some(slot)) = self.strings.get_mut(id.slot()) {
+            slot.refcount = slot.refcount.saturating_add(1);
         }
     }
 
-    /// Get grapheme string by ID
-    #[inline]
-    pub fn get(&self, id: GraphemeId) -> &str {
-        &self.slots[id.slot() as usize].bytes
-    }
-
-    fn alloc_slot(&mut self, bytes: Box<str>, width: u8) -> u32 {
-        if let Some(slot) = self.free_list.pop() {
-            self.slots[slot as usize] = Slot { bytes, refcount: 1, width };
-            slot
-        } else {
-            let slot = self.slots.len() as u32;
-            debug_assert!(slot < (1 << 24), "Pool overflow");
-            self.slots.push(Slot { bytes, refcount: 1, width });
-            slot
+    /// Decrement refcount, freeing if zero
+    pub fn decref(&mut self, id: GraphemeId) {
+        let slot_idx = id.slot();
+        if let Some(Some(slot)) = self.strings.get_mut(slot_idx) {
+            slot.refcount = slot.refcount.saturating_sub(1);
+            if slot.refcount == 0 {
+                self.lookup.remove(&slot.text);
+                self.strings[slot_idx] = None;
+                self.free_list.push(slot_idx as u32);
+            }
         }
     }
-
-    pub fn stats(&self) -> PoolStats {
-        let active = self.slots.iter().filter(|s| s.refcount > 0).count();
-        PoolStats {
-            total_slots: self.slots.len(),
-            active_slots: active,
-            free_slots: self.free_list.len(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct PoolStats {
-    pub total_slots: usize,
-    pub active_slots: usize,
-    pub free_slots: usize,
 }
 ```
 
-### 6.3 Buffer with Scissor and Opacity Stacks
+### 7.2 LinkRegistry: Hyperlink Management
 
 ```rust
-use smallvec::SmallVec;
+/// Registry for OSC 8 hyperlinks
+/// Maps link IDs to URLs for efficient deduplication
+pub struct LinkRegistry {
+    links: Vec<Option<String>>,
+    lookup: HashMap<String, u32>,
+    free_list: Vec<u32>,
+}
 
-/// Rectangular region for clipping
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+impl LinkRegistry {
+    pub fn new() -> Self {
+        Self {
+            links: Vec::new(),
+            lookup: HashMap::new(),
+            free_list: Vec::new(),
+        }
+    }
+
+    /// Register a URL, returning existing ID if present
+    pub fn register(&mut self, url: &str) -> u32 {
+        if let Some(&id) = self.lookup.get(url) {
+            return id;
+        }
+
+        let id = if let Some(idx) = self.free_list.pop() {
+            idx
+        } else {
+            let idx = self.links.len() as u32;
+            self.links.push(None);
+            idx
+        };
+
+        self.links[id as usize] = Some(url.to_string());
+        self.lookup.insert(url.to_string(), id);
+        id
+    }
+
+    /// Get URL for ID
+    pub fn get(&self, id: u32) -> Option<&str> {
+        self.links.get(id as usize)
+            .and_then(|slot| slot.as_ref())
+            .map(|s| s.as_str())
+    }
+
+    /// Unregister a link (for cleanup)
+    pub fn unregister(&mut self, id: u32) {
+        if let Some(Some(url)) = self.links.get(id as usize) {
+            self.lookup.remove(url);
+            self.links[id as usize] = None;
+            self.free_list.push(id);
+        }
+    }
+}
+```
+
+---
+
+## Chapter 8: Presenter (ANSI Writer)
+
+### 8.1 State-Tracked Presenter
+
+```rust
+use std::io::{self, Write, BufWriter};
+
+/// Presenter: emits ANSI sequences to transform terminal state
+/// Tracks current style/cursor to minimize output
+pub struct Presenter<W: Write> {
+    writer: BufWriter<W>,
+    current_style: Option<CellStyle>,
+    current_link: Option<u32>,
+    cursor_x: u16,
+    cursor_y: u16,
+    capabilities: TerminalCapabilities,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CellStyle {
+    fg: PackedRgba,
+    bg: PackedRgba,
+    attrs: StyleFlags,
+}
+
+impl<W: Write> Presenter<W> {
+    pub fn new(writer: W, capabilities: TerminalCapabilities) -> Self {
+        Self {
+            writer: BufWriter::with_capacity(64 * 1024, writer), // 64KB buffer
+            current_style: None,
+            current_link: None,
+            cursor_x: 0,
+            cursor_y: 0,
+            capabilities,
+        }
+    }
+
+    /// Present a frame, diffing against previous
+    pub fn present(
+        &mut self,
+        buffer: &Buffer,
+        diff: &BufferDiff,
+        pool: &GraphemePool,
+        links: &LinkRegistry,
+    ) -> io::Result<()> {
+        // Start synchronized output if supported
+        if self.capabilities.sync_output {
+            self.writer.write_all(b"\x1b[?2026h")?;
+        }
+
+        // Emit changes using run grouping for efficiency
+        self.emit_diff(buffer, diff, pool, links)?;
+
+        // Reset style at end
+        self.writer.write_all(b"\x1b[0m")?;
+        self.current_style = None;
+
+        // Close any open link
+        if self.current_link.is_some() {
+            self.writer.write_all(b"\x1b]8;;\x1b\\")?;
+            self.current_link = None;
+        }
+
+        // End synchronized output
+        if self.capabilities.sync_output {
+            self.writer.write_all(b"\x1b[?2026l")?;
+        }
+
+        self.writer.flush()
+    }
+
+    /// Emit diff using row-major runs (NOT per-cell cursor moves)
+    fn emit_diff(
+        &mut self,
+        buffer: &Buffer,
+        diff: &BufferDiff,
+        pool: &GraphemePool,
+        links: &LinkRegistry,
+    ) -> io::Result<()> {
+        // Convert changes to runs for efficient emission
+        for run in diff.runs(buffer.width()) {
+            // Single cursor move per run
+            self.move_cursor_to(run.x0, run.y)?;
+
+            // Emit cells sequentially (cursor advances naturally)
+            for x in run.x0..=run.x1 {
+                let cell = buffer.get_unchecked(x, run.y);
+                self.emit_cell(cell, pool, links)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Full redraw (no diff)
+    pub fn present_full(
+        &mut self,
+        buffer: &Buffer,
+        pool: &GraphemePool,
+        links: &LinkRegistry,
+    ) -> io::Result<()> {
+        if self.capabilities.sync_output {
+            self.writer.write_all(b"\x1b[?2026h")?;
+        }
+
+        // Move to origin
+        self.writer.write_all(b"\x1b[H")?;
+        self.cursor_x = 0;
+        self.cursor_y = 0;
+
+        // Emit all cells row by row
+        for y in 0..buffer.height() {
+            for x in 0..buffer.width() {
+                let cell = buffer.get_unchecked(x, y);
+                self.emit_cell(cell, pool, links)?;
+            }
+            // Newline at end of row (except last)
+            if y + 1 < buffer.height() {
+                self.writer.write_all(b"\r\n")?;
+                self.cursor_x = 0;
+                self.cursor_y += 1;
+            }
+        }
+
+        self.writer.write_all(b"\x1b[0m")?;
+        self.current_style = None;
+
+        if self.current_link.is_some() {
+            self.writer.write_all(b"\x1b]8;;\x1b\\")?;
+            self.current_link = None;
+        }
+
+        if self.capabilities.sync_output {
+            self.writer.write_all(b"\x1b[?2026l")?;
+        }
+
+        self.writer.flush()
+    }
+
+    fn move_cursor_to(&mut self, x: u16, y: u16) -> io::Result<()> {
+        if self.cursor_x == x && self.cursor_y == y {
+            return Ok(());
+        }
+
+        // Emit CUP sequence (1-indexed)
+        write!(self.writer, "\x1b[{};{}H", y + 1, x + 1)?;
+        self.cursor_x = x;
+        self.cursor_y = y;
+        Ok(())
+    }
+
+    fn emit_cell(
+        &mut self,
+        cell: &Cell,
+        pool: &GraphemePool,
+        links: &LinkRegistry,
+    ) -> io::Result<()> {
+        // Skip continuation cells
+        if cell.is_continuation() {
+            return Ok(());
+        }
+
+        // Emit style changes
+        self.emit_style_changes(cell)?;
+
+        // Emit link changes
+        self.emit_link_changes(cell, links)?;
+
+        // Emit content
+        self.emit_content(cell, pool)?;
+
+        // Advance cursor
+        self.cursor_x += cell.width() as u16;
+
+        Ok(())
+    }
+
+    fn emit_style_changes(&mut self, cell: &Cell) -> io::Result<()> {
+        let new_style = CellStyle {
+            fg: cell.fg,
+            bg: cell.bg,
+            attrs: cell.attrs.flags(),
+        };
+
+        if Some(new_style) == self.current_style {
+            return Ok(());
+        }
+
+        // Reset and apply new style (simplest approach)
+        // Could optimize to emit only changed attributes
+        self.writer.write_all(b"\x1b[0")?;
+
+        // Attributes
+        let attrs = new_style.attrs;
+        if attrs.contains(StyleFlags::BOLD) { self.writer.write_all(b";1")?; }
+        if attrs.contains(StyleFlags::DIM) { self.writer.write_all(b";2")?; }
+        if attrs.contains(StyleFlags::ITALIC) { self.writer.write_all(b";3")?; }
+        if attrs.contains(StyleFlags::UNDERLINE) { self.writer.write_all(b";4")?; }
+        if attrs.contains(StyleFlags::BLINK) { self.writer.write_all(b";5")?; }
+        if attrs.contains(StyleFlags::REVERSE) { self.writer.write_all(b";7")?; }
+        if attrs.contains(StyleFlags::STRIKETHROUGH) { self.writer.write_all(b";9")?; }
+
+        // Foreground (true color)
+        if new_style.fg.a() > 0 {
+            write!(self.writer, ";38;2;{};{};{}",
+                   new_style.fg.r(), new_style.fg.g(), new_style.fg.b())?;
+        }
+
+        // Background (true color)
+        if new_style.bg.a() > 0 {
+            write!(self.writer, ";48;2;{};{};{}",
+                   new_style.bg.r(), new_style.bg.g(), new_style.bg.b())?;
+        }
+
+        self.writer.write_all(b"m")?;
+        self.current_style = Some(new_style);
+
+        Ok(())
+    }
+
+    fn emit_link_changes(&mut self, cell: &Cell, registry: &LinkRegistry) -> io::Result<()> {
+        let new_link = cell.attrs.link_id();
+        let current = self.current_link.unwrap_or(0);
+
+        if new_link == current {
+            return Ok(());
+        }
+
+        if new_link == 0 {
+            // Close link
+            self.writer.write_all(b"\x1b]8;;\x1b\\")?;
+            self.current_link = None;
+        } else if let Some(url) = registry.get(new_link) {
+            // Open new link
+            write!(self.writer, "\x1b]8;;{}\x1b\\", url)?;
+            self.current_link = Some(new_link);
+        }
+
+        Ok(())
+    }
+
+    fn emit_content(&mut self, cell: &Cell, pool: &GraphemePool) -> io::Result<()> {
+        if cell.content.0 == 0 {
+            // Empty cell = space
+            self.writer.write_all(b" ")?;
+        } else if cell.content.is_grapheme() {
+            // Complex grapheme from pool
+            let id = GraphemeId(cell.content.0 & !0x8000_0000);
+            if let Some(s) = pool.get(id) {
+                self.writer.write_all(s.as_bytes())?;
+            } else {
+                self.writer.write_all(b"?")?;
+            }
+        } else {
+            // Single char
+            let c = char::from_u32(cell.content.0).unwrap_or(' ');
+            let mut buf = [0u8; 4];
+            self.writer.write_all(c.encode_utf8(&mut buf).as_bytes())?;
+        }
+
+        Ok(())
+    }
+}
+```
+
+---
+
+## Chapter 9: Terminal Protocol Support
+
+### 9.1 Capability Detection
+
+```rust
+/// Terminal capabilities detected from environment
+#[derive(Clone, Debug)]
+pub struct TerminalCapabilities {
+    pub true_color: bool,
+    pub colors_256: bool,
+    pub sync_output: bool,        // DEC mode 2026
+    pub osc8_hyperlinks: bool,
+    pub kitty_keyboard: bool,
+    pub focus_events: bool,
+    pub bracketed_paste: bool,
+    pub mouse_sgr: bool,
+}
+
+impl TerminalCapabilities {
+    /// Detect from environment
+    pub fn detect() -> Self {
+        let colorterm = std::env::var("COLORTERM").unwrap_or_default();
+        let term = std::env::var("TERM").unwrap_or_default();
+        let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
+
+        let true_color = colorterm.contains("truecolor")
+            || colorterm.contains("24bit")
+            || term.contains("24bit")
+            || matches!(term_program.as_str(), "iTerm.app" | "WezTerm" | "Alacritty" | "Ghostty");
+
+        let colors_256 = true_color
+            || term.contains("256color")
+            || std::env::var("TERM").map(|t| t.contains("256")).unwrap_or(false);
+
+        // Sync output: known support in Kitty, WezTerm, Alacritty, Ghostty
+        let sync_output = matches!(term_program.as_str(), "WezTerm" | "Alacritty" | "Ghostty")
+            || term.contains("kitty")
+            || std::env::var("KITTY_WINDOW_ID").is_ok();
+
+        // OSC 8 hyperlinks: most modern terminals
+        let osc8_hyperlinks = true_color; // Good heuristic
+
+        Self {
+            true_color,
+            colors_256,
+            sync_output,
+            osc8_hyperlinks,
+            kitty_keyboard: term.contains("kitty") || std::env::var("KITTY_WINDOW_ID").is_ok(),
+            focus_events: true, // Widely supported
+            bracketed_paste: true, // Widely supported
+            mouse_sgr: true, // Widely supported
+        }
+    }
+
+    /// Minimal fallback (no advanced features)
+    pub fn basic() -> Self {
+        Self {
+            true_color: false,
+            colors_256: true,
+            sync_output: false,
+            osc8_hyperlinks: false,
+            kitty_keyboard: false,
+            focus_events: false,
+            bracketed_paste: false,
+            mouse_sgr: false,
+        }
+    }
+}
+```
+
+### 9.2 Terminal Lifecycle (RAII Guards)
+
+```rust
+use std::io::{self, Write};
+use std::panic;
+
+/// Terminal session with RAII cleanup
+pub struct TerminalSession<W: Write> {
+    writer: W,
+    raw_mode_active: bool,
+    alt_screen_active: bool,
+    mouse_active: bool,
+    bracketed_paste_active: bool,
+    capabilities: TerminalCapabilities,
+}
+
+impl<W: Write> TerminalSession<W> {
+    pub fn new(writer: W) -> io::Result<Self> {
+        let caps = TerminalCapabilities::detect();
+        let session = Self {
+            writer,
+            raw_mode_active: false,
+            alt_screen_active: false,
+            mouse_active: false,
+            bracketed_paste_active: false,
+            capabilities: caps,
+        };
+
+        // Install panic hook for cleanup
+        let cleanup_on_panic = || {
+            // Best-effort cleanup - ignore errors
+            let _ = io::stdout().write_all(b"\x1b[?1049l"); // Exit alt screen
+            let _ = io::stdout().write_all(b"\x1b[?25h");   // Show cursor
+            let _ = io::stdout().write_all(b"\x1b[0m");     // Reset style
+            let _ = io::stdout().write_all(b"\x1b[?1000l"); // Disable mouse
+            let _ = io::stdout().write_all(b"\x1b[?2004l"); // Disable bracketed paste
+            let _ = io::stdout().flush();
+        };
+
+        let prev_hook = panic::take_hook();
+        panic::set_hook(Box::new(move |info| {
+            cleanup_on_panic();
+            prev_hook(info);
+        }));
+
+        Ok(session)
+    }
+
+    pub fn capabilities(&self) -> &TerminalCapabilities {
+        &self.capabilities
+    }
+
+    pub fn enter_raw_mode(&mut self) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            // Would use termios here in real implementation
+        }
+        self.raw_mode_active = true;
+        Ok(())
+    }
+
+    pub fn enter_alt_screen(&mut self) -> io::Result<()> {
+        self.writer.write_all(b"\x1b[?1049h")?;
+        self.alt_screen_active = true;
+        Ok(())
+    }
+
+    pub fn enable_mouse(&mut self) -> io::Result<()> {
+        // SGR mouse mode (1006) for precise coordinates
+        self.writer.write_all(b"\x1b[?1000h\x1b[?1002h\x1b[?1006h")?;
+        self.mouse_active = true;
+        Ok(())
+    }
+
+    pub fn enable_bracketed_paste(&mut self) -> io::Result<()> {
+        self.writer.write_all(b"\x1b[?2004h")?;
+        self.bracketed_paste_active = true;
+        Ok(())
+    }
+
+    pub fn enable_focus_events(&mut self) -> io::Result<()> {
+        self.writer.write_all(b"\x1b[?1004h")?;
+        Ok(())
+    }
+
+    fn cleanup(&mut self) -> io::Result<()> {
+        if self.mouse_active {
+            self.writer.write_all(b"\x1b[?1000l\x1b[?1002l\x1b[?1006l")?;
+        }
+        if self.bracketed_paste_active {
+            self.writer.write_all(b"\x1b[?2004l")?;
+        }
+        if self.alt_screen_active {
+            self.writer.write_all(b"\x1b[?1049l")?;
+        }
+        // Reset style and show cursor
+        self.writer.write_all(b"\x1b[0m\x1b[?25h")?;
+        self.writer.flush()
+    }
+}
+
+impl<W: Write> Drop for TerminalSession<W> {
+    fn drop(&mut self) {
+        let _ = self.cleanup();
+    }
+}
+```
+
+### 9.3 Screen Modes: Inline-First vs AltScreen (Scrollback-Native)
+
+FrankenTUI supports two output policies. **Inline is default.**
+
+#### Inline mode (default)
+Goals:
+- preserve native scrollback
+- allow an append-only log stream + a stable UI chrome region
+- avoid full-screen clears
+- maintain a strict cursor contract
+
+Key idea:
+- The application owns a bounded **UI Region** (typically bottom-anchored).
+- Everything else is **Log Region** (append-only text written normally).
+
+Inline mode contract:
+1) ftui may move the cursor to draw the UI region.
+2) ftui must restore the cursor to the "log cursor" after drawing.
+3) ftui must never destroy existing scrollback by clearing the full screen.
+
+Recommended inline present sequence:
+1) Save cursor position (DECSC `ESC 7` or CSI s depending on terminal; prefer robust fallback)
+2) Move cursor to UI anchor position (bottom-anchored: row = term_height - ui_height + 1)
+3) Clear the UI region lines only (EL/ED localized clears)
+4) Present the UI frame (diffed and buffered, ideally with sync output if supported)
+5) Restore cursor position (DECRC `ESC 8` / CSI u)
+
+Additional requirements:
+- If the log stream writes while UI is visible, the library must:
+  - temporarily clear/redraw the UI region, or
+  - provide an API that centralizes all writing so the library can coordinate.
+
+Practical API implication:
+- Provide a single **TerminalWriter** that mediates:
+  - `write_log(...)` (append-only)
+  - `present_ui(frame)`
+so UI+log cannot interleave uncontrolled.
+
+#### AltScreen mode (opt-in)
+Goals:
+- classic full-screen TUI experience
+- simplest cursor policy and less interaction with scrollback
+
+AltScreen policy:
+- Enter alt screen on start and leave on exit
+- Full-screen clears allowed
+- Cursor restoration policy is simpler; still enforce cleanup on panic
+
+#### Mixed strategy
+Many "agent harness" apps benefit from:
+- Inline mode for logs + persistent scrollback
+- A temporary alt-screen "modal" for complex interactions (pickers/forms)
+
+This should be supported via:
+- `ScreenMode::Inline`
+- `ScreenMode::AltScreen`
+- `ScreenMode::Inline { allow_modal_alt_screen: bool }`
+
+### 9.4 tmux Detection and Passthrough
+
+```rust
+/// Check if running inside tmux
+pub fn in_tmux() -> bool {
+    std::env::var("TMUX").is_ok()
+}
+
+/// Wrap sequence for tmux passthrough
+pub fn tmux_wrap(sequence: &str) -> String {
+    if in_tmux() {
+        // Double escapes for tmux
+        let escaped = sequence.replace('\x1b', "\x1b\x1b");
+        format!("\x1bPtmux;{}\x1b\\", escaped)
+    } else {
+        sequence.to_string()
+    }
+}
+```
+
+---
+
+## Chapter 10: Input Parser
+
+### 10.1 Event Types
+
+```rust
+/// Canonical input event
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Event {
+    Key(KeyEvent),
+    Mouse(MouseEvent),
+    Resize { width: u16, height: u16 },
+    Paste(String),
+    FocusGained,
+    FocusLost,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyEvent {
+    pub code: KeyCode,
+    pub modifiers: Modifiers,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyCode {
+    Char(char),
+    Enter,
+    Escape,
+    Backspace,
+    Tab,
+    BackTab,
+    Delete,
+    Insert,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Up,
+    Down,
+    Left,
+    Right,
+    F(u8),
+    Null,
+}
+
+bitflags::bitflags! {
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub struct Modifiers: u8 {
+        const SHIFT   = 0b0000_0001;
+        const ALT     = 0b0000_0010;
+        const CTRL    = 0b0000_0100;
+        const SUPER   = 0b0000_1000;
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MouseEvent {
+    pub kind: MouseEventKind,
+    pub x: u16,
+    pub y: u16,
+    pub modifiers: Modifiers,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseEventKind {
+    Down(MouseButton),
+    Up(MouseButton),
+    Drag(MouseButton),
+    Moved,
+    ScrollUp,
+    ScrollDown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+}
+```
+
+### 10.2 Input Parser State Machine
+
+```rust
+/// Parser for terminal input sequences
+/// Includes DoS protection limits
+pub struct InputParser {
+    state: ParserState,
+    buffer: Vec<u8>,
+    paste_buffer: Vec<u8>,
+    in_paste: bool,
+
+    // DoS protection
+    max_csi_len: usize,
+    max_osc_len: usize,
+    max_paste_len: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ParserState {
+    Ground,
+    Escape,
+    Csi,
+    CsiParam,
+    Osc,
+    Ss3,
+}
+
+impl InputParser {
+    pub fn new() -> Self {
+        Self {
+            state: ParserState::Ground,
+            buffer: Vec::with_capacity(64),
+            paste_buffer: Vec::with_capacity(4096),
+            in_paste: false,
+            max_csi_len: 256,
+            max_osc_len: 4096,
+            max_paste_len: 1024 * 1024, // 1MB
+        }
+    }
+
+    /// Parse bytes, returning events
+    pub fn parse(&mut self, input: &[u8]) -> Vec<Event> {
+        let mut events = Vec::new();
+
+        for &byte in input {
+            if let Some(event) = self.process_byte(byte) {
+                events.push(event);
+            }
+        }
+
+        events
+    }
+
+    fn process_byte(&mut self, byte: u8) -> Option<Event> {
+        // Bracketed paste handling
+        if self.in_paste {
+            return self.process_paste_byte(byte);
+        }
+
+        match self.state {
+            ParserState::Ground => self.ground(byte),
+            ParserState::Escape => self.escape(byte),
+            ParserState::Csi => self.csi(byte),
+            ParserState::CsiParam => self.csi_param(byte),
+            ParserState::Osc => self.osc(byte),
+            ParserState::Ss3 => self.ss3(byte),
+        }
+    }
+
+    fn ground(&mut self, byte: u8) -> Option<Event> {
+        match byte {
+            0x1b => {
+                self.state = ParserState::Escape;
+                None
+            }
+            0x00 => Some(Event::Key(KeyEvent {
+                code: KeyCode::Null,
+                modifiers: Modifiers::CTRL,
+            })),
+            0x01..=0x1a => {
+                // Ctrl+A through Ctrl+Z
+                let c = (byte + 0x60) as char;
+                Some(Event::Key(KeyEvent {
+                    code: KeyCode::Char(c),
+                    modifiers: Modifiers::CTRL,
+                }))
+            }
+            0x7f => Some(Event::Key(KeyEvent {
+                code: KeyCode::Backspace,
+                modifiers: Modifiers::empty(),
+            })),
+            _ => {
+                // UTF-8 or ASCII
+                if byte & 0x80 == 0 {
+                    Some(Event::Key(KeyEvent {
+                        code: KeyCode::Char(byte as char),
+                        modifiers: Modifiers::empty(),
+                    }))
+                } else {
+                    // Start of UTF-8 sequence
+                    self.buffer.push(byte);
+                    None
+                }
+            }
+        }
+    }
+
+    fn escape(&mut self, byte: u8) -> Option<Event> {
+        self.state = ParserState::Ground;
+        match byte {
+            b'[' => {
+                self.state = ParserState::Csi;
+                self.buffer.clear();
+                None
+            }
+            b'O' => {
+                self.state = ParserState::Ss3;
+                None
+            }
+            b']' => {
+                self.state = ParserState::Osc;
+                self.buffer.clear();
+                None
+            }
+            _ => {
+                // Alt + key
+                Some(Event::Key(KeyEvent {
+                    code: KeyCode::Char(byte as char),
+                    modifiers: Modifiers::ALT,
+                }))
+            }
+        }
+    }
+
+    fn csi(&mut self, byte: u8) -> Option<Event> {
+        // DoS protection
+        if self.buffer.len() >= self.max_csi_len {
+            self.state = ParserState::Ground;
+            self.buffer.clear();
+            return None;
+        }
+
+        self.buffer.push(byte);
+
+        match byte {
+            b'0'..=b'9' | b';' | b':' | b'<' | b'=' | b'>' | b'?' => {
+                self.state = ParserState::CsiParam;
+                None
+            }
+            b'A'..=b'Z' | b'a'..=b'z' | b'~' => {
+                self.state = ParserState::Ground;
+                self.parse_csi_sequence()
+            }
+            _ => {
+                self.state = ParserState::Ground;
+                self.buffer.clear();
+                None
+            }
+        }
+    }
+
+    fn csi_param(&mut self, byte: u8) -> Option<Event> {
+        if self.buffer.len() >= self.max_csi_len {
+            self.state = ParserState::Ground;
+            self.buffer.clear();
+            return None;
+        }
+
+        self.buffer.push(byte);
+
+        match byte {
+            b'0'..=b'9' | b';' | b':' => None,
+            b'A'..=b'Z' | b'a'..=b'z' | b'~' | b'M' | b'm' => {
+                self.state = ParserState::Ground;
+                self.parse_csi_sequence()
+            }
+            _ => {
+                self.state = ParserState::Ground;
+                self.buffer.clear();
+                None
+            }
+        }
+    }
+
+    fn parse_csi_sequence(&mut self) -> Option<Event> {
+        let seq = std::mem::take(&mut self.buffer);
+
+        // Bracketed paste start/end
+        if seq == b"200~" {
+            self.in_paste = true;
+            return None;
+        }
+        if seq == b"201~" {
+            self.in_paste = false;
+            let text = String::from_utf8_lossy(&self.paste_buffer).to_string();
+            self.paste_buffer.clear();
+            return Some(Event::Paste(text));
+        }
+
+        // Focus events
+        if seq == b"I" {
+            return Some(Event::FocusGained);
+        }
+        if seq == b"O" {
+            return Some(Event::FocusLost);
+        }
+
+        // SGR mouse (1006)
+        if seq.starts_with(b"<") && (seq.ends_with(b"M") || seq.ends_with(b"m")) {
+            return self.parse_sgr_mouse(&seq);
+        }
+
+        // Arrow keys and special keys
+        let last = *seq.last()?;
+        let params: Vec<u16> = seq[..seq.len() - 1]
+            .split(|&b| b == b';')
+            .filter_map(|p| std::str::from_utf8(p).ok()?.parse().ok())
+            .collect();
+
+        let modifiers = if params.len() > 1 {
+            Self::decode_modifiers(params[1])
+        } else {
+            Modifiers::empty()
+        };
+
+        let code = match last {
+            b'A' => KeyCode::Up,
+            b'B' => KeyCode::Down,
+            b'C' => KeyCode::Right,
+            b'D' => KeyCode::Left,
+            b'H' => KeyCode::Home,
+            b'F' => KeyCode::End,
+            b'~' => match params.first().copied().unwrap_or(0) {
+                1 => KeyCode::Home,
+                2 => KeyCode::Insert,
+                3 => KeyCode::Delete,
+                4 => KeyCode::End,
+                5 => KeyCode::PageUp,
+                6 => KeyCode::PageDown,
+                15 => KeyCode::F(5),
+                17 => KeyCode::F(6),
+                18 => KeyCode::F(7),
+                19 => KeyCode::F(8),
+                20 => KeyCode::F(9),
+                21 => KeyCode::F(10),
+                23 => KeyCode::F(11),
+                24 => KeyCode::F(12),
+                _ => return None,
+            },
+            _ => return None,
+        };
+
+        Some(Event::Key(KeyEvent { code, modifiers }))
+    }
+
+    fn parse_sgr_mouse(&mut self, seq: &[u8]) -> Option<Event> {
+        let is_release = seq.ends_with(b"m");
+        let params_str = std::str::from_utf8(&seq[1..seq.len() - 1]).ok()?;
+        let params: Vec<u16> = params_str.split(';').filter_map(|s| s.parse().ok()).collect();
+
+        if params.len() != 3 {
+            return None;
+        }
+
+        let cb = params[0];
+        let x = params[1].saturating_sub(1);
+        let y = params[2].saturating_sub(1);
+
+        let modifiers = Modifiers::from_bits_truncate(((cb >> 2) & 0x07) as u8);
+
+        let button = match cb & 0x43 {
+            0 => MouseButton::Left,
+            1 => MouseButton::Middle,
+            2 => MouseButton::Right,
+            _ => MouseButton::Left,
+        };
+
+        let kind = if cb & 0x40 != 0 {
+            // Scroll
+            if cb & 0x01 != 0 {
+                MouseEventKind::ScrollDown
+            } else {
+                MouseEventKind::ScrollUp
+            }
+        } else if cb & 0x20 != 0 {
+            MouseEventKind::Drag(button)
+        } else if is_release {
+            MouseEventKind::Up(button)
+        } else {
+            MouseEventKind::Down(button)
+        };
+
+        Some(Event::Mouse(MouseEvent { kind, x, y, modifiers }))
+    }
+
+    fn decode_modifiers(n: u16) -> Modifiers {
+        let m = n.saturating_sub(1);
+        let mut mods = Modifiers::empty();
+        if m & 1 != 0 { mods |= Modifiers::SHIFT; }
+        if m & 2 != 0 { mods |= Modifiers::ALT; }
+        if m & 4 != 0 { mods |= Modifiers::CTRL; }
+        mods
+    }
+
+    fn ss3(&mut self, byte: u8) -> Option<Event> {
+        self.state = ParserState::Ground;
+        let code = match byte {
+            b'A' => KeyCode::Up,
+            b'B' => KeyCode::Down,
+            b'C' => KeyCode::Right,
+            b'D' => KeyCode::Left,
+            b'H' => KeyCode::Home,
+            b'F' => KeyCode::End,
+            b'P' => KeyCode::F(1),
+            b'Q' => KeyCode::F(2),
+            b'R' => KeyCode::F(3),
+            b'S' => KeyCode::F(4),
+            _ => return None,
+        };
+        Some(Event::Key(KeyEvent { code, modifiers: Modifiers::empty() }))
+    }
+
+    fn osc(&mut self, byte: u8) -> Option<Event> {
+        if self.buffer.len() >= self.max_osc_len {
+            self.state = ParserState::Ground;
+            self.buffer.clear();
+            return None;
+        }
+
+        // OSC terminated by BEL (0x07) or ST (ESC \)
+        if byte == 0x07 {
+            self.state = ParserState::Ground;
+            self.buffer.clear();
+        } else {
+            self.buffer.push(byte);
+        }
+        None
+    }
+
+    fn process_paste_byte(&mut self, byte: u8) -> Option<Event> {
+        // Check for paste end sequence
+        if self.paste_buffer.ends_with(b"\x1b[201") && byte == b'~' {
+            self.in_paste = false;
+            // Remove the escape sequence from paste buffer
+            let len = self.paste_buffer.len();
+            self.paste_buffer.truncate(len - 5);
+            let text = String::from_utf8_lossy(&self.paste_buffer).to_string();
+            self.paste_buffer.clear();
+            return Some(Event::Paste(text));
+        }
+
+        // DoS protection
+        if self.paste_buffer.len() < self.max_paste_len {
+            self.paste_buffer.push(byte);
+        }
+        None
+    }
+}
+```
+
+### 10.3 Input System Extensions (Optional, Feature-Gated)
+
+The kernel input parser must remain small and robust. Additional capabilities can be layered:
+- Kitty keyboard protocol decoding
+- Clipboard events (where supported)
+- Event coalescing:
+  - mouse move floods
+  - resize storms
+
+Testing requirements:
+- fuzz input parser with random byte streams
+- hard bounds on CSI/OSC lengths are enforced
+- no panics on malformed sequences
+
+---
+
+## Chapter 11: Components (Widgets Ring)
+
+### 11.1 The Renderable Trait
+
+```rust
+/// Trait for components that can render to a buffer
+pub trait Renderable {
+    /// Measure desired size given constraints
+    fn measure(&self, ctx: &RenderContext) -> Measurement;
+
+    /// Render to buffer within given rect
+    fn render(&self, ctx: &RenderContext, rect: Rect, buffer: &mut Buffer);
+}
+
+/// Size measurement with min/max constraints
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Measurement {
+    pub min_width: u16,
+    pub min_height: u16,
+    pub max_width: Option<u16>,
+    pub max_height: Option<u16>,
+}
+
+/// Context for rendering (pools, registries, theme)
+pub struct RenderContext {
+    pub grapheme_pool: std::cell::RefCell<GraphemePool>,
+    pub link_registry: std::cell::RefCell<LinkRegistry>,
+    pub theme: Theme,
+}
+
+/// v5 architecture note:
+/// Renderables are a "widgets ring" concept. The sacred kernel is Frame/Buffer/Diff/Presenter.
+/// This trait lives in `ftui-widgets` (or feature-gated module) and depends on kernel primitives.
+/// The kernel remains usable without widgets.
+
+// Blanket implementations for composition
+impl<T: Renderable> Renderable for &T {
+    fn measure(&self, ctx: &RenderContext) -> Measurement { (*self).measure(ctx) }
+    fn render(&self, ctx: &RenderContext, rect: Rect, buffer: &mut Buffer) {
+        (*self).render(ctx, rect, buffer)
+    }
+}
+
+impl<T: Renderable> Renderable for Box<T> {
+    fn measure(&self, ctx: &RenderContext) -> Measurement { (**self).measure(ctx) }
+    fn render(&self, ctx: &RenderContext, rect: Rect, buffer: &mut Buffer) {
+        (**self).render(ctx, rect, buffer)
+    }
+}
+```
+
+### 11.2 Rect and Layout Primitives
+
+```rust
+/// Rectangle for layout and rendering
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Rect {
     pub x: u16,
     pub y: u16,
@@ -1474,1892 +2237,364 @@ impl Rect {
         y >= self.y && y < self.y + self.height
     }
 
-    pub fn intersect(&self, other: &Self) -> Self {
+    pub fn intersection(&self, other: &Self) -> Self {
         let x = self.x.max(other.x);
         let y = self.y.max(other.y);
         let right = (self.x + self.width).min(other.x + other.width);
         let bottom = (self.y + self.height).min(other.y + other.height);
 
         if right > x && bottom > y {
-            Self { x, y, width: right - x, height: bottom - y }
+            Self::new(x, y, right - x, bottom - y)
         } else {
-            Self { x: 0, y: 0, width: 0, height: 0 }  // Empty
+            Self::default()
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.width == 0 || self.height == 0
-    }
-
-    /// Inner rect after removing edges
-    pub fn inner(&self, edges: &Sides<u16>) -> Self {
-        let x = self.x + edges.left;
-        let y = self.y + edges.top;
-        let width = self.width.saturating_sub(edges.left + edges.right);
-        let height = self.height.saturating_sub(edges.top + edges.bottom);
-        Self { x, y, width, height }
+    pub fn inner(&self, margin: Sides) -> Self {
+        Self::new(
+            self.x + margin.left,
+            self.y + margin.top,
+            self.width.saturating_sub(margin.left + margin.right),
+            self.height.saturating_sub(margin.top + margin.bottom),
+        )
     }
 }
 
-/// Stack of clipping regions (nested clips)
-pub struct ScissorStack {
-    stack: SmallVec<[Rect; 8]>,  // Stack-allocated for typical nesting
-    current: Rect,
+/// Sides for padding/margin
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Sides {
+    pub top: u16,
+    pub right: u16,
+    pub bottom: u16,
+    pub left: u16,
 }
 
-impl ScissorStack {
-    pub fn new(bounds: Rect) -> Self {
-        Self {
-            stack: SmallVec::new(),
-            current: bounds,
-        }
+impl Sides {
+    pub fn all(v: u16) -> Self {
+        Self { top: v, right: v, bottom: v, left: v }
     }
 
-    pub fn push(&mut self, rect: Rect) {
-        self.stack.push(self.current);
-        self.current = self.current.intersect(&rect);
+    pub fn horizontal(v: u16) -> Self {
+        Self { top: 0, right: v, bottom: 0, left: v }
     }
 
-    pub fn pop(&mut self) -> Option<Rect> {
-        self.stack.pop().map(|r| std::mem::replace(&mut self.current, r))
-    }
-
-    #[inline]
-    pub fn contains(&self, x: u16, y: u16) -> bool {
-        self.current.contains(x, y)
-    }
-
-    pub fn current(&self) -> &Rect {
-        &self.current
+    pub fn vertical(v: u16) -> Self {
+        Self { top: v, right: 0, bottom: v, left: 0 }
     }
 }
 
-/// Stack of opacity multipliers
-pub struct OpacityStack {
-    stack: SmallVec<[f32; 8]>,
-    current: f32,  // Product of all active opacities
+// CSS-like tuple conversions
+impl From<u16> for Sides {
+    fn from(v: u16) -> Self { Self::all(v) }
 }
 
-impl OpacityStack {
-    pub fn new() -> Self {
-        Self {
-            stack: SmallVec::new(),
-            current: 1.0,
-        }
-    }
-
-    pub fn push(&mut self, opacity: f32) {
-        self.stack.push(self.current);
-        self.current *= opacity.clamp(0.0, 1.0);
-    }
-
-    pub fn pop(&mut self) -> Option<f32> {
-        self.stack.pop().map(|o| std::mem::replace(&mut self.current, o))
-    }
-
-    #[inline]
-    pub fn current(&self) -> f32 {
-        self.current
+impl From<(u16, u16)> for Sides {
+    fn from((v, h): (u16, u16)) -> Self {
+        Self { top: v, right: h, bottom: v, left: h }
     }
 }
 
-/// 2D grid of cells with scissor and opacity stacks
-pub struct Buffer {
-    width: u16,
-    height: u16,
-    cells: Vec<Cell>,
-    scissor_stack: ScissorStack,
-    opacity_stack: OpacityStack,
-}
-
-impl Buffer {
-    pub fn new(width: u16, height: u16) -> Self {
-        let size = (width as usize) * (height as usize);
-        Self {
-            width,
-            height,
-            cells: vec![Cell::EMPTY; size],
-            scissor_stack: ScissorStack::new(Rect::new(0, 0, width, height)),
-            opacity_stack: OpacityStack::new(),
-        }
-    }
-
-    #[inline]
-    fn index(&self, x: u16, y: u16) -> usize {
-        (y as usize) * (self.width as usize) + (x as usize)
-    }
-
-    #[inline]
-    pub fn get(&self, x: u16, y: u16) -> &Cell {
-        debug_assert!(x < self.width && y < self.height);
-        &self.cells[self.index(x, y)]
-    }
-
-    /// Get without bounds check (for hot loops)
-    #[inline]
-    pub unsafe fn get_unchecked(&self, x: u16, y: u16) -> &Cell {
-        self.cells.get_unchecked(self.index(x, y))
-    }
-
-    #[inline]
-    pub fn set(&mut self, x: u16, y: u16, mut cell: Cell) {
-        if !self.scissor_stack.contains(x, y) {
-            return;
-        }
-
-        // Apply opacity
-        let opacity = self.opacity_stack.current();
-        if opacity < 1.0 {
-            cell.fg = cell.fg.with_alpha_multiplied(opacity);
-            cell.bg = cell.bg.with_alpha_multiplied(opacity);
-        }
-
-        let idx = self.index(x, y);
-        self.cells[idx] = cell;
-    }
-
-    pub fn clear(&mut self) {
-        self.cells.fill(Cell::EMPTY);
-    }
-
-    pub fn clear_region(&mut self, rect: Rect) {
-        for y in rect.y..(rect.y + rect.height).min(self.height) {
-            for x in rect.x..(rect.x + rect.width).min(self.width) {
-                let idx = self.index(x, y);
-                self.cells[idx] = Cell::EMPTY;
-            }
-        }
-    }
-
-    // Scissor operations
-    pub fn push_scissor(&mut self, rect: Rect) {
-        self.scissor_stack.push(rect);
-    }
-
-    pub fn pop_scissor(&mut self) {
-        self.scissor_stack.pop();
-    }
-
-    // Opacity operations
-    pub fn push_opacity(&mut self, opacity: f32) {
-        self.opacity_stack.push(opacity);
-    }
-
-    pub fn pop_opacity(&mut self) {
-        self.opacity_stack.pop();
-    }
-
-    // Accessors
-    pub fn width(&self) -> u16 { self.width }
-    pub fn height(&self) -> u16 { self.height }
-    pub fn cells(&self) -> &[Cell] { &self.cells }
-}
-```
-
----
-
-## Chapter 7: Diff Algorithm and Presenter
-
-### 7.1 Buffer Diff (Cell-Level)
-
-```rust
-/// Diff result: list of changed cell coordinates
-pub struct BufferDiff {
-    changes: Vec<(u16, u16)>,
-    change_count: usize,
-}
-
-impl BufferDiff {
-    /// Compute minimal change set between two buffers
-    pub fn compute(old: &Buffer, new: &Buffer) -> Self {
-        debug_assert_eq!(old.width, new.width);
-        debug_assert_eq!(old.height, new.height);
-
-        let total = (old.width as usize) * (old.height as usize);
-        let mut changes = Vec::with_capacity(total / 20);  // Expect ~5% changes
-
-        // Sequential scan with bitwise comparison
-        for (i, (old_cell, new_cell)) in old.cells.iter().zip(&new.cells).enumerate() {
-            if !old_cell.bits_eq(new_cell) {
-                let x = (i % old.width as usize) as u16;
-                let y = (i / old.width as usize) as u16;
-                changes.push((x, y));
-            }
-        }
-
-        Self {
-            change_count: changes.len(),
-            changes,
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.change_count == 0
-    }
-
-    /// Should we skip diffing and do full redraw?
-    /// Heuristic: if >50% changed, full redraw is cheaper
-    pub fn should_full_redraw(&self, total_cells: usize) -> bool {
-        self.change_count > total_cells / 2
-    }
-
-    pub fn changes(&self) -> &[(u16, u16)] {
-        &self.changes
-    }
-}
-```
-
-### 7.2 Presenter (ANSI Output with State Tracking)
-
-```rust
-use std::io::{self, Write};
-
-/// Terminal capabilities
-#[derive(Clone, Debug)]
-pub struct TerminalCapabilities {
-    pub true_color: bool,
-    pub color_256: bool,
-    pub sync_output: bool,
-    pub hyperlinks: bool,
-    pub kitty_keyboard: bool,
-    pub bracketed_paste: bool,
-    pub focus_events: bool,
-}
-
-impl TerminalCapabilities {
-    pub fn detect() -> Self {
-        let term = std::env::var("TERM").unwrap_or_default();
-        let colorterm = std::env::var("COLORTERM").unwrap_or_default();
-
-        Self {
-            true_color: colorterm == "truecolor" || colorterm == "24bit" ||
-                        term.contains("kitty") || term.contains("wezterm") ||
-                        term.contains("alacritty") || term.contains("ghostty"),
-            color_256: term.contains("256color") || term.contains("xterm"),
-            sync_output: term.contains("kitty") || term.contains("wezterm") ||
-                         term.contains("alacritty") || term.contains("contour") ||
-                         term.contains("foot") || term.contains("ghostty"),
-            hyperlinks: term.contains("kitty") || term.contains("wezterm") ||
-                        term.contains("alacritty") || term.contains("iterm") ||
-                        term.contains("foot") || term.contains("ghostty"),
-            kitty_keyboard: term.contains("kitty") || term.contains("wezterm") ||
-                            term.contains("foot") || term.contains("ghostty"),
-            bracketed_paste: true,  // Widely supported
-            focus_events: !term.contains("linux") && !term.contains("dumb"),
-        }
-    }
-}
-
-/// Current style state for minimal SGR output
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-struct StyleState {
-    fg: PackedRgba,
-    bg: PackedRgba,
-    attrs: u8,
-}
-
-/// Hyperlink registry: maps URLs to IDs
-pub struct LinkRegistry {
-    links: Vec<String>,
-    index: HashMap<String, u32>,
-}
-
-impl LinkRegistry {
-    pub fn new() -> Self {
-        Self {
-            links: Vec::new(),
-            index: HashMap::new(),
-        }
-    }
-
-    pub fn register(&mut self, url: &str) -> u32 {
-        if let Some(&id) = self.index.get(url) {
-            return id;
-        }
-        let id = self.links.len() as u32;
-        assert!(id < (1 << 24), "Link registry overflow");
-        self.links.push(url.to_string());
-        self.index.insert(url.to_string(), id);
-        id
-    }
-
-    pub fn get(&self, id: u32) -> Option<&str> {
-        self.links.get(id as usize).map(|s| s.as_str())
-    }
-}
-
-/// ANSI output generator with state tracking
-pub struct Presenter {
-    caps: TerminalCapabilities,
-    current_style: StyleState,
-    current_link: Option<u32>,
-    cursor_x: u16,
-    cursor_y: u16,
-    scratch: Vec<u8>,  // Reusable output buffer
-}
-
-impl Presenter {
-    pub fn new(caps: TerminalCapabilities) -> Self {
-        Self {
-            caps,
-            current_style: StyleState::default(),
-            current_link: None,
-            cursor_x: 0,
-            cursor_y: 0,
-            scratch: Vec::with_capacity(4096),
-        }
-    }
-
-    /// Present buffer changes to output
-    pub fn present(
-        &mut self,
-        out: &mut impl Write,
-        buffer: &Buffer,
-        diff: &BufferDiff,
-        pool: &GraphemePool,
-        links: &LinkRegistry,
-    ) -> io::Result<()> {
-        if diff.is_empty() {
-            return Ok(());
-        }
-
-        self.scratch.clear();
-
-        // Synchronized output: begin
-        if self.caps.sync_output {
-            self.scratch.extend_from_slice(b"\x1b[?2026h");
-        }
-
-        // Emit changes
-        if diff.should_full_redraw(buffer.cells().len()) {
-            self.emit_full(buffer, pool, links);
-        } else {
-            self.emit_diff(buffer, diff, pool, links);
-        }
-
-        // Synchronized output: end
-        if self.caps.sync_output {
-            self.scratch.extend_from_slice(b"\x1b[?2026l");
-        }
-
-        out.write_all(&self.scratch)?;
-        out.flush()
-    }
-
-    fn emit_diff(
-        &mut self,
-        buffer: &Buffer,
-        diff: &BufferDiff,
-        pool: &GraphemePool,
-        links: &LinkRegistry,
-    ) {
-        for &(x, y) in diff.changes() {
-            self.move_cursor_to(x, y);
-            let cell = buffer.get(x, y);
-            self.emit_cell(cell, pool, links);
-        }
-    }
-
-    fn emit_full(
-        &mut self,
-        buffer: &Buffer,
-        pool: &GraphemePool,
-        links: &LinkRegistry,
-    ) {
-        // Clear screen and move home
-        self.scratch.extend_from_slice(b"\x1b[2J\x1b[H");
-        self.cursor_x = 0;
-        self.cursor_y = 0;
-
-        for y in 0..buffer.height() {
-            for x in 0..buffer.width() {
-                let cell = buffer.get(x, y);
-                self.emit_cell(cell, pool, links);
-            }
-            if y < buffer.height() - 1 {
-                self.scratch.extend_from_slice(b"\r\n");
-                self.cursor_x = 0;
-                self.cursor_y += 1;
-            }
-        }
-    }
-
-    fn move_cursor_to(&mut self, x: u16, y: u16) {
-        if self.cursor_y == y && x == self.cursor_x {
-            // Already there
-        } else if self.cursor_y == y && x == self.cursor_x + 1 {
-            // Adjacent: cursor advances naturally after character
-        } else if self.cursor_y == y {
-            // Same row: relative movement
-            let delta = x as i32 - self.cursor_x as i32;
-            if delta > 0 {
-                write!(&mut self.scratch, "\x1b[{}C", delta).unwrap();
-            } else {
-                write!(&mut self.scratch, "\x1b[{}D", -delta).unwrap();
-            }
-        } else {
-            // Different row: absolute positioning (1-indexed)
-            write!(&mut self.scratch, "\x1b[{};{}H", y + 1, x + 1).unwrap();
-        }
-        self.cursor_x = x;
-        self.cursor_y = y;
-    }
-
-    fn emit_cell(&mut self, cell: &Cell, pool: &GraphemePool, links: &LinkRegistry) {
-        // Style changes
-        self.emit_style_changes(cell);
-
-        // Link changes (OSC 8)
-        self.emit_link_changes(cell, links);
-
-        // Content
-        match cell.content {
-            CellContent::Empty => self.scratch.push(b' '),
-            CellContent::Char(c) => {
-                let mut buf = [0u8; 4];
-                self.scratch.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
-            }
-            CellContent::Grapheme(id) => {
-                self.scratch.extend_from_slice(pool.get(id).as_bytes());
-            }
-            CellContent::Continuation => {}  // Skip, wide char already written
-        }
-
-        // Update cursor position
-        self.cursor_x += cell.width() as u16;
-    }
-
-    fn emit_style_changes(&mut self, cell: &Cell) {
-        let new_style = StyleState {
-            fg: cell.fg,
-            bg: cell.bg,
-            attrs: cell.attrs.flags(),
-        };
-
-        if new_style == self.current_style {
-            return;
-        }
-
-        // Build SGR sequence
-        self.scratch.extend_from_slice(b"\x1b[");
-        let mut first = true;
-
-        // Check if we need to reset (attributes removed)
-        let removed = self.current_style.attrs & !new_style.attrs;
-        if removed != 0 {
-            self.scratch.push(b'0');
-            first = false;
-            self.current_style = StyleState::default();
-        }
-
-        // Add attributes
-        let added = new_style.attrs & !self.current_style.attrs;
-        if added & (CellAttrs::BOLD as u8) != 0 {
-            if !first { self.scratch.push(b';'); }
-            self.scratch.push(b'1');
-            first = false;
-        }
-        if added & (CellAttrs::DIM as u8) != 0 {
-            if !first { self.scratch.push(b';'); }
-            self.scratch.push(b'2');
-            first = false;
-        }
-        if added & (CellAttrs::ITALIC as u8) != 0 {
-            if !first { self.scratch.push(b';'); }
-            self.scratch.push(b'3');
-            first = false;
-        }
-        if added & (CellAttrs::UNDERLINE as u8) != 0 {
-            if !first { self.scratch.push(b';'); }
-            self.scratch.push(b'4');
-            first = false;
-        }
-        if added & (CellAttrs::BLINK as u8) != 0 {
-            if !first { self.scratch.push(b';'); }
-            self.scratch.push(b'5');
-            first = false;
-        }
-        if added & (CellAttrs::REVERSE as u8) != 0 {
-            if !first { self.scratch.push(b';'); }
-            self.scratch.push(b'7');
-            first = false;
-        }
-        if added & (CellAttrs::HIDDEN as u8) != 0 {
-            if !first { self.scratch.push(b';'); }
-            self.scratch.push(b'8');
-            first = false;
-        }
-        if added & (CellAttrs::STRIKE as u8) != 0 {
-            if !first { self.scratch.push(b';'); }
-            self.scratch.push(b'9');
-            first = false;
-        }
-
-        // Foreground color
-        if new_style.fg != self.current_style.fg {
-            self.emit_color(new_style.fg, true, &mut first);
-        }
-
-        // Background color
-        if new_style.bg != self.current_style.bg {
-            self.emit_color(new_style.bg, false, &mut first);
-        }
-
-        self.scratch.push(b'm');
-        self.current_style = new_style;
-    }
-
-    fn emit_color(&mut self, color: PackedRgba, foreground: bool, first: &mut bool) {
-        if !*first { self.scratch.push(b';'); }
-        *first = false;
-
-        let (r, g, b) = (color.r(), color.g(), color.b());
-
-        if self.caps.true_color {
-            if foreground {
-                write!(&mut self.scratch, "38;2;{};{};{}", r, g, b).unwrap();
-            } else {
-                write!(&mut self.scratch, "48;2;{};{};{}", r, g, b).unwrap();
-            }
-        } else if self.caps.color_256 {
-            let idx = rgb_to_256(r, g, b);
-            if foreground {
-                write!(&mut self.scratch, "38;5;{}", idx).unwrap();
-            } else {
-                write!(&mut self.scratch, "48;5;{}", idx).unwrap();
-            }
-        } else {
-            let idx = rgb_to_16(r, g, b);
-            if foreground {
-                write!(&mut self.scratch, "{}", if idx < 8 { 30 + idx } else { 90 + idx - 8 }).unwrap();
-            } else {
-                write!(&mut self.scratch, "{}", if idx < 8 { 40 + idx } else { 100 + idx - 8 }).unwrap();
-            }
-        }
-    }
-
-    fn emit_link_changes(&mut self, cell: &Cell, registry: &LinkRegistry) {
-        let new_link = cell.attrs.link_id();
-        let current = self.current_link.unwrap_or(0);
-
-        if new_link == current {
-            return;
-        }
-
-        if new_link == 0 {
-            // Close link: OSC 8 ; ; ST
-            self.scratch.extend_from_slice(b"\x1b]8;;\x1b\\");
-            self.current_link = None;
-        } else if let Some(url) = registry.get(new_link) {
-            // Open link: OSC 8 ; ; URL ST
-            write!(&mut self.scratch, "\x1b]8;;{}\x1b\\", url).unwrap();
-            self.current_link = Some(new_link);
-        }
+impl From<(u16, u16, u16, u16)> for Sides {
+    fn from((t, r, b, l): (u16, u16, u16, u16)) -> Self {
+        Self { top: t, right: r, bottom: b, left: l }
     }
 }
 ```
 
 ---
 
-## Chapter 8: Terminal Protocol Support
+## Chapter 12: Runtime + Agent Harness API
 
-### 8.1 Synchronized Output (DEC Mode 2026)
+### 12.1 Runtime Model (Bubbletea/Elm lineage, optional but recommended)
 
+The kernel does not require a runtime. However, a standard runtime dramatically improves
+agent-ergonomics and testability.
+
+Core contract:
 ```rust
-/// Zero-flicker rendering via synchronized output
-///
-/// Protocol:
-///   Begin: CSI ? 2026 h  (\x1b[?2026h)
-///   End:   CSI ? 2026 l  (\x1b[?2026l)
-///
-/// Terminal Support:
-///   ✓ Kitty, WezTerm, Alacritty, Ghostty, Contour, foot
-///   ✗ iTerm2, GNOME Terminal, Konsole, xterm
+pub trait Model {
+    type Message: From<Event> + Send + 'static;
 
-pub const SYNC_OUTPUT_BEGIN: &[u8] = b"\x1b[?2026h";
-pub const SYNC_OUTPUT_END: &[u8] = b"\x1b[?2026l";
+    fn init(&mut self) -> Cmd<Self::Message> { Cmd::none() }
 
-/// Query synchronized output support
-pub const SYNC_OUTPUT_QUERY: &[u8] = b"\x1b[?2026$p";
+    fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message>;
 
-/// Parse sync output query response
-/// Response: CSI ? 2026 ; <value> $ y
-/// value: 0=not recognized, 1=set, 2=reset, 4=permanently reset (not supported)
-pub fn parse_sync_output_response(response: &[u8]) -> Option<bool> {
-    // Expected: \x1b[?2026;N$y
-    if response.len() < 10 { return None; }
-    if !response.starts_with(b"\x1b[?2026;") { return None; }
-
-    let value = response[8];
-    match value {
-        b'1' | b'2' => Some(true),   // Supported (set or reset)
-        b'0' | b'4' => Some(false),  // Not supported
-        _ => None,
-    }
-}
-```
-
-### 8.2 OSC 8 Hyperlinks
-
-```rust
-/// Hyperlink escape sequences (OSC 8)
-///
-/// Open:  OSC 8 ; ; URL ST  (\x1b]8;;URL\x1b\\)
-/// Close: OSC 8 ; ; ST      (\x1b]8;;\x1b\\)
-///
-/// With params: OSC 8 ; params ; URL ST
-/// Example params: id=mylink (for multi-part links)
-
-pub fn hyperlink_open(url: &str) -> String {
-    format!("\x1b]8;;{}\x1b\\", url)
+    fn view(&self, frame: &mut Frame);
 }
 
-pub fn hyperlink_open_with_id(url: &str, id: &str) -> String {
-    format!("\x1b]8;id={};{}\x1b\\", id, url)
-}
-
-pub const HYPERLINK_CLOSE: &str = "\x1b]8;;\x1b\\";
-```
-
-### 8.3 Mouse Protocols
-
-```rust
-/// Mouse tracking modes
-pub mod mouse {
-    /// Enable SGR extended mode + all motion tracking
-    pub const ENABLE: &[u8] = b"\x1b[?1003h\x1b[?1006h";
-
-    /// Disable mouse tracking
-    pub const DISABLE: &[u8] = b"\x1b[?1006l\x1b[?1003l";
-
-    /// Mouse modes:
-    /// 1000: VT200 - press/release only
-    /// 1002: Cell motion - report on cell change during drag
-    /// 1003: All motion - report every movement
-    /// 1006: SGR extended format (recommended)
-    /// 1016: SGR pixel coordinates
-}
-
-#[derive(Clone, Debug)]
-pub struct MouseEvent {
-    pub x: u16,
-    pub y: u16,
-    pub button: MouseButton,
-    pub action: MouseAction,
-    pub modifiers: Modifiers,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MouseButton {
-    Left,
-    Middle,
-    Right,
-    WheelUp,
-    WheelDown,
+pub enum Cmd<M> {
     None,
+    Quit,
+    Batch(Vec<Cmd<M>>),
+    Sequence(Vec<Cmd<M>>),
+    Msg(M),
+    Tick(std::time::Duration),
+    // Async is feature-gated: threadpool or tokio integration
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MouseAction {
-    Press,
-    Release,
-    Drag,
-    Move,
-}
-
-/// Parse SGR mouse event: CSI < btn ; x ; y M/m
-pub fn parse_sgr_mouse(seq: &[u8]) -> Option<MouseEvent> {
-    // Expected: \x1b[<N;X;YM or \x1b[<N;X;Ym
-    if seq.len() < 6 || !seq.starts_with(b"\x1b[<") {
-        return None;
-    }
-
-    let final_byte = *seq.last()?;
-    if final_byte != b'M' && final_byte != b'm' {
-        return None;
-    }
-
-    // Parse parameters between '<' and final byte
-    let params = std::str::from_utf8(&seq[3..seq.len()-1]).ok()?;
-    let parts: Vec<&str> = params.split(';').collect();
-    if parts.len() != 3 {
-        return None;
-    }
-
-    let btn: u16 = parts[0].parse().ok()?;
-    let x: u16 = parts[1].parse().ok()?.saturating_sub(1);
-    let y: u16 = parts[2].parse().ok()?.saturating_sub(1);
-
-    let button = match btn & 0b11 {
-        0 => MouseButton::Left,
-        1 => MouseButton::Middle,
-        2 => MouseButton::Right,
-        3 => MouseButton::None,
-        _ => MouseButton::None,
-    };
-
-    // Check for wheel
-    let button = if btn & 64 != 0 {
-        if btn & 1 != 0 { MouseButton::WheelDown } else { MouseButton::WheelUp }
-    } else {
-        button
-    };
-
-    let action = if final_byte == b'm' {
-        MouseAction::Release
-    } else if btn & 32 != 0 {
-        MouseAction::Drag
-    } else {
-        MouseAction::Press
-    };
-
-    let mut modifiers = Modifiers::empty();
-    if btn & 4 != 0 { modifiers |= Modifiers::SHIFT; }
-    if btn & 8 != 0 { modifiers |= Modifiers::ALT; }
-    if btn & 16 != 0 { modifiers |= Modifiers::CTRL; }
-
-    Some(MouseEvent { x, y, button, action, modifiers })
+impl<M> Cmd<M> {
+    pub fn none() -> Self { Self::None }
+    pub fn quit() -> Self { Self::Quit }
+    pub fn batch(cmds: Vec<Self>) -> Self { Self::Batch(cmds) }
 }
 ```
 
-### 8.4 Focus Events and Bracketed Paste
+Program responsibilities:
+- Own terminal lifecycle (raw mode, mouse modes, paste, focus, alt screen if enabled)
+- Poll input → Event → Message
+- Run update loop, schedule ticks/commands
+- Render frames only when dirty (or on tick), with FPS cap if desired
+- Enforce screen mode policy (Inline/AltScreen)
+
+### 12.2 Deterministic Simulator (Stop regressions forever)
+
+Provide `ProgramSimulator` that:
+- injects a sequence of Events / Messages
+- captures produced Frames (or buffer snapshots)
+- enables snapshot tests for widgets and full apps
+- runs without a real terminal (no flakiness)
 
 ```rust
-/// Focus event tracking
-pub mod focus {
-    pub const ENABLE: &[u8] = b"\x1b[?1004h";
-    pub const DISABLE: &[u8] = b"\x1b[?1004l";
-
-    pub const FOCUS_IN: &[u8] = b"\x1b[I";
-    pub const FOCUS_OUT: &[u8] = b"\x1b[O";
+pub struct ProgramSimulator<M: Model> {
+    model: M,
+    frames: Vec<Buffer>,
 }
 
-/// Bracketed paste mode
-pub mod paste {
-    pub const ENABLE: &[u8] = b"\x1b[?2004h";
-    pub const DISABLE: &[u8] = b"\x1b[?2004l";
+impl<M: Model> ProgramSimulator<M> {
+    pub fn new(model: M) -> Self {
+        Self { model, frames: Vec::new() }
+    }
 
-    pub const PASTE_START: &[u8] = b"\x1b[200~";
-    pub const PASTE_END: &[u8] = b"\x1b[201~";
-}
-```
-
-### 8.5 tmux Passthrough
-
-```rust
-/// Wrap escape sequence for tmux passthrough
-/// All ESC characters in the inner sequence must be doubled
-pub fn wrap_for_tmux(sequence: &[u8]) -> Vec<u8> {
-    let mut result = Vec::with_capacity(sequence.len() * 2 + 10);
-
-    // DCS tmux;
-    result.extend_from_slice(b"\x1bPtmux;");
-
-    // Double all ESC characters
-    for &byte in sequence {
-        if byte == 0x1b {
-            result.push(0x1b);
-            result.push(0x1b);
-        } else {
-            result.push(byte);
+    pub fn inject_events(&mut self, events: &[Event]) {
+        for event in events {
+            let msg = M::Message::from(event.clone());
+            self.model.update(msg);
         }
     }
 
-    // ST
-    result.extend_from_slice(b"\x1b\\");
-    result
-}
-
-/// Detect if running inside tmux
-pub fn in_tmux() -> bool {
-    std::env::var("TMUX").is_ok()
-}
-```
-
----
-
-## Chapter 9: Input Parser
-
-### 9.1 Event Types
-
-```rust
-use bitflags::bitflags;
-
-#[derive(Clone, Debug)]
-pub enum Event {
-    Key(KeyEvent),
-    Mouse(MouseEvent),
-    Resize(u16, u16),
-    Paste(String),
-    FocusGained,
-    FocusLost,
-}
-
-#[derive(Clone, Debug)]
-pub struct KeyEvent {
-    pub code: KeyCode,
-    pub modifiers: Modifiers,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum KeyCode {
-    Char(char),
-    Enter,
-    Tab,
-    Backspace,
-    Escape,
-    Up,
-    Down,
-    Left,
-    Right,
-    Home,
-    End,
-    PageUp,
-    PageDown,
-    Insert,
-    Delete,
-    F(u8),  // F1-F12+
-}
-
-bitflags! {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub struct Modifiers: u8 {
-        const SHIFT = 0b0001;
-        const CTRL  = 0b0010;
-        const ALT   = 0b0100;
-        const META  = 0b1000;
-    }
-}
-```
-
-### 9.2 Input Parser State Machine
-
-```rust
-/// Limits for DoS protection
-pub mod limits {
-    pub const MAX_CSI_LEN: usize = 256;
-    pub const MAX_OSC_LEN: usize = 4096;
-    pub const MAX_PASTE_LEN: usize = 10 * 1024 * 1024;  // 10 MB
-}
-
-enum ParseResult {
-    Event(Event),
-    Incomplete,
-    Invalid(usize),  // Skip this many bytes
-}
-
-pub struct InputParser {
-    buffer: Vec<u8>,
-    in_paste: bool,
-    paste_buffer: Vec<u8>,
-}
-
-impl InputParser {
-    pub fn new() -> Self {
-        Self {
-            buffer: Vec::with_capacity(64),
-            in_paste: false,
-            paste_buffer: Vec::new(),
-        }
-    }
-
-    pub fn parse(&mut self, input: &[u8]) -> Vec<Event> {
-        let mut events = Vec::new();
-        self.buffer.extend_from_slice(input);
-
-        while !self.buffer.is_empty() {
-            if self.in_paste {
-                if let Some(end) = self.find_paste_end() {
-                    let paste = std::mem::take(&mut self.paste_buffer);
-                    if let Ok(s) = String::from_utf8(paste) {
-                        events.push(Event::Paste(s));
-                    }
-                    self.buffer.drain(..end);
-                    self.in_paste = false;
-                } else {
-                    // Check paste overflow
-                    if self.paste_buffer.len() + self.buffer.len() > limits::MAX_PASTE_LEN {
-                        // Truncate and end paste
-                        self.in_paste = false;
-                        self.paste_buffer.clear();
-                        self.buffer.clear();
-                        break;
-                    }
-                    self.paste_buffer.extend(self.buffer.drain(..));
-                    break;
-                }
-            } else {
-                match self.parse_sequence() {
-                    ParseResult::Event(e) => events.push(e),
-                    ParseResult::Incomplete => break,
-                    ParseResult::Invalid(n) => {
-                        self.buffer.drain(..n.max(1));
-                    }
-                }
-            }
-        }
-
-        events
-    }
-
-    fn parse_sequence(&mut self) -> ParseResult {
-        if self.buffer.is_empty() {
-            return ParseResult::Incomplete;
-        }
-
-        match self.buffer[0] {
-            0x1b => self.parse_escape(),
-            0x00..=0x1f => self.parse_control(),
-            0x7f => {
-                self.buffer.drain(..1);
-                ParseResult::Event(Event::Key(KeyEvent {
-                    code: KeyCode::Backspace,
-                    modifiers: Modifiers::empty(),
-                }))
-            }
-            _ => self.parse_char(),
-        }
-    }
-
-    fn parse_escape(&mut self) -> ParseResult {
-        if self.buffer.len() < 2 {
-            return ParseResult::Incomplete;
-        }
-
-        match self.buffer[1] {
-            b'[' => self.parse_csi(),
-            b'O' => self.parse_ss3(),
-            b']' => self.parse_osc(),
-            _ => {
-                // Alt + key
-                self.buffer.drain(..1);
-                match self.parse_sequence() {
-                    ParseResult::Event(Event::Key(mut k)) => {
-                        k.modifiers |= Modifiers::ALT;
-                        ParseResult::Event(Event::Key(k))
-                    }
-                    other => other,
-                }
-            }
-        }
-    }
-
-    fn parse_csi(&mut self) -> ParseResult {
-        // Find final byte (0x40-0x7E)
-        let mut i = 2;
-        while i < self.buffer.len() && i < limits::MAX_CSI_LEN {
-            let b = self.buffer[i];
-            if (0x40..=0x7E).contains(&b) {
-                return self.decode_csi(i + 1);
-            }
-            i += 1;
-        }
-
-        if i >= limits::MAX_CSI_LEN {
-            return ParseResult::Invalid(i);
-        }
-        ParseResult::Incomplete
-    }
-
-    fn decode_csi(&mut self, len: usize) -> ParseResult {
-        let seq = &self.buffer[..len];
-        let final_byte = seq[len - 1];
-
-        // Check for paste markers
-        if seq.starts_with(paste::PASTE_START) {
-            self.buffer.drain(..len);
-            self.in_paste = true;
-            return ParseResult::Incomplete;
-        }
-
-        let event = match final_byte {
-            b'A' => Event::Key(KeyEvent { code: KeyCode::Up, modifiers: self.parse_csi_modifiers(seq) }),
-            b'B' => Event::Key(KeyEvent { code: KeyCode::Down, modifiers: self.parse_csi_modifiers(seq) }),
-            b'C' => Event::Key(KeyEvent { code: KeyCode::Right, modifiers: self.parse_csi_modifiers(seq) }),
-            b'D' => Event::Key(KeyEvent { code: KeyCode::Left, modifiers: self.parse_csi_modifiers(seq) }),
-            b'H' => Event::Key(KeyEvent { code: KeyCode::Home, modifiers: self.parse_csi_modifiers(seq) }),
-            b'F' => Event::Key(KeyEvent { code: KeyCode::End, modifiers: self.parse_csi_modifiers(seq) }),
-            b'~' => return self.decode_csi_tilde(len),
-            b'M' | b'm' if seq.starts_with(b"\x1b[<") => {
-                if let Some(mouse) = parse_sgr_mouse(seq) {
-                    Event::Mouse(mouse)
-                } else {
-                    self.buffer.drain(..len);
-                    return ParseResult::Invalid(0);
-                }
-            }
-            b'I' => Event::FocusGained,
-            b'O' => Event::FocusLost,
-            _ => {
-                self.buffer.drain(..len);
-                return ParseResult::Invalid(0);
-            }
+    pub fn capture_frame(&mut self, width: u16, height: u16) -> &Buffer {
+        let mut frame = Frame {
+            buffer: Buffer::new(width, height),
+            hit_grid: None,
+            cursor_position: None,
+            cursor_visible: true,
         };
-
-        self.buffer.drain(..len);
-        ParseResult::Event(event)
-    }
-
-    fn decode_csi_tilde(&mut self, len: usize) -> ParseResult {
-        let seq = &self.buffer[2..len-1];
-        let params: Vec<u16> = String::from_utf8_lossy(seq)
-            .split(';')
-            .filter_map(|s| s.parse().ok())
-            .collect();
-
-        let code = match params.first() {
-            Some(1) | Some(7) => KeyCode::Home,
-            Some(2) => KeyCode::Insert,
-            Some(3) => KeyCode::Delete,
-            Some(4) | Some(8) => KeyCode::End,
-            Some(5) => KeyCode::PageUp,
-            Some(6) => KeyCode::PageDown,
-            Some(n @ 11..=15) => KeyCode::F((n - 10) as u8),
-            Some(n @ 17..=21) => KeyCode::F((n - 11) as u8),
-            Some(n @ 23..=24) => KeyCode::F((n - 12) as u8),
-            _ => {
-                self.buffer.drain(..len);
-                return ParseResult::Invalid(0);
-            }
-        };
-
-        let modifiers = params.get(1)
-            .map(|&m| self.decode_modifier(m))
-            .unwrap_or(Modifiers::empty());
-
-        self.buffer.drain(..len);
-        ParseResult::Event(Event::Key(KeyEvent { code, modifiers }))
-    }
-
-    fn parse_csi_modifiers(&self, seq: &[u8]) -> Modifiers {
-        // Look for modifier parameter (e.g., CSI 1;5 A for Ctrl+Up)
-        let params = &seq[2..seq.len()-1];
-        if let Some(semi) = params.iter().position(|&b| b == b';') {
-            let mod_str = &params[semi+1..];
-            if let Ok(m) = std::str::from_utf8(mod_str).and_then(|s| s.parse::<u16>().map_err(|_| std::str::Utf8Error::default())) {
-                return self.decode_modifier(m);
-            }
-        }
-        Modifiers::empty()
-    }
-
-    fn decode_modifier(&self, m: u16) -> Modifiers {
-        let m = m.saturating_sub(1);
-        let mut mods = Modifiers::empty();
-        if m & 1 != 0 { mods |= Modifiers::SHIFT; }
-        if m & 2 != 0 { mods |= Modifiers::ALT; }
-        if m & 4 != 0 { mods |= Modifiers::CTRL; }
-        if m & 8 != 0 { mods |= Modifiers::META; }
-        mods
-    }
-
-    fn parse_ss3(&mut self) -> ParseResult {
-        if self.buffer.len() < 3 {
-            return ParseResult::Incomplete;
-        }
-
-        let code = match self.buffer[2] {
-            b'P' => KeyCode::F(1),
-            b'Q' => KeyCode::F(2),
-            b'R' => KeyCode::F(3),
-            b'S' => KeyCode::F(4),
-            b'H' => KeyCode::Home,
-            b'F' => KeyCode::End,
-            _ => {
-                self.buffer.drain(..3);
-                return ParseResult::Invalid(0);
-            }
-        };
-
-        self.buffer.drain(..3);
-        ParseResult::Event(Event::Key(KeyEvent { code, modifiers: Modifiers::empty() }))
-    }
-
-    fn parse_osc(&mut self) -> ParseResult {
-        // Find terminator: ST (\x1b\\) or BEL (\x07)
-        for i in 2..self.buffer.len().min(limits::MAX_OSC_LEN) {
-            if self.buffer[i] == 0x07 ||
-               (i > 0 && self.buffer[i-1] == 0x1b && self.buffer[i] == b'\\') {
-                let end = if self.buffer[i] == 0x07 { i + 1 } else { i + 1 };
-                self.buffer.drain(..end);
-                return ParseResult::Invalid(0);  // OSC parsed but not used
-            }
-        }
-
-        if self.buffer.len() >= limits::MAX_OSC_LEN {
-            return ParseResult::Invalid(limits::MAX_OSC_LEN);
-        }
-        ParseResult::Incomplete
-    }
-
-    fn parse_control(&mut self) -> ParseResult {
-        let b = self.buffer[0];
-        self.buffer.drain(..1);
-
-        let event = match b {
-            0x00 => KeyEvent { code: KeyCode::Char('@'), modifiers: Modifiers::CTRL },
-            0x09 => KeyEvent { code: KeyCode::Tab, modifiers: Modifiers::empty() },
-            0x0a | 0x0d => KeyEvent { code: KeyCode::Enter, modifiers: Modifiers::empty() },
-            0x08 => KeyEvent { code: KeyCode::Backspace, modifiers: Modifiers::empty() },
-            0x1b => KeyEvent { code: KeyCode::Escape, modifiers: Modifiers::empty() },
-            0x01..=0x1a => KeyEvent {
-                code: KeyCode::Char((b + b'a' - 1) as char),
-                modifiers: Modifiers::CTRL,
-            },
-            _ => return ParseResult::Invalid(0),
-        };
-
-        ParseResult::Event(Event::Key(event))
-    }
-
-    fn parse_char(&mut self) -> ParseResult {
-        // UTF-8 length from first byte
-        let len = match self.buffer[0] {
-            0x00..=0x7f => 1,
-            0xc0..=0xdf => 2,
-            0xe0..=0xef => 3,
-            0xf0..=0xf7 => 4,
-            _ => return ParseResult::Invalid(1),
-        };
-
-        if self.buffer.len() < len {
-            return ParseResult::Incomplete;
-        }
-
-        if let Ok(s) = std::str::from_utf8(&self.buffer[..len]) {
-            if let Some(c) = s.chars().next() {
-                self.buffer.drain(..len);
-                return ParseResult::Event(Event::Key(KeyEvent {
-                    code: KeyCode::Char(c),
-                    modifiers: Modifiers::empty(),
-                }));
-            }
-        }
-
-        ParseResult::Invalid(1)
-    }
-
-    fn find_paste_end(&self) -> Option<usize> {
-        // Look for paste end marker in buffer
-        self.buffer.windows(paste::PASTE_END.len())
-            .position(|w| w == paste::PASTE_END)
-            .map(|p| p + paste::PASTE_END.len())
+        self.model.view(&mut frame);
+        self.frames.push(frame.buffer);
+        self.frames.last().unwrap()
     }
 }
 ```
 
----
+### 12.3 Minimal "String View" Adapter (Ergonomics)
 
-## Chapter 10: Components
-
-### 10.1 The Renderable Trait
-
+Support trivial apps with:
 ```rust
-/// Anything that can be rendered to a buffer
-pub trait Renderable {
-    /// Measure content dimensions (for layout)
-    fn measure(&self, ctx: &RenderContext) -> Measurement {
-        Measurement::ZERO
-    }
-
-    /// Render to buffer within area
-    fn render(&self, buf: &mut Buffer, area: Rect, ctx: &RenderContext);
-}
-
-/// Render context with ambient state
-pub struct RenderContext {
-    pub caps: TerminalCapabilities,
-    pub theme: Theme,
-    pub grapheme_pool: std::cell::RefCell<GraphemePool>,
-    pub link_registry: std::cell::RefCell<LinkRegistry>,
-}
-
-// Blanket implementations for composition
-impl<T: Renderable> Renderable for &T {
-    fn measure(&self, ctx: &RenderContext) -> Measurement { (*self).measure(ctx) }
-    fn render(&self, buf: &mut Buffer, area: Rect, ctx: &RenderContext) { (*self).render(buf, area, ctx) }
-}
-
-impl<T: Renderable> Renderable for Box<T> {
-    fn measure(&self, ctx: &RenderContext) -> Measurement { (**self).measure(ctx) }
-    fn render(&self, buf: &mut Buffer, area: Rect, ctx: &RenderContext) { (**self).render(buf, area, ctx) }
-}
+fn view_string(&self) -> String
 ```
+internally: String → Text/Segments → Frame draw → Presenter.
 
-### 10.2 Panel Component
+This keeps the kernel disciplined (Frame remains canonical) while preserving the "easy path."
 
-```rust
-/// Bordered container
-pub struct Panel<C: Renderable> {
-    content: C,
-    border: BorderStyle,
-    border_fg: Option<Color>,
-    title: Option<String>,
-    title_align: HAlign,
-    style: Style,
-}
-
-impl<C: Renderable> Panel<C> {
-    pub fn new(content: C) -> Self {
-        Self {
-            content,
-            border: BorderStyle::Rounded,
-            border_fg: None,
-            title: None,
-            title_align: HAlign::Left,
-            style: Style::default(),
-        }
-    }
-
-    pub fn border(mut self, style: BorderStyle) -> Self {
-        self.border = style;
-        self
-    }
-
-    pub fn border_fg(mut self, color: impl Into<Color>) -> Self {
-        self.border_fg = Some(color.into());
-        self
-    }
-
-    pub fn title(mut self, title: impl Into<String>) -> Self {
-        self.title = Some(title.into());
-        self
-    }
-
-    pub fn title_align(mut self, align: HAlign) -> Self {
-        self.title_align = align;
-        self
-    }
-
-    pub fn style(mut self, style: Style) -> Self {
-        self.style = style;
-        self
-    }
-}
-
-impl<C: Renderable> Renderable for Panel<C> {
-    fn measure(&self, ctx: &RenderContext) -> Measurement {
-        let inner = self.content.measure(ctx);
-        let border_w = if matches!(self.border, BorderStyle::None) { 0 } else { 2 };
-        let padding_w = self.style.padding.horizontal() as usize;
-
-        Measurement {
-            minimum: inner.minimum + border_w + padding_w,
-            maximum: inner.maximum + border_w + padding_w,
-        }
-    }
-
-    fn render(&self, buf: &mut Buffer, area: Rect, ctx: &RenderContext) {
-        let border = match self.border {
-            BorderStyle::None => return self.content.render(buf, area, ctx),
-            BorderStyle::Rounded => Border::rounded(),
-            BorderStyle::Square => Border::square(),
-            BorderStyle::Double => Border::double(),
-            BorderStyle::Heavy => Border::heavy(),
-            BorderStyle::Ascii => Border::ascii(),
-            BorderStyle::Hidden => Border::hidden(),
-            BorderStyle::Custom(ref b) => b.clone(),
-        };
-
-        let fg = self.border_fg.as_ref()
-            .map(|c| c.resolve(&ctx.theme))
-            .unwrap_or(ctx.theme.foreground());
-
-        // Draw corners
-        buf.set(area.x, area.y, Cell {
-            content: CellContent::Char(border.top_left),
-            fg: fg.to_packed(),
-            ..Cell::EMPTY
-        });
-        buf.set(area.x + area.width - 1, area.y, Cell {
-            content: CellContent::Char(border.top_right),
-            fg: fg.to_packed(),
-            ..Cell::EMPTY
-        });
-        buf.set(area.x, area.y + area.height - 1, Cell {
-            content: CellContent::Char(border.bottom_left),
-            fg: fg.to_packed(),
-            ..Cell::EMPTY
-        });
-        buf.set(area.x + area.width - 1, area.y + area.height - 1, Cell {
-            content: CellContent::Char(border.bottom_right),
-            fg: fg.to_packed(),
-            ..Cell::EMPTY
-        });
-
-        // Draw top edge (with optional title)
-        let top_y = area.y;
-        if let Some(ref title) = self.title {
-            let title_len = crate::unicode::display_width(title);
-            let available = (area.width as usize).saturating_sub(4);
-            let title_start = match self.title_align {
-                HAlign::Left => 2,
-                HAlign::Center => ((area.width as usize - title_len) / 2).max(2),
-                HAlign::Right => (area.width as usize - title_len - 2).max(2),
-            };
-
-            for x in 1..(area.width - 1) {
-                let px = area.x + x;
-                let rel_x = x as usize;
-
-                if rel_x >= title_start && rel_x < title_start + title_len {
-                    // Title character
-                    let title_idx = rel_x - title_start;
-                    if let Some(c) = title.chars().nth(title_idx) {
-                        buf.set(px, top_y, Cell {
-                            content: CellContent::Char(c),
-                            fg: fg.to_packed(),
-                            ..Cell::EMPTY
-                        });
-                    }
-                } else {
-                    buf.set(px, top_y, Cell {
-                        content: CellContent::Char(border.top),
-                        fg: fg.to_packed(),
-                        ..Cell::EMPTY
-                    });
-                }
-            }
-        } else {
-            for x in 1..(area.width - 1) {
-                buf.set(area.x + x, top_y, Cell {
-                    content: CellContent::Char(border.top),
-                    fg: fg.to_packed(),
-                    ..Cell::EMPTY
-                });
-            }
-        }
-
-        // Draw bottom edge
-        let bottom_y = area.y + area.height - 1;
-        for x in 1..(area.width - 1) {
-            buf.set(area.x + x, bottom_y, Cell {
-                content: CellContent::Char(border.bottom),
-                fg: fg.to_packed(),
-                ..Cell::EMPTY
-            });
-        }
-
-        // Draw left/right edges
-        for y in 1..(area.height - 1) {
-            buf.set(area.x, area.y + y, Cell {
-                content: CellContent::Char(border.left),
-                fg: fg.to_packed(),
-                ..Cell::EMPTY
-            });
-            buf.set(area.x + area.width - 1, area.y + y, Cell {
-                content: CellContent::Char(border.right),
-                fg: fg.to_packed(),
-                ..Cell::EMPTY
-            });
-        }
-
-        // Render content in inner area
-        let inner = Rect::new(
-            area.x + 1 + self.style.padding.left,
-            area.y + 1 + self.style.padding.top,
-            area.width.saturating_sub(2 + self.style.padding.horizontal()),
-            area.height.saturating_sub(2 + self.style.padding.vertical()),
-        );
-
-        buf.push_scissor(inner);
-        self.content.render(buf, inner, ctx);
-        buf.pop_scissor();
-    }
-}
-```
-
-### 10.3 Spinner Component
-
-```rust
-use std::time::{Duration, Instant};
-
-pub struct Spinner {
-    style: SpinnerStyle,
-    message: String,
-    frame: usize,
-    last_tick: Instant,
-    fg: Option<Color>,
-}
-
-#[derive(Clone)]
-pub enum SpinnerStyle {
-    Dots,
-    Line,
-    Braille,
-    Bounce,
-    Custom(Vec<&'static str>),
-}
-
-impl SpinnerStyle {
-    fn frames(&self) -> &[&str] {
-        match self {
-            Self::Dots => &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
-            Self::Line => &["-", "\\", "|", "/"],
-            Self::Braille => &["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"],
-            Self::Bounce => &["⠁", "⠂", "⠄", "⡀", "⢀", "⠠", "⠐", "⠈"],
-            Self::Custom(frames) => frames,
-        }
-    }
-
-    fn frame_duration(&self) -> Duration {
-        match self {
-            Self::Dots | Self::Braille => Duration::from_millis(80),
-            Self::Line => Duration::from_millis(100),
-            Self::Bounce => Duration::from_millis(120),
-            Self::Custom(_) => Duration::from_millis(80),
-        }
-    }
-}
-
-impl Spinner {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            style: SpinnerStyle::Dots,
-            message: message.into(),
-            frame: 0,
-            last_tick: Instant::now(),
-            fg: None,
-        }
-    }
-
-    pub fn style(mut self, style: SpinnerStyle) -> Self {
-        self.style = style;
-        self
-    }
-
-    pub fn fg(mut self, color: impl Into<Color>) -> Self {
-        self.fg = Some(color.into());
-        self
-    }
-
-    /// Advance animation frame if enough time has passed
-    /// Returns true if frame changed (needs redraw)
-    pub fn tick(&mut self) -> bool {
-        if self.last_tick.elapsed() >= self.style.frame_duration() {
-            self.frame = (self.frame + 1) % self.style.frames().len();
-            self.last_tick = Instant::now();
-            true
-        } else {
-            false
-        }
-    }
-}
-
-impl Renderable for Spinner {
-    fn measure(&self, _ctx: &RenderContext) -> Measurement {
-        let frame_width = 2;  // Spinner frames are 1-2 cells
-        let msg_width = crate::unicode::display_width(&self.message);
-        let total = frame_width + 1 + msg_width;
-        Measurement { minimum: total, maximum: total }
-    }
-
-    fn render(&self, buf: &mut Buffer, area: Rect, ctx: &RenderContext) {
-        let frame = self.style.frames()[self.frame];
-        let fg = self.fg.as_ref()
-            .map(|c| c.resolve(&ctx.theme))
-            .unwrap_or(ctx.theme.primary())
-            .to_packed();
-
-        // Draw spinner frame
-        for (i, c) in frame.chars().enumerate() {
-            if area.x + i as u16 >= area.x + area.width { break; }
-            buf.set(area.x + i as u16, area.y, Cell {
-                content: CellContent::Char(c),
-                fg,
-                ..Cell::EMPTY
-            });
-        }
-
-        // Draw message
-        let msg_x = area.x + 2;
-        for (i, c) in self.message.chars().enumerate() {
-            let x = msg_x + i as u16;
-            if x >= area.x + area.width { break; }
-            buf.set(x, area.y, Cell {
-                content: CellContent::Char(c),
-                ..Cell::EMPTY
-            });
-        }
-    }
-}
-```
-
-### 10.4 Progress Bar
-
-```rust
-pub struct Progress {
-    value: f32,
-    label: Option<String>,
-    filled_char: char,
-    empty_char: char,
-    filled_fg: Option<Color>,
-    empty_fg: Option<Color>,
-    show_percentage: bool,
-}
-
-impl Progress {
-    pub fn new(value: f32) -> Self {
-        Self {
-            value: value.clamp(0.0, 1.0),
-            label: None,
-            filled_char: '█',
-            empty_char: '░',
-            filled_fg: None,
-            empty_fg: None,
-            show_percentage: true,
-        }
-    }
-
-    pub fn value(mut self, v: f32) -> Self {
-        self.value = v.clamp(0.0, 1.0);
-        self
-    }
-
-    pub fn label(mut self, label: impl Into<String>) -> Self {
-        self.label = Some(label.into());
-        self
-    }
-
-    pub fn show_percentage(mut self, show: bool) -> Self {
-        self.show_percentage = show;
-        self
-    }
-
-    pub fn filled_fg(mut self, color: impl Into<Color>) -> Self {
-        self.filled_fg = Some(color.into());
-        self
-    }
-
-    pub fn set(&mut self, value: f32) {
-        self.value = value.clamp(0.0, 1.0);
-    }
-}
-
-impl Renderable for Progress {
-    fn measure(&self, _ctx: &RenderContext) -> Measurement {
-        let label_w = self.label.as_ref().map(|l| l.len() + 1).unwrap_or(0);
-        let pct_w = if self.show_percentage { 5 } else { 0 };
-        let min_bar = 10;
-        Measurement {
-            minimum: label_w + min_bar + pct_w,
-            maximum: label_w + 50 + pct_w,
-        }
-    }
-
-    fn render(&self, buf: &mut Buffer, area: Rect, ctx: &RenderContext) {
-        let mut x = area.x;
-
-        // Label
-        if let Some(ref label) = self.label {
-            for c in label.chars() {
-                if x >= area.x + area.width { break; }
-                buf.set(x, area.y, Cell {
-                    content: CellContent::Char(c),
-                    ..Cell::EMPTY
-                });
-                x += 1;
-            }
-            x += 1;  // Space after label
-        }
-
-        // Calculate bar width
-        let pct_width = if self.show_percentage { 5 } else { 0 };
-        let bar_width = (area.width as usize).saturating_sub((x - area.x) as usize + pct_width);
-        let filled_width = ((bar_width as f32) * self.value) as usize;
-
-        let filled_fg = self.filled_fg.as_ref()
-            .map(|c| c.resolve(&ctx.theme))
-            .unwrap_or(ctx.theme.primary())
-            .to_packed();
-        let empty_fg = self.empty_fg.as_ref()
-            .map(|c| c.resolve(&ctx.theme))
-            .unwrap_or(ctx.theme.muted())
-            .to_packed();
-
-        // Draw bar
-        for i in 0..bar_width {
-            let (ch, fg) = if i < filled_width {
-                (self.filled_char, filled_fg)
-            } else {
-                (self.empty_char, empty_fg)
-            };
-            buf.set(x, area.y, Cell {
-                content: CellContent::Char(ch),
-                fg,
-                ..Cell::EMPTY
-            });
-            x += 1;
-        }
-
-        // Percentage
-        if self.show_percentage {
-            let pct = format!(" {:>3}%", (self.value * 100.0) as u8);
-            for c in pct.chars() {
-                if x >= area.x + area.width { break; }
-                buf.set(x, area.y, Cell {
-                    content: CellContent::Char(c),
-                    ..Cell::EMPTY
-                });
-                x += 1;
-            }
-        }
-    }
-}
-```
-
----
-
-## Chapter 11: Agent Harness API
-
-### 11.1 High-Level Coordinator
+### 12.4 Agent Harness Reference Implementation
 
 ```rust
 use std::io::{self, Stdout, Write};
 
-/// High-level API for coding agent UIs
+/// High-level coordinator for agent harness UIs
 pub struct AgentHarness {
-    terminal: Terminal<Stdout>,
+    session: TerminalSession<Stdout>,
     buffer: Buffer,
     prev_buffer: Buffer,
-    presenter: Presenter,
-    ctx: RenderContext,
+    presenter: Presenter<Stdout>,
+    pool: GraphemePool,
+    links: LinkRegistry,
+    screen_mode: ScreenMode,
+}
 
-    // State
-    current_tool: Option<ToolIndicator>,
-    spinners: Vec<Spinner>,
+pub enum ScreenMode {
+    Inline { ui_height: u16 },
+    AltScreen,
 }
 
 impl AgentHarness {
-    pub fn new() -> io::Result<Self> {
-        let caps = TerminalCapabilities::detect();
-        let (w, h) = terminal_size()?;
+    pub fn new(screen_mode: ScreenMode) -> io::Result<Self> {
+        let (width, height) = terminal_size::terminal_size()
+            .map(|(w, h)| (w.0, h.0))
+            .unwrap_or((80, 24));
 
-        let ctx = RenderContext {
-            caps: caps.clone(),
-            theme: Theme::dark(),
-            grapheme_pool: std::cell::RefCell::new(GraphemePool::new()),
-            link_registry: std::cell::RefCell::new(LinkRegistry::new()),
-        };
+        let mut session = TerminalSession::new(io::stdout())?;
+        session.enter_raw_mode()?;
+        session.enable_mouse()?;
+        session.enable_bracketed_paste()?;
+        session.enable_focus_events()?;
+
+        if matches!(screen_mode, ScreenMode::AltScreen) {
+            session.enter_alt_screen()?;
+        }
+
+        let capabilities = session.capabilities().clone();
 
         Ok(Self {
-            terminal: Terminal::new(io::stdout(), caps.clone())?,
-            buffer: Buffer::new(w, h),
-            prev_buffer: Buffer::new(w, h),
-            presenter: Presenter::new(caps),
-            ctx,
-            current_tool: None,
-            spinners: Vec::new(),
+            session,
+            buffer: Buffer::new(width, height),
+            prev_buffer: Buffer::new(width, height),
+            presenter: Presenter::new(io::stdout(), capabilities),
+            pool: GraphemePool::new(),
+            links: LinkRegistry::new(),
+            screen_mode,
         })
     }
 
-    // ===== TOOL INDICATORS =====
-
-    /// Start a tool execution with spinner
-    pub fn tool_start(&mut self, name: &str, target: &str) {
-        self.current_tool = Some(ToolIndicator {
-            name: name.to_string(),
-            target: target.to_string(),
-            status: ToolStatus::Running,
-            spinner: Spinner::new(""),
-            start_time: Instant::now(),
-        });
-        self.render();
-    }
-
-    /// Mark current tool as successful
-    pub fn tool_success(&mut self) {
-        if let Some(ref mut tool) = self.current_tool {
-            tool.status = ToolStatus::Success;
-            self.render();
-        }
-        self.current_tool = None;
-    }
-
-    /// Mark current tool as failed
-    pub fn tool_error(&mut self, message: &str) {
-        if let Some(ref mut tool) = self.current_tool {
-            tool.status = ToolStatus::Failed(message.to_string());
-            self.render();
-        }
-        self.current_tool = None;
-    }
-
-    // ===== PROGRESS =====
-
-    /// Show a progress bar
-    pub fn progress(&mut self, label: &str, value: f32) {
-        let progress = Progress::new(value).label(label);
-        // Render progress in status area
-        self.render();
-    }
-
-    // ===== STATUS =====
-
-    /// Show a status message with spinner
-    pub fn status(&mut self, message: &str) {
-        let spinner = Spinner::new(message);
-        self.spinners.push(spinner);
-        self.render();
-    }
-
-    /// Clear current status
-    pub fn clear_status(&mut self) {
-        self.spinners.pop();
-        self.render();
-    }
-
-    // ===== OUTPUT =====
-
-    /// Print styled content
-    pub fn print(&mut self, content: impl Renderable) {
-        // Render at current position, advance scroll
-        self.render();
-    }
-
-    /// Print markup text: [bold red]Error:[/] message
-    pub fn print_markup(&mut self, markup: &str) {
-        let segments = parse_markup(markup, Style::default());
-        // Render segments
-        self.render();
-    }
-
-    /// Print code with syntax highlighting
-    pub fn code_block(&mut self, language: &str, code: &str) {
-        // TODO: Syntax highlighting integration
-        let panel = Panel::new(code)
-            .border(BorderStyle::Rounded)
-            .title(language);
-        self.print(panel);
-    }
-
-    // ===== RENDERING =====
-
-    fn render(&mut self) {
-        self.buffer.clear();
-
-        // Tick all spinners
-        for spinner in &mut self.spinners {
-            spinner.tick();
-        }
-        if let Some(ref mut tool) = self.current_tool {
-            tool.spinner.tick();
-        }
-
-        // Layout and render components
-        // ... (render conversation, tools, status, etc.)
-
-        // Present to terminal
+    /// Present a frame (diff-based)
+    pub fn present(&mut self) -> io::Result<()> {
         let diff = BufferDiff::compute(&self.prev_buffer, &self.buffer);
-        let pool = self.ctx.grapheme_pool.borrow();
-        let links = self.ctx.link_registry.borrow();
-
-        let _ = self.presenter.present(
-            &mut self.terminal.writer,
-            &self.buffer,
-            &diff,
-            &pool,
-            &links,
-        );
-
+        self.presenter.present(&self.buffer, &diff, &self.pool, &self.links)?;
         std::mem::swap(&mut self.buffer, &mut self.prev_buffer);
-    }
-}
-
-struct ToolIndicator {
-    name: String,
-    target: String,
-    status: ToolStatus,
-    spinner: Spinner,
-    start_time: Instant,
-}
-
-enum ToolStatus {
-    Running,
-    Success,
-    Failed(String),
-}
-```
-
----
-
-## Chapter 12: Performance Benchmarks
-
-### 12.1 Target Metrics
-
-| Operation | Target | Justification |
-|-----------|--------|---------------|
-| Cell comparison | < 1ns | Bitwise u128 compare |
-| Buffer diff (80×24) | < 500µs | Sequential scan, SIMD |
-| Frame render | < 1ms | Required for 60 FPS |
-| Input parse | < 20µs/event | State machine |
-| Style parse | < 8µs (cached) | From rich_rust benchmarks |
-| Color blend | < 10ns | Single Porter-Duff op |
-| Grapheme intern (hit) | < 100ns | Hash lookup |
-| Grapheme intern (miss) | < 1µs | Hash + alloc + width |
-
-### 12.2 Benchmark Framework
-
-```rust
-#[cfg(test)]
-mod benchmarks {
-    use criterion::{black_box, criterion_group, criterion_main, Criterion};
-
-    fn bench_cell_comparison(c: &mut Criterion) {
-        let cell_a = Cell::new('A', Style::default());
-        let cell_b = Cell::new('B', Style::default());
-
-        c.bench_function("cell_bits_eq", |b| {
-            b.iter(|| black_box(cell_a.bits_eq(&cell_b)))
-        });
+        Ok(())
     }
 
-    fn bench_buffer_diff(c: &mut Criterion) {
-        let buf1 = Buffer::new(80, 24);
-        let mut buf2 = Buffer::new(80, 24);
-
-        // 5% cells changed
-        for i in 0..96 {
-            buf2.cells[i * 20] = Cell::new('X', Style::default());
+    /// Write to log region (inline mode only)
+    pub fn write_log(&mut self, text: &str) -> io::Result<()> {
+        if let ScreenMode::Inline { ui_height } = self.screen_mode {
+            // Save cursor, clear UI, write log, restore UI
+            // This is simplified - real impl needs more care
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            write!(handle, "\x1b7")?; // Save cursor
+            write!(handle, "\x1b[{};1H", self.buffer.height() - ui_height)?;
+            write!(handle, "\x1b[{}M", ui_height)?; // Delete UI lines
+            write!(handle, "{}", text)?;
+            write!(handle, "\x1b8")?; // Restore cursor
+            handle.flush()?;
         }
-
-        c.bench_function("buffer_diff_5pct", |b| {
-            b.iter(|| black_box(BufferDiff::compute(&buf1, &buf2)))
-        });
+        Ok(())
     }
 
-    fn bench_grapheme_pool(c: &mut Criterion) {
-        let mut pool = GraphemePool::new();
-
-        // Pre-populate
-        pool.intern("hello");
-        pool.intern("world");
-        pool.intern("👨‍👩‍👧");
-
-        c.bench_function("grapheme_intern_hit", |b| {
-            b.iter(|| black_box(pool.intern("hello")))
-        });
-
-        c.bench_function("grapheme_intern_miss", |b| {
-            let mut i = 0;
-            b.iter(|| {
-                let s = format!("new_grapheme_{}", i);
-                i += 1;
-                black_box(pool.intern(&s))
-            })
-        });
+    pub fn buffer_mut(&mut self) -> &mut Buffer {
+        &mut self.buffer
     }
 
-    criterion_group!(benches, bench_cell_comparison, bench_buffer_diff, bench_grapheme_pool);
-    criterion_main!(benches);
+    pub fn grapheme_pool(&mut self) -> &mut GraphemePool {
+        &mut self.pool
+    }
+
+    pub fn link_registry(&mut self) -> &mut LinkRegistry {
+        &mut self.links
+    }
 }
 ```
 
 ---
 
-## Chapter 13: Implementation Roadmap
+## Chapter 13: Testing, Verification, and CI Gates
 
-### Phase 1: Core Primitives (Week 1-2)
+### 13.1 Unit + Property Tests (Kernel)
+
+Kernel must be "boringly correct." Enforce:
+- Unit tests:
+  - Cell packing/eq
+  - Buffer bounds + scissor/opacity invariants
+  - Grapheme pool refcount correctness
+  - Link registry correctness
+- Property tests (randomized):
+  - Diff correctness: applying changes reproduces target buffer
+  - Presenter state tracking never emits malformed sequences
+  - Width correctness: rendering never writes beyond frame bounds for random strings
+
+### 13.2 Snapshot Tests (Widgets / Apps)
+
+For widgets and runtime-driven apps:
+- Snapshot Frame buffers (grid of Cells) across themes and widths
+- Snapshot Segment streams for export pipelines
+- Ensure deterministic outputs in simulator mode
+
+### 13.3 PTY Integration Tests (Terminal Reality)
+
+To validate "no flicker / no corruption" claims:
+- spawn a PTY, run a minimal ftui app, capture terminal output
+- assert:
+  - cursor is restored after each present() in Inline mode
+  - raw mode is restored on exit
+  - cursor visibility restored (show cursor)
+  - bracketed paste/mouse modes disabled on exit
+  - alt screen exited on exit
+- run tests for:
+  - normal exit
+  - panic during render
+  - IO error mid-write
+
+### 13.4 Fuzzing (Input Parser)
+
+Fuzz `InputParser::parse` with random byte streams:
+- no panics
+- sequence length limits enforce bounds
+- parser remains linear time for worst-case inputs
+
+### 13.5 CI Enforcement
+
+CI should enforce:
+- clippy + fmt
+- unit/property/snapshot/PTY tests
+- performance benchmarks as baselines (non-blocking initially, but tracked)
+- feature matrix build:
+  - default (safe scalar)
+  - +simd
+  - +extras
+
+### 13.6 Decision Gates (Operational)
+
+- Gate 1: Inline stability demo + PTY tests passing
+- Gate 2: Diff/presenter property tests passing
+- Gate 3: Unicode width suite passing (ZWJ/emoji/combining)
+- Gate 4: Cleanup discipline verified under panic
+
+---
+
+## Chapter 14: Migration Map and Integration Strategy
+
+### 14.1 Migration Principles
+- Extract primitives first (Cell/Buffer/Presenter/InputParser)
+- Keep adapters for old abstractions short-lived
+- Avoid widget ports until the kernel is stable (Gate 1-2)
+- Treat "export" as an extra layer using Segment pipeline, not kernel
+
+### 14.2 Source → ftui mapping (conceptual)
+
+**opentui_rust → ftui-render / ftui-core**
+- Buffer/Cell/GraphemePool → ftui-render
+- Presenter/AnsiWriter → ftui-render
+- Input parser + caps → ftui-core
+- HitGrid → ftui-render (optional)
+
+**rich_rust → ftui-text / ftui-style / ftui-extras**
+- Segment/measurement/text → ftui-text
+- Markup parser → ftui-text or ftui-extras (feature gated)
+- Live hooks/export adapters → ftui-extras
+
+**charmed_rust → ftui-runtime / ftui-style / ftui-widgets**
+- Bubbletea runtime → ftui-runtime (optional but recommended)
+- Lipgloss ergonomics → ftui-style (split responsibilities)
+- Bubbles/widgets → ftui-widgets
+
+### 14.3 Compatibility Strategy
+- Keep terminal protocol support in kernel (caps + presenter)
+- Keep UI-specific features (markdown/syntax/forms) in extras
+- Maintain a reference "agent harness" app as the integration testbed
+
+---
+
+## Chapter 15: Implementation Roadmap (Phased, No Time Estimates)
+
+### Phase 0: Contracts + Workspace Skeleton
+- [ ] Establish workspace crate layout (ftui-core/render/style/text/layout/runtime/widgets/extras)
+- [ ] Define public contracts for kernel types:
+  - `Cell`, `Buffer`, `Frame`, `Presenter`, `TerminalSession`, `Event`
+- [ ] Write ADRs for the locked decisions (Section 0.6)
+
+**Exit criteria**: public API compiles; minimal demo crate prints a frame in Inline mode.
+
+### Phase 1: Core Render Kernel
 - [ ] `Cell` (16 bytes), `CellContent`, `CellAttrs`
 - [ ] `PackedRgba` with Porter-Duff blending
 - [ ] `GraphemeId`, `GraphemePool` with ref-counting
@@ -3367,68 +2602,76 @@ mod benchmarks {
 - [ ] `Rect`, `Sides`, `Measurement`
 - [ ] Unit tests for all types
 
-**Exit criteria**: `cargo test` passes, cell comparison < 5ns
+**Exit criteria**: unit tests pass; scalar bits_eq is correct; buffer invariants enforced.
 
-### Phase 2: Rendering Pipeline (Week 3-4)
-- [ ] `BufferDiff` with SIMD path
+### Phase 2: Diff + Presenter (Near-minimal ANSI)
+- [ ] `BufferDiff` with SIMD path (feature-gated)
 - [ ] `Presenter` with state tracking
 - [ ] `TerminalCapabilities` detection
 - [ ] Synchronized output (DEC 2026)
 - [ ] OSC 8 hyperlinks
 - [ ] Panic hook installation
+- [ ] Run grouping (row-major ChangeRuns) + style-run coalescing
 
-**Exit criteria**: Zero-flicker rendering demo
+**Exit criteria**: single-write-per-frame; run grouping works; inline demo shows no flicker on supported terminals.
 
-### Phase 3: Input System (Week 5)
+### Phase 3: Input System
 - [ ] Event types (Key, Mouse, Resize, Paste, Focus)
 - [ ] `InputParser` state machine
 - [ ] SGR mouse protocol
 - [ ] Bracketed paste handling
 - [ ] DoS protection limits
+- [ ] Fuzz harness for parser
 
-**Exit criteria**: All key combinations parsed correctly
+**Exit criteria**: parser passes fuzzing and deterministic tests for key/mouse/paste/resize.
 
-### Phase 4: Styling (Week 6)
+### Phase 4: Styling (Split responsibilities)
 - [ ] `Style` with bitflags property tracking
 - [ ] CSS-like shorthand (Sides from tuples)
 - [ ] `Color` enum with profile resolution
 - [ ] `Theme` system with presets
 - [ ] `Border` presets and custom
 - [ ] Markup parser `[bold red]text[/]`
+- [ ] Define `CellStyle` vs higher-level style resolution
 
-**Exit criteria**: Markup matches Rich syntax
+**Exit criteria**: deterministic style merge + theme resolution; markup is correct under tests.
 
-### Phase 5: Components (Week 7-8)
+### Phase 5: Layout + Components (Widgets ring)
 - [ ] `Renderable` trait
 - [ ] `Panel` with borders and titles
 - [ ] `Spinner` with multiple styles
 - [ ] `Progress` bar
 - [ ] `Text` with wrapping
 - [ ] `Table` (basic)
+- [ ] `Viewport` and `TextInput` (agent harness essentials)
 
-**Exit criteria**: All components have demos
+**Exit criteria**: snapshot tests for widgets pass; hit testing works where applicable.
 
-### Phase 6: Agent Harness (Week 9-10)
-- [ ] `AgentHarness` coordinator
-- [ ] Tool indicators with spinners
-- [ ] Status line
-- [ ] Streaming code renderer
-- [ ] High-level API
+### Phase 6: Runtime + Agent Harness Reference App
+- [ ] Implement `Program` + `Model` + `Cmd` + scheduler (ftui-runtime)
+- [ ] Implement `ProgramSimulator`
+- [ ] Build `ftui-harness` reference app:
+  - inline scrollback log stream + UI region
+  - tool indicators, status line, input area
+  - streaming render updates
+  - no flicker, no corruption
 
-**Exit criteria**: Claude Code-like demo
+**Exit criteria**: harness demo passes PTY tests; inline mode is stable under sustained output.
 
-### Phase 7: Polish (Week 11-12)
+### Phase 7: Extras + Polish
 - [ ] Documentation (rustdoc)
 - [ ] Examples gallery
 - [ ] Performance audit
 - [ ] Terminal compatibility testing
 - [ ] CI/CD setup
+- [ ] Export adapters (Segment/HTML/SVG) feature-gated
+- [ ] Optional syntax highlighting/markdown feature-gated
 
-**Exit criteria**: Ready for v0.1.0 release
+**Exit criteria**: stable kernel API; docs + examples; performance baselines recorded; compatibility matrix validated.
 
 ---
 
-## Chapter 14: Terminal Compatibility Matrix
+## Chapter 16: Terminal Compatibility Matrix
 
 | Feature | Kitty | WezTerm | Alacritty | Ghostty | iTerm2 | GNOME Term | Win Term |
 |---------|-------|---------|-----------|---------|--------|------------|----------|
@@ -3441,75 +2684,88 @@ mod benchmarks {
 | Focus Events | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Bracketed Paste | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
+Inline mode notes:
+- Inline mode works everywhere but depends on a correct cursor-save/restore strategy.
+- Sync output is a best-effort optimization where supported; inline correctness must not depend on it.
+
 ---
 
 ## Appendix A: ANSI Escape Sequence Reference
 
+### SGR (Select Graphic Rendition)
 ```
-CSI = ESC [  (\x1b[)
-SGR = CSI ... m
-OSC = ESC ]  (\x1b])
-DCS = ESC P  (\x1bP)
-ST  = ESC \  (\x1b\\)
+\x1b[0m         Reset all
+\x1b[1m         Bold
+\x1b[2m         Dim
+\x1b[3m         Italic
+\x1b[4m         Underline
+\x1b[5m         Blink
+\x1b[7m         Reverse
+\x1b[9m         Strikethrough
+\x1b[38;2;R;G;Bm  Foreground true color
+\x1b[48;2;R;G;Bm  Background true color
+\x1b[38;5;Nm      Foreground 256 color
+\x1b[48;5;Nm      Background 256 color
+```
 
-COLORS:
-  CSI 38;2;R;G;B m    24-bit foreground
-  CSI 48;2;R;G;B m    24-bit background
-  CSI 38;5;N m        256-color foreground
-  CSI 48;5;N m        256-color background
-  CSI 39 m            Default foreground
-  CSI 49 m            Default background
+### Cursor Control
+```
+\x1b[H          Home (1,1)
+\x1b[{r};{c}H   Move to row r, col c (1-indexed)
+\x1b[{n}A       Up n
+\x1b[{n}B       Down n
+\x1b[{n}C       Forward n
+\x1b[{n}D       Back n
+\x1b[s          Save position (ANSI)
+\x1b[u          Restore position (ANSI)
+\x1b7           Save position (DEC)
+\x1b8           Restore position (DEC)
+```
 
-ATTRIBUTES:
-  CSI 0 m   Reset all
-  CSI 1 m   Bold
-  CSI 2 m   Dim
-  CSI 3 m   Italic
-  CSI 4 m   Underline
-  CSI 5 m   Blink
-  CSI 7 m   Reverse
-  CSI 8 m   Hidden
-  CSI 9 m   Strikethrough
+### Screen Control
+```
+\x1b[?1049h     Enter alt screen
+\x1b[?1049l     Exit alt screen
+\x1b[2J         Clear screen
+\x1b[K          Clear to end of line
+\x1b[?25h       Show cursor
+\x1b[?25l       Hide cursor
+```
 
-CURSOR:
-  CSI H         Move to (1,1)
-  CSI r;c H     Move to row r, col c
-  CSI n A       Move up n
-  CSI n B       Move down n
-  CSI n C       Move right n
-  CSI n D       Move left n
+### Synchronized Output (DEC 2026)
+```
+\x1b[?2026h     Begin sync
+\x1b[?2026l     End sync
+```
 
-SCREEN:
-  CSI 2 J       Clear screen
-  CSI K         Clear to end of line
-  CSI ? 1049 h  Enter alternate screen
-  CSI ? 1049 l  Leave alternate screen
-  CSI ? 25 h    Show cursor
-  CSI ? 25 l    Hide cursor
+### OSC 8 Hyperlinks
+```
+\x1b]8;;URL\x1b\\    Start link
+\x1b]8;;\x1b\\       End link
+```
 
-SYNCHRONIZED OUTPUT:
-  CSI ? 2026 h  Begin sync
-  CSI ? 2026 l  End sync
+### Mouse Modes
+```
+\x1b[?1000h     Enable button tracking
+\x1b[?1002h     Enable button+motion
+\x1b[?1006h     Enable SGR encoding
+\x1b[?1000l     Disable mouse
+```
 
-MOUSE (SGR 1006):
-  CSI ? 1003 h  Enable all motion
-  CSI ? 1006 h  Enable SGR mode
-  CSI < btn;x;y M  Press
-  CSI < btn;x;y m  Release
+### Bracketed Paste
+```
+\x1b[?2004h     Enable
+\x1b[?2004l     Disable
+\x1b[200~       Paste start
+\x1b[201~       Paste end
+```
 
-HYPERLINKS:
-  OSC 8 ; ; URL ST  Open link
-  OSC 8 ; ; ST      Close link
-
-FOCUS:
-  CSI ? 1004 h  Enable focus events
-  CSI I         Focus gained
-  CSI O         Focus lost
-
-PASTE:
-  CSI ? 2004 h  Enable bracketed paste
-  CSI 200 ~     Paste start
-  CSI 201 ~     Paste end
+### Focus Events
+```
+\x1b[?1004h     Enable
+\x1b[?1004l     Disable
+\x1b[I          Focus gained
+\x1b[O          Focus lost
 ```
 
 ---
@@ -3518,23 +2774,49 @@ PASTE:
 
 | Term | Definition |
 |------|------------|
-| **Grapheme cluster** | User-perceived character (may span multiple codepoints) |
-| **Codepoint** | Single Unicode value (U+0000 to U+10FFFF) |
-| **Cell** | Single position in terminal grid |
-| **SGR** | Select Graphic Rendition (ANSI style codes) |
-| **CSI** | Control Sequence Introducer (`ESC [`) |
-| **OSC** | Operating System Command (`ESC ]`) |
-| **DCS** | Device Control String (`ESC P`) |
-| **ST** | String Terminator (`ESC \`) |
-| **BiDi** | Bidirectional text (mixing LTR and RTL) |
+| **Cell** | Single grid position (content + fg + bg + attrs) |
+| **Buffer** | 2D array of Cells representing display state |
+| **Frame** | Buffer + metadata for a render pass |
+| **Diff** | Set of (x, y) positions that changed between buffers |
+| **Presenter** | State-tracked ANSI emitter |
+| **Grapheme** | User-perceived character (may be multiple codepoints) |
+| **GraphemePool** | Interned storage for complex grapheme clusters |
+| **LinkRegistry** | URL storage for OSC 8 hyperlinks |
+| **Scissor** | Clipping rectangle for rendering |
+| **SGR** | Select Graphic Rendition (style codes) |
+| **OSC** | Operating System Command (escape sequence) |
+| **CSI** | Control Sequence Introducer (`\x1b[`) |
+| **DEC** | Digital Equipment Corporation (terminal standard) |
 | **ZWJ** | Zero Width Joiner (connects graphemes into compound) |
 | **Porter-Duff** | Compositing algebra for alpha blending |
 
 ---
 
+## Appendix C: Risk Register (Top Risks + Mitigations)
+
+1) **Inline mode cursor corruption**
+   - Mitigation: PTY tests + strict cursor policy + centralized writer API for logs/UI.
+
+2) **Unicode width bugs**
+   - Mitigation: curated test corpus + snapshot tests + avoid "byte length == width" except proven ASCII fast path.
+
+3) **Terminal capability mismatches**
+   - Mitigation: conservative defaults + feature detection + robust fallbacks; never assume sync output.
+
+4) **Unsafe creep**
+   - Mitigation: feature-gated simd module, documented invariants, safe default always available.
+
+5) **Presenter byte bloat**
+   - Mitigation: run grouping + style-run coalescing + output-length benchmarks in CI.
+
+6) **Interleaved stdout writes from user code**
+   - Mitigation: provide a `TerminalSession`/`TerminalWriter` API and recommend exclusive ownership patterns.
+
+---
+
 ## Conclusion
 
-FrankenTUI v4.0 represents the mathematically optimal synthesis of three excellent terminal UI libraries:
+FrankenTUI v5.0 represents an "ultimate hybrid" synthesis of three excellent terminal UI libraries:
 
 1. **From opentui_rust**: Cache-optimal 16-byte cells, bitwise comparison, Porter-Duff blending, grapheme pooling, scissor/opacity stacks, cell-level diffing
 
@@ -3542,12 +2824,17 @@ FrankenTUI v4.0 represents the mathematically optimal synthesis of three excelle
 
 3. **From charmed_rust**: Bitflags property tracking for inheritance, CSS-like tuple shorthand, adaptive colors, border presets, color profile detection
 
-The result is a **scrollback-native, zero-flicker, agent-ergonomic** terminal UI library that achieves:
+The result is a **scrollback-native, zero-flicker, agent-ergonomic** terminal UI library plan that is:
+- mathematically grounded (cell+diff model)
+- operationally realistic (inline cursor policies, run grouping, fallbacks)
+- test-driven (property + snapshot + PTY + fuzz)
+- layered for long-term maintainability (kernel/widgets/extras)
 
+Performance targets:
 - **< 1ns** cell comparison (bitwise)
 - **< 500µs** frame diff (80×24)
 - **< 1ms** total frame time
 - **16 bytes** per cell (4 cells per cache line)
 - **Zero heap allocation** for 99% of cells
 
-*FrankenTUI: Where mathematical rigor meets practical ergonomics.*
+*FrankenTUI: Where rigor meets practical ergonomics.*
