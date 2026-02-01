@@ -6,6 +6,7 @@ pub mod ansi;
 pub mod budget;
 pub mod buffer;
 pub mod cell;
+pub mod counting_writer;
 pub mod diff;
 pub mod drawing;
 pub mod frame;
