@@ -5,12 +5,15 @@
 //! This crate provides:
 //! - [`Style`] for unified text styling with CSS-like inheritance
 //! - [`StyleSheet`] for named style registration (CSS-like classes)
-//! - [`ColorDowngrader`] for color profile conversion (TrueColor → 256 → 16 → mono)
+//! - [`Theme`] for semantic color slots with light/dark mode support
+//! - Color types and downgrade utilities
 
 pub mod color;
 pub mod style;
 pub mod stylesheet;
+pub mod theme;
 
-pub use color::{Ansi16Color, ColorDowngrader, ColorProfile, MonoColor, TerminalColor};
+pub use color::{Ansi16, Color, ColorCache, ColorProfile, MonoColor, Rgb};
 pub use style::{Style, StyleFlags};
 pub use stylesheet::{StyleId, StyleSheet};
+pub use theme::{AdaptiveColor, ResolvedTheme, Theme, ThemeBuilder};

@@ -153,15 +153,15 @@ impl InputParser {
             }
             // NUL - Ctrl+Space or Ctrl+@
             0x00 => Some(Event::Key(KeyEvent::new(KeyCode::Char(' ')).with_modifiers(Modifiers::CTRL))),
-            // Ctrl+A through Ctrl+Z (0x01-0x1A)
-            0x01..=0x1A => {
+            // Tab (Ctrl+I) - check before generic Ctrl range
+            0x09 => Some(Event::Key(KeyEvent::new(KeyCode::Tab))),
+            // Enter (Ctrl+M) - check before generic Ctrl range
+            0x0D => Some(Event::Key(KeyEvent::new(KeyCode::Enter))),
+            // Other Ctrl+A through Ctrl+Z (0x01-0x1A excluding Tab and Enter)
+            0x01..=0x08 | 0x0A..=0x0C | 0x0E..=0x1A => {
                 let c = (byte + b'a' - 1) as char;
                 Some(Event::Key(KeyEvent::new(KeyCode::Char(c)).with_modifiers(Modifiers::CTRL)))
             }
-            // Tab (Ctrl+I)
-            0x09 => Some(Event::Key(KeyEvent::new(KeyCode::Tab))),
-            // Enter (Ctrl+M)
-            0x0D => Some(Event::Key(KeyEvent::new(KeyCode::Enter))),
             // Backspace (DEL)
             0x7F => Some(Event::Key(KeyEvent::new(KeyCode::Backspace))),
             // Printable ASCII
@@ -262,8 +262,8 @@ impl InputParser {
         match byte {
             // Continue collecting parameters
             b'0'..=b'9' | b';' | b':' => None,
-            // Final byte - parse and return
-            b'A'..=b'Z' | b'a'..=b'z' | b'~' | b'M' | b'm' => {
+            // Final byte - parse and return (M and m are in A-Z and a-z ranges)
+            b'A'..=b'Z' | b'a'..=b'z' | b'~' => {
                 self.state = ParserState::Ground;
                 self.parse_csi_sequence()
             }
