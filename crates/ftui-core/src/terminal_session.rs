@@ -39,19 +39,21 @@
 //! | Mouse (SGR) | `CSI ? 1000;1002;1006 h` | `CSI ? 1000;1002;1006 l` |
 //! | Bracketed paste | `CSI ? 2004 h` | `CSI ? 2004 l` |
 //! | Focus events | `CSI ? 1004 h` | `CSI ? 1004 l` |
+//! | Kitty keyboard | `CSI > 15 u` | `CSI < u` |
 //! | Show cursor | `CSI ? 25 h` | `CSI ? 25 l` |
 //! | Reset style | `CSI 0 m` | N/A |
 //!
 //! # Cleanup Order
 //!
 //! On drop, cleanup happens in reverse order of enabling:
-//! 1. Disable focus events (if enabled)
-//! 2. Disable bracketed paste (if enabled)
-//! 3. Disable mouse capture (if enabled)
-//! 4. Show cursor (always)
-//! 5. Leave alternate screen (if enabled)
-//! 6. Exit raw mode (always)
-//! 7. Flush stdout
+//! 1. Disable kitty keyboard (if enabled)
+//! 2. Disable focus events (if enabled)
+//! 3. Disable bracketed paste (if enabled)
+//! 4. Disable mouse capture (if enabled)
+//! 5. Show cursor (always)
+//! 6. Leave alternate screen (if enabled)
+//! 7. Exit raw mode (always)
+//! 8. Flush stdout
 //!
 //! # Usage
 //!
@@ -74,6 +76,9 @@
 
 use std::io::{self, Write};
 
+const KITTY_KEYBOARD_ENABLE: &[u8] = b"\x1b[>15u";
+const KITTY_KEYBOARD_DISABLE: &[u8] = b"\x1b[<u";
+
 /// Terminal session configuration options.
 ///
 /// These options control which terminal modes are enabled when a session
@@ -90,6 +95,7 @@ use std::io::{self, Write};
 ///     mouse_capture: true,
 ///     bracketed_paste: true,
 ///     focus_events: true,
+///     ..Default::default()
 /// };
 ///
 /// // Minimal inline mode
@@ -130,6 +136,12 @@ pub struct SessionOptions {
     /// - Focus in: `ESC [ I`
     /// - Focus out: `ESC [ O`
     pub focus_events: bool,
+
+    /// Enable Kitty keyboard protocol (pushes flags with `CSI > 15 u`).
+    ///
+    /// Uses the kitty protocol to report repeat/release events and disambiguate
+    /// keys. This is optional and only supported by select terminals.
+    pub kitty_keyboard: bool,
 }
 
 /// A terminal session that manages raw mode and cleanup.
@@ -184,6 +196,7 @@ pub struct TerminalSession {
     mouse_enabled: bool,
     bracketed_paste_enabled: bool,
     focus_events_enabled: bool,
+    kitty_keyboard_enabled: bool,
 }
 
 impl TerminalSession {
@@ -202,6 +215,7 @@ impl TerminalSession {
             mouse_enabled: false,
             bracketed_paste_enabled: false,
             focus_events_enabled: false,
+            kitty_keyboard_enabled: false,
         };
 
         // Enable optional features
@@ -225,6 +239,11 @@ impl TerminalSession {
         if options.focus_events {
             crossterm::execute!(stdout, crossterm::event::EnableFocusChange)?;
             session.focus_events_enabled = true;
+        }
+
+        if options.kitty_keyboard {
+            Self::enable_kitty_keyboard(&mut stdout)?;
+            session.kitty_keyboard_enabled = true;
         }
 
         Ok(session)
@@ -272,6 +291,11 @@ impl TerminalSession {
         let mut stdout = io::stdout();
 
         // Disable features in reverse order of enabling
+        if self.kitty_keyboard_enabled {
+            let _ = Self::disable_kitty_keyboard(&mut stdout);
+            self.kitty_keyboard_enabled = false;
+        }
+
         if self.focus_events_enabled {
             let _ = crossterm::execute!(stdout, crossterm::event::DisableFocusChange);
             self.focus_events_enabled = false;
@@ -300,6 +324,16 @@ impl TerminalSession {
 
         // Flush to ensure cleanup bytes are sent
         let _ = stdout.flush();
+    }
+
+    fn enable_kitty_keyboard(writer: &mut impl Write) -> io::Result<()> {
+        writer.write_all(KITTY_KEYBOARD_ENABLE)?;
+        writer.flush()
+    }
+
+    fn disable_kitty_keyboard(writer: &mut impl Write) -> io::Result<()> {
+        writer.write_all(KITTY_KEYBOARD_DISABLE)?;
+        writer.flush()
     }
 }
 
@@ -359,6 +393,7 @@ mod tests {
         assert!(!opts.mouse_capture);
         assert!(!opts.bracketed_paste);
         assert!(!opts.focus_events);
+        assert!(!opts.kitty_keyboard);
     }
 
     // Note: Interactive tests that actually enter raw mode should be run

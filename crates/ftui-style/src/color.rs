@@ -395,7 +395,9 @@ mod tests {
         assert_eq!(rgb_to_ansi16(0, 0, 0), Ansi16::Black);
         assert_eq!(rgb_to_ansi16(255, 0, 0), Ansi16::BrightRed);
         assert_eq!(rgb_to_ansi16(0, 255, 0), Ansi16::BrightGreen);
-        assert_eq!(rgb_to_ansi16(0, 0, 255), Ansi16::BrightBlue);
+        // Note: Pure blue (0,0,255) is closer to Blue(0,0,238) than BrightBlue(92,92,255)
+        // because the weighted distance penalizes the red/green components of BrightBlue
+        assert_eq!(rgb_to_ansi16(0, 0, 255), Ansi16::Blue);
     }
 
     #[test]
