@@ -300,6 +300,7 @@ impl<W: Write> InlineRenderer<W> {
 
         // Save cursor position
         self.writer.write_all(CURSOR_SAVE)?;
+        self.cursor_saved = true;
 
         // Move to UI region
         let ui_row = self.config.ui_top_row();
@@ -317,6 +318,7 @@ impl<W: Write> InlineRenderer<W> {
 
         // Restore cursor position
         self.writer.write_all(CURSOR_RESTORE)?;
+        self.cursor_saved = false;
 
         // End sync output
         if self.in_sync_block {
@@ -341,8 +343,11 @@ impl<W: Write> InlineRenderer<W> {
             self.scroll_region_set = false;
         }
 
-        // Restore cursor (in case we're mid-render)
-        let _ = self.writer.write_all(CURSOR_RESTORE);
+        // Restore cursor only if we saved it (avoid restoring to stale position)
+        if self.cursor_saved {
+            let _ = self.writer.write_all(CURSOR_RESTORE);
+            self.cursor_saved = false;
+        }
 
         self.writer.flush()
     }
@@ -523,5 +528,73 @@ mod tests {
         // Should save and restore cursor
         assert!(renderer.writer.contains_sequence(CURSOR_SAVE));
         assert!(renderer.writer.contains_sequence(CURSOR_RESTORE));
+    }
+
+    #[test]
+    fn hybrid_does_not_set_scroll_region_in_enter() {
+        let writer = MockWriter::default();
+        let config = InlineConfig::new(6, 24, 80).with_strategy(InlineStrategy::Hybrid);
+        let mut renderer = InlineRenderer::new(writer, config);
+
+        renderer.enter().unwrap();
+
+        // Hybrid should NOT set scroll region (uses overlay baseline)
+        assert!(!renderer.writer.contains_sequence(b"\x1b[1;18r"));
+        assert!(!renderer.scroll_region_set);
+    }
+
+    #[test]
+    fn config_is_valid_checks_boundaries() {
+        // Valid config
+        let valid = InlineConfig::new(6, 24, 80);
+        assert!(valid.is_valid());
+
+        // UI takes all rows (no room for logs)
+        let full_ui = InlineConfig::new(24, 24, 80);
+        assert!(!full_ui.is_valid());
+
+        // Zero UI height
+        let no_ui = InlineConfig::new(0, 24, 80);
+        assert!(!no_ui.is_valid());
+
+        // Single row terminal
+        let tiny = InlineConfig::new(1, 1, 80);
+        assert!(!tiny.is_valid());
+    }
+
+    #[test]
+    fn log_bottom_row_zero_when_no_room() {
+        // UI takes full height
+        let config = InlineConfig::new(24, 24, 80);
+        assert_eq!(config.log_bottom_row(), 0);
+    }
+
+    #[test]
+    fn write_log_silently_drops_when_no_log_region() {
+        let writer = MockWriter::default();
+        // UI takes full height - no room for logs
+        let config = InlineConfig::new(24, 24, 80).with_strategy(InlineStrategy::OverlayRedraw);
+        let mut renderer = InlineRenderer::new(writer, config);
+
+        // Should succeed but not write anything meaningful
+        renderer.write_log("test log\n").unwrap();
+
+        // Should not have written cursor save/restore since we bailed early
+        assert!(!renderer.writer.contains_sequence(CURSOR_SAVE));
+    }
+
+    #[test]
+    fn cleanup_does_not_restore_unsaved_cursor() {
+        let writer = MockWriter::default();
+        let config = InlineConfig::new(6, 24, 80).with_strategy(InlineStrategy::ScrollRegion);
+        let mut renderer = InlineRenderer::new(writer, config);
+
+        // Just enter and exit, never save cursor explicitly
+        renderer.enter().unwrap();
+        renderer.writer.output.clear(); // Clear output to check cleanup behavior
+        renderer.exit().unwrap();
+
+        // Should NOT restore cursor since we never saved it
+        assert!(!renderer.writer.contains_sequence(CURSOR_RESTORE));
     }
 }
