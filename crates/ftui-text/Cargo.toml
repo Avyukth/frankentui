@@ -21,3 +21,8 @@ rustc-hash = "2"
 [dev-dependencies]
 proptest = "1"
 tracing-test = "0.2"
+criterion = { version = "0.6", features = ["html_reports"] }
+
+[[bench]]
+name = "width_bench"
+harness = false

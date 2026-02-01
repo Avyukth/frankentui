@@ -153,16 +153,11 @@ fn wrap_chars(text: &str, options: &WrapOptions) -> Vec<String> {
 /// Wrap at word boundaries.
 fn wrap_words(text: &str, options: &WrapOptions, char_fallback: bool) -> Vec<String> {
     let mut lines = Vec::new();
-    let mut current_line = String::new();
-    let mut current_width = 0;
 
     // Split by existing newlines first
     for paragraph in text.split('\n') {
-        if !current_line.is_empty() {
-            lines.push(finalize_line(&current_line, options));
-            current_line.clear();
-            current_width = 0;
-        }
+        let mut current_line = String::new();
+        let mut current_width = 0;
 
         wrap_paragraph(
             paragraph,
@@ -172,14 +167,14 @@ fn wrap_words(text: &str, options: &WrapOptions, char_fallback: bool) -> Vec<Str
             &mut current_line,
             &mut current_width,
         );
+
+        // Push the last line of the paragraph if non-empty
+        if !current_line.is_empty() {
+            lines.push(finalize_line(&current_line, options));
+        }
     }
 
-    // Don't forget the last line
-    if !current_line.is_empty() {
-        lines.push(finalize_line(&current_line, options));
-    }
-
-    // Ensure at least one line
+    // Ensure at least one line exists
     if lines.is_empty() {
         lines.push(String::new());
     }
@@ -346,10 +341,14 @@ pub fn truncate_to_width(text: &str, max_width: usize) -> String {
     result
 }
 
-/// Returns `Some(width)` if text is pure ASCII, `None` otherwise.
+/// Returns `Some(width)` if text is printable ASCII only, `None` otherwise.
 ///
-/// This is a fast-path optimization. For ASCII text, display width equals byte length,
-/// so we can avoid the full Unicode width calculation.
+/// This is a fast-path optimization. For printable ASCII (0x20-0x7E), display width
+/// equals byte length, so we can avoid the full Unicode width calculation.
+///
+/// Returns `None` for:
+/// - Non-ASCII characters (multi-byte UTF-8)
+/// - ASCII control characters (0x00-0x1F, 0x7F) which have display width 0
 ///
 /// # Example
 /// ```
@@ -358,11 +357,14 @@ pub fn truncate_to_width(text: &str, max_width: usize) -> String {
 /// assert_eq!(ascii_width("hello"), Some(5));
 /// assert_eq!(ascii_width("你好"), None);  // Contains CJK
 /// assert_eq!(ascii_width(""), Some(0));
+/// assert_eq!(ascii_width("hello\tworld"), None);  // Contains tab (control char)
 /// ```
 #[inline]
 #[must_use]
 pub fn ascii_width(text: &str) -> Option<usize> {
-    if text.is_ascii() {
+    // Printable ASCII: 0x20 (space) through 0x7E (tilde)
+    // Control characters (0x00-0x1F, 0x7F) have width 0, so we can't use the fast path
+    if text.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
         Some(text.len())
     } else {
         None
@@ -392,6 +394,129 @@ pub fn has_wide_chars(text: &str) -> bool {
 #[must_use]
 pub fn is_ascii_only(text: &str) -> bool {
     text.is_ascii()
+}
+
+// =============================================================================
+// Grapheme Segmentation Helpers (bd-6e9.8)
+// =============================================================================
+
+/// Count the number of grapheme clusters in a string.
+///
+/// A grapheme cluster is a user-perceived character, which may consist of
+/// multiple Unicode code points (e.g., emoji with modifiers, combining marks).
+///
+/// # Example
+/// ```
+/// use ftui_text::wrap::grapheme_count;
+///
+/// assert_eq!(grapheme_count("hello"), 5);
+/// assert_eq!(grapheme_count("e\u{0301}"), 1);  // e + combining acute = 1 grapheme
+/// assert_eq!(grapheme_count("\u{1F468}\u{200D}\u{1F469}"), 1);  // ZWJ sequence = 1 grapheme
+/// ```
+#[inline]
+#[must_use]
+pub fn grapheme_count(text: &str) -> usize {
+    text.graphemes(true).count()
+}
+
+/// Iterate over grapheme clusters in a string.
+///
+/// Returns an iterator yielding `&str` slices for each grapheme cluster.
+/// Uses extended grapheme clusters (UAX #29).
+///
+/// # Example
+/// ```
+/// use ftui_text::wrap::graphemes;
+///
+/// let chars: Vec<&str> = graphemes("e\u{0301}bc").collect();
+/// assert_eq!(chars, vec!["e\u{0301}", "b", "c"]);
+/// ```
+#[inline]
+pub fn graphemes(text: &str) -> impl Iterator<Item = &str> {
+    text.graphemes(true)
+}
+
+/// Truncate text to fit within a maximum display width.
+///
+/// Returns a tuple of (truncated_text, actual_width) where:
+/// - `truncated_text` is the prefix that fits within `max_width`
+/// - `actual_width` is the display width of the truncated text
+///
+/// Respects grapheme boundaries - will never split an emoji, ZWJ sequence,
+/// or combining character sequence.
+///
+/// # Example
+/// ```
+/// use ftui_text::wrap::truncate_to_width_with_info;
+///
+/// let (text, width) = truncate_to_width_with_info("hello world", 5);
+/// assert_eq!(text, "hello");
+/// assert_eq!(width, 5);
+///
+/// // CJK characters are 2 cells wide
+/// let (text, width) = truncate_to_width_with_info("\u{4F60}\u{597D}", 3);
+/// assert_eq!(text, "\u{4F60}");  // Only first char fits
+/// assert_eq!(width, 2);
+/// ```
+#[must_use]
+pub fn truncate_to_width_with_info(text: &str, max_width: usize) -> (&str, usize) {
+    let mut byte_end = 0;
+    let mut current_width = 0;
+
+    for grapheme in text.graphemes(true) {
+        let grapheme_width = grapheme.width();
+
+        if current_width + grapheme_width > max_width {
+            break;
+        }
+
+        current_width += grapheme_width;
+        byte_end += grapheme.len();
+    }
+
+    (&text[..byte_end], current_width)
+}
+
+/// Find word boundary positions suitable for line breaking.
+///
+/// Returns byte indices where word breaks can occur. This is useful for
+/// implementing soft-wrap at word boundaries.
+///
+/// # Example
+/// ```
+/// use ftui_text::wrap::word_boundaries;
+///
+/// let breaks: Vec<usize> = word_boundaries("hello world foo").collect();
+/// // Breaks occur after spaces
+/// assert!(breaks.contains(&6));   // After "hello "
+/// assert!(breaks.contains(&12));  // After "world "
+/// ```
+pub fn word_boundaries(text: &str) -> impl Iterator<Item = usize> + '_ {
+    text.split_word_bound_indices()
+        .filter_map(|(idx, word)| {
+            // Return index at end of whitespace sequences (good break points)
+            if word.chars().all(|c| c.is_whitespace()) {
+                Some(idx + word.len())
+            } else {
+                None
+            }
+        })
+}
+
+/// Split text into word segments preserving boundaries.
+///
+/// Each segment is either a word or a whitespace sequence.
+/// Useful for word-based text processing.
+///
+/// # Example
+/// ```
+/// use ftui_text::wrap::word_segments;
+///
+/// let segments: Vec<&str> = word_segments("hello  world").collect();
+/// assert_eq!(segments, vec!["hello", "  ", "world"]);
+/// ```
+pub fn word_segments(text: &str) -> impl Iterator<Item = &str> {
+    text.split_word_bounds()
 }
 
 #[cfg(test)]
@@ -611,6 +736,18 @@ mod tests {
     }
 
     #[test]
+    fn ascii_width_control_chars_returns_none() {
+        // Control characters are ASCII but have display width 0, not byte length
+        assert_eq!(ascii_width("\t"), None); // tab
+        assert_eq!(ascii_width("\n"), None); // newline
+        assert_eq!(ascii_width("\r"), None); // carriage return
+        assert_eq!(ascii_width("\0"), None); // NUL
+        assert_eq!(ascii_width("\x7F"), None); // DEL
+        assert_eq!(ascii_width("hello\tworld"), None); // mixed with tab
+        assert_eq!(ascii_width("line1\nline2"), None); // mixed with newline
+    }
+
+    #[test]
     fn display_width_uses_ascii_fast_path() {
         // ASCII should work (implicitly tests fast path)
         assert_eq!(display_width("test"), 4);
@@ -636,6 +773,108 @@ mod tests {
     #[test]
     fn is_ascii_only_false() {
         assert!(!is_ascii_only("héllo"));
+    }
+
+    // ==========================================================================
+    // Grapheme helper tests (bd-6e9.8)
+    // ==========================================================================
+
+    #[test]
+    fn grapheme_count_ascii() {
+        assert_eq!(grapheme_count("hello"), 5);
+        assert_eq!(grapheme_count(""), 0);
+    }
+
+    #[test]
+    fn grapheme_count_combining() {
+        // e + combining acute = 1 grapheme
+        assert_eq!(grapheme_count("e\u{0301}"), 1);
+        // Multiple combining marks
+        assert_eq!(grapheme_count("e\u{0301}\u{0308}"), 1);
+    }
+
+    #[test]
+    fn grapheme_count_cjk() {
+        assert_eq!(grapheme_count("你好"), 2);
+    }
+
+    #[test]
+    fn grapheme_count_emoji() {
+        assert_eq!(grapheme_count("😀"), 1);
+        // Emoji with skin tone modifier = 1 grapheme
+        assert_eq!(grapheme_count("👍🏻"), 1);
+    }
+
+    #[test]
+    fn grapheme_count_zwj() {
+        // Family emoji (ZWJ sequence) = 1 grapheme
+        assert_eq!(grapheme_count("👨‍👩‍👧"), 1);
+    }
+
+    #[test]
+    fn graphemes_iteration() {
+        let gs: Vec<&str> = graphemes("e\u{0301}bc").collect();
+        assert_eq!(gs, vec!["e\u{0301}", "b", "c"]);
+    }
+
+    #[test]
+    fn graphemes_empty() {
+        let gs: Vec<&str> = graphemes("").collect();
+        assert!(gs.is_empty());
+    }
+
+    #[test]
+    fn graphemes_cjk() {
+        let gs: Vec<&str> = graphemes("你好").collect();
+        assert_eq!(gs, vec!["你", "好"]);
+    }
+
+    #[test]
+    fn truncate_to_width_with_info_basic() {
+        let (text, width) = truncate_to_width_with_info("hello world", 5);
+        assert_eq!(text, "hello");
+        assert_eq!(width, 5);
+    }
+
+    #[test]
+    fn truncate_to_width_with_info_cjk() {
+        let (text, width) = truncate_to_width_with_info("你好世界", 3);
+        assert_eq!(text, "你");
+        assert_eq!(width, 2);
+    }
+
+    #[test]
+    fn truncate_to_width_with_info_combining() {
+        let (text, width) = truncate_to_width_with_info("e\u{0301}bc", 2);
+        assert_eq!(text, "e\u{0301}b");
+        assert_eq!(width, 2);
+    }
+
+    #[test]
+    fn truncate_to_width_with_info_fits() {
+        let (text, width) = truncate_to_width_with_info("hi", 10);
+        assert_eq!(text, "hi");
+        assert_eq!(width, 2);
+    }
+
+    #[test]
+    fn word_boundaries_basic() {
+        let breaks: Vec<usize> = word_boundaries("hello world").collect();
+        assert!(breaks.contains(&6)); // After "hello "
+    }
+
+    #[test]
+    fn word_boundaries_multiple_spaces() {
+        let breaks: Vec<usize> = word_boundaries("a  b").collect();
+        assert!(breaks.contains(&3)); // After "a  "
+    }
+
+    #[test]
+    fn word_segments_basic() {
+        let segs: Vec<&str> = word_segments("hello  world").collect();
+        // split_word_bounds gives individual segments
+        assert!(segs.contains(&"hello"));
+        assert!(segs.contains(&"world"));
     }
 
     // ==========================================================================
