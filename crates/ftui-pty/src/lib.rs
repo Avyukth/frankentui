@@ -16,6 +16,8 @@ use nix::poll::{PollFd, PollFlags, poll};
 #[cfg(unix)]
 use nix::pty::{ForkptyResult, Winsize, forkpty};
 #[cfg(unix)]
+use nix::sys::signal::{Signal, kill};
+#[cfg(unix)]
 use nix::sys::wait::{WaitStatus, waitpid};
 #[cfg(unix)]
 use nix::unistd::{ForkResult, Pid, close, read, write};
@@ -340,10 +342,10 @@ impl PtySession {
         match waitpid(self.child_pid, None).map_err(nix_error)? {
             WaitStatus::Exited(_, code) => Ok(ExitStatus::from_raw(code << 8)),
             WaitStatus::Signaled(_, signal, _) => Ok(ExitStatus::from_raw(signal as i32)),
-            other => Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("unexpected wait status: {:?}", other),
-            )),
+            other => Err(io::Error::other(format!(
+                "unexpected wait status: {:?}",
+                other
+            ))),
         }
     }
 
