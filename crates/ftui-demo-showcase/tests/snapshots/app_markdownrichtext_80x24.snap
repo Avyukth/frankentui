@@ -1,24 +1,24 @@
  1:Dash  2:Shakes  3:Code  4:Widgets  5:Layout  6:Forms  7:DataViz  8:Files     
 ╭───────────────────────────────────Markdown───────────────────────────────────╮
-│╭──────────Markdown Renderer──────────╮╭────────────Style Sampler────────────╮│
-││FrankenTUI Markdown Demo             ││Bold  Dim  Italic  Underline         ││
-││                                     ││Strikethrough  Reverse  Blink        ││
-││Typography Showcase                  ││Dbl-Underline  Curly-Underline  [Hidd││
-││                                     ││                                     ││
-││This demonstrates the full range of  ││Error  Success  Warning  Link  Code  ││
-││Markdown rendering capabilities built││                                     ││
-││into the framework.                  ││                                     ││
-││                                     │╰─────────────────────────────────────╯│
-││Inline Styles                        │───────────────────────────────────────│
-││                                     │╭──────────Unicode Showcase───────────╮│
-││You can use bold, italic,            ││Text           Type            Cells ││
-││strikethrough, and `inline code`.    ││Hello          ASCII           5     ││
-││Combine them: bold italic, `bold     ││????       CJK             8     ││
-││code`, `italic code`.                ││?????     Hiragana        10    ││
-││                                     ││???         Emoji           6     ││
-││Links                                ││café           Latin+accent    4     ││
-││                                     │╰─────────────────────────────────────╯│
-││Visit FrankenTUI for more info.      │╭──────Wrap: Word | Align: Left───────╮│
-│╰─────────────────────────────────────╯╰─────────────────────────────────────╯│
+│╭────Markdown Renderer────╮╭LLM Streaming Simulation ╮╭────Style Sampler────╮ │
+││GitHub-Flavored Markdown ││                         ││Bold  Dim  Italic  Un│ │
+││                         ││                         ││Strikethrough  Revers│ │
+││Math & LaTeX Support     ││                         ││Dbl-Underline  Curly-│ │
+││                         ││                         ││                     │ │
+││Inline math like E = mc² ││                         ││Error  Success  Warni│ │
+││and α + β = γ renders to ││                         ││                     │ │
+││Unicode.                 ││                         │╰─────────────────────╯ │
+││                         ││                         │─────────────────────── │
+││Display math for complex ││                         │╭Wrap: Word | Align: L╮ │
+││equations:               ││                         ││w: cycle wrap | a: cy│ │
+││                         ││                         ││The quick brown fox  │ │
+││  ∑ᵢ₌₁ⁿ xᵢ = n(n+1)/2    ││                         ││jumps over the lazy  │ │
+││                         ││                         ││dog.                 │ │
+││f(x) = ∫_{−∞}^{∞}        ││                         ││Supercalifragilistice│ │
+││e^{−x²} dx = √{π}        ││                         ││is quite a long word │ │
+││                         ││  Detection: 0 indicators││that tests           │ │
+││Greek letters: α, β, γ,  ││  Confidence: 0% | Chars:││character-level      │ │
+││δ, ε                     ││  Space: play/pause | r: ││wrapping behavior.   │ │
+│╰─────────────────────────╯╰─────────────────────────╯╰─────────────────────╯ │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Markdown [11/11]                    tick:0 frm:0                     0x0 00:00 
+ Markdown [11/12]  Cyberpunk Aurora           tick:0 frm:0            0x0 00:00 

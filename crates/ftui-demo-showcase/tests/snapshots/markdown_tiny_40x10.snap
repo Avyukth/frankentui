@@ -1,10 +1,10 @@
-╭Markdown Renderer─╮╭──Style Sampler───╮
-│FrankenTUI        ││Bold  Dim  Italic │
-│Markdown Demo     ││Strikethrough  Rev│
-│                  ││Dbl-Underline  Cur│
-│Typography        ││                  │
-│Showcase          ││Error  Success  Wa│
-│                  ││                  │
-│This demonstrates ││                  │
-│the full range of │╰──────────────────╯
-╰──────────────────╯────────────────────
+╭Markdown Ren╮╭LLM Streamin╮╭Style Samp╮
+│GitHub-Flavo││            ││Bold  Dim │
+│Markdown    ││            ││Strikethro│
+│            ││            ││Dbl-Underl│
+│Math & LaTeX││            ││          │
+│Support     ││            ││Error  Suc│
+│            ││  Detection:││          │
+│Inline math ││  Confidence│╰──────────╯
+│like E = mc²││  Space: pla│────────────
+╰────────────╯╰────────────╯╰Wrap: Word╯

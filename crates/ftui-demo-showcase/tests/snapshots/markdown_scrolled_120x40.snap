@@ -1,40 +1,40 @@
-╭────────────────────Markdown Renderer─────────────────────╮╭──────────────────────Style Sampler───────────────────────╮
-│code`. Combine them: bold italic, `bold code`, `italic    ││Bold  Dim  Italic  Underline                              │
-│code`.                                                    ││Strikethrough  Reverse  Blink                             │
-│                                                          ││Dbl-Underline  Curly-Underline  [Hidden]                  │
-│Links                                                     ││                                                          │
-│                                                          ││Error  Success  Warning  Link  Code                       │
-│Visit FrankenTUI for more info.                           ││                                                          │
-│                                                          ││                                                          │
-│Blockquotes                                               │╰──────────────────────────────────────────────────────────╯
-│                                                          │────────────────────────────────────────────────────────────
-││ "Any sufficiently advanced technology is                │╭─────────────────────Unicode Showcase─────────────────────╮
-│indistinguishable from magic." │ — Arthur C. Clarke       ││Text                      Type                      Cells │
-│                                                          ││Hello                     ASCII                     5     │
-│Code Block                                                ││????                  CJK                       8     │
-│                                                          ││?????                Hiragana                  10    │
-│  fn main() {                                             ││???                    Emoji                     6     │
-│      println!("Hello, FrankenTUI!");                     ││café                      Latin+accent              4     │
-│      let tui = FrankenTUI::new()                         ││α β γ δ                   Greek                     7     │
-│          .with_theme(Theme::dark())                      ││→ ← ↑ ↓                   Arrows                    7     │
-│          .build();                                       ││█▓▒░                      Block el.                 4     │
-│      tui.run().unwrap();                                 ││                                                          │
-│  }                                                       ││                                                          │
-│                                                          ││                                                          │
-│Lists                                                     ││                                                          │
-│                                                          ││                                                          │
-│Unordered:                                                │╰──────────────────────────────────────────────────────────╯
-│• Styled text rendering                                   │╭─────────────────Wrap: Word | Align: Left─────────────────╮
-│• Unicode-aware wrapping                                  ││w: cycle wrap | a: cycle alignment                        │
-│• Grapheme cluster support                                ││The quick brown fox jumps over the lazy dog.              │
-│• CJK and emoji handling                                  ││Supercalifragilisticexpialidocious is quite a long word   │
-│                                                          ││that tests character-level wrapping behavior. ????    │
-│Ordered:                                                  ││contains CJK characters that are double-width. ? Ferris  │
-│1. Parse markdown with pulldown-cmark                     ││says hello!                                               │
-│2. Apply theme styles to elements                         ││                                                          │
-│3. Render styled Text in Paragraph widget                 ││                                                          │
-│                                                          ││                                                          │
-│Headings at Every Level                                   ││                                                          │
-│                                                          ││                                                          │
-│H4: Sub-subsection                                        ││                                                          │
-╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────╯
+╭───────────Markdown Renderer────────────╮╭LLM Streaming Simulation | Streaming... ╮╭──────────Style Sampler───────────╮
+│                                        ││                                        ││Bold  Dim  Italic  Underline      │
+│  f(x) = ∫_{−∞}^{∞} e^{−x²} dx = √{π}   ││                                        ││Strikethrough  Reverse  Blink     │
+│                                        ││                                        ││Dbl-Underline  Curly-Underline  [H│
+│Greek letters: α, β, γ, δ, ε            ││                                        ││                                  │
+│                                        ││                                        ││Error  Success  Warning  Link  Cod│
+│Operators: ×, ÷, ±, ≤, ≥, ≠, ≈          ││                                        ││                                  │
+│                                        ││                                        │╰──────────────────────────────────╯
+│Task Lists                              ││                                        │────────────────────────────────────
+│✓ Implement markdown parser             ││                                        │╭─────Wrap: Word | Align: Left─────╮
+│✓ Add LaTeX to Unicode conversion       ││                                        ││w: cycle wrap | a: cycle alignment│
+│✓ Support task list checkboxes          ││                                        ││The quick brown fox jumps over the│
+│☐ Add syntax highlighting               ││                                        ││lazy dog.                         │
+│☐ Write comprehensive tests             ││                                        ││Supercalifragilisticexpialidocious│
+│                                        ││                                        ││is quite a long word that tests   │
+│Admonitions                             ││                                        ││character-level wrapping behavior.│
+│                                        ││                                        ││???? contains CJK characters  │
+│?  NOTE                                ││                                        ││that are double-width. ? Ferris  │
+│┃ This is an informational note with    ││                                        ││says hello!                       │
+│helpful context.                        ││                                        ││                                  │
+│                                        ││                                        ││                                  │
+│? TIP                                  ││                                        ││                                  │
+│┃ Pro tip: Use keyboard shortcuts for   ││                                        ││                                  │
+│faster navigation.                      ││                                        ││                                  │
+│                                        ││                                        ││                                  │
+│? IMPORTANT                            ││                                        ││                                  │
+│┃ Critical information that users need  ││                                        ││                                  │
+│to know.                                ││                                        ││                                  │
+│                                        ││                                        ││                                  │
+│?  WARNING                             ││                                        ││                                  │
+│┃ Potential issues or things to be      ││                                        ││                                  │
+│careful about.                          ││                                        ││                                  │
+│                                        ││                                        ││                                  │
+│? CAUTION                              ││                                        ││                                  │
+│┃ Dangerous actions that may cause      ││                                        ││                                  │
+│problems.                               ││                                        ││                                  │
+│                                        ││  Detection: 0 indicators | Uncertain   ││                                  │
+│Footnotes                               ││  Confidence: 0% | Chars: 0/1304        ││                                  │
+│                                        ││  Space: play/pause | r: restart | ↑↓: s││                                  │
+╰────────────────────────────────────────╯╰────────────────────────────────────────╯╰──────────────────────────────────╯
