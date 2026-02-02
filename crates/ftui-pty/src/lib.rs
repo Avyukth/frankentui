@@ -973,6 +973,39 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn wait_and_drain_large_output_ordered() {
+        let config = PtyConfig::default().logging(false);
+
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.args([
+            "-c",
+            "i=1; while [ $i -le 1200 ]; do printf \"line%04d\\n\" $i; i=$((i+1)); done",
+        ]);
+
+        let mut session = spawn_command(config, cmd).expect("spawn_command should succeed");
+
+        let status = session
+            .wait_and_drain(Duration::from_secs(3))
+            .expect("wait_and_drain should succeed");
+
+        assert!(status.success(), "child should succeed");
+
+        let output = session.output();
+        let output_str = String::from_utf8_lossy(output);
+        let lines: Vec<&str> = output_str.lines().collect();
+
+        assert_eq!(
+            lines.len(),
+            1200,
+            "expected 1200 lines, got {}",
+            lines.len()
+        );
+        assert_eq!(lines.first().copied(), Some("line0001"));
+        assert_eq!(lines.last().copied(), Some("line1200"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn drain_remaining_respects_eof() {
         let config = PtyConfig::default().logging(false);
 

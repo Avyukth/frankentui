@@ -1,13 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-# ─────────────────────────────────────────────────────────────────────────────
-# E2E Tests: Kitty Keyboard Protocol
-#
-# NOTE: These tests send CSI u sequences directly via PTY. They verify how
-# FrankenTUI logs decoded key events when those sequences are received.
-# ─────────────────────────────────────────────────────────────────────────────
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/../lib"
 
@@ -26,6 +19,7 @@ ALL_CASES=(
     kitty_basic_char
     kitty_ctrl_repeat
     kitty_function_key
+    kitty_tab_key
 )
 
 if [[ ! -x "${E2E_HARNESS_BIN:-}" ]]; then
@@ -72,11 +66,10 @@ kitty_basic_char() {
 
     log_test_start "kitty_basic_char"
 
-    # Kitty: 'a' key (97u)
     PTY_SEND=$'\x1b[97u' \
-    PTY_SEND_DELAY_MS=300 \
-    FTUI_HARNESS_LOG_KEYS=1 \
-    FTUI_HARNESS_EXIT_AFTER_MS=1500 \
+    PTY_SEND_DELAY_MS=200 \
+    FTUI_HARNESS_INPUT_MODE=parser \
+    FTUI_HARNESS_EXIT_AFTER_MS=1200 \
     PTY_TIMEOUT=4 \
         pty_run "$output_file" "$E2E_HARNESS_BIN"
 
@@ -89,11 +82,10 @@ kitty_ctrl_repeat() {
 
     log_test_start "kitty_ctrl_repeat"
 
-    # Ctrl+repeat for 'a' (modifiers=5, event_type=2)
     PTY_SEND=$'\x1b[97;5:2u' \
-    PTY_SEND_DELAY_MS=300 \
-    FTUI_HARNESS_LOG_KEYS=1 \
-    FTUI_HARNESS_EXIT_AFTER_MS=1500 \
+    PTY_SEND_DELAY_MS=200 \
+    FTUI_HARNESS_INPUT_MODE=parser \
+    FTUI_HARNESS_EXIT_AFTER_MS=1200 \
     PTY_TIMEOUT=4 \
         pty_run "$output_file" "$E2E_HARNESS_BIN"
 
@@ -106,19 +98,35 @@ kitty_function_key() {
 
     log_test_start "kitty_function_key"
 
-    # F1 key (kitty code 57364)
-    PTY_SEND=$'\x1b[57364;1u' \
-    PTY_SEND_DELAY_MS=300 \
-    FTUI_HARNESS_LOG_KEYS=1 \
-    FTUI_HARNESS_EXIT_AFTER_MS=1500 \
+    PTY_SEND=$'\x1b[57364u' \
+    PTY_SEND_DELAY_MS=200 \
+    FTUI_HARNESS_INPUT_MODE=parser \
+    FTUI_HARNESS_EXIT_AFTER_MS=1200 \
     PTY_TIMEOUT=4 \
         pty_run "$output_file" "$E2E_HARNESS_BIN"
 
-    grep -a -q "Key: code=F(1) kind=Press" "$output_file" || return 1
+    grep -a -q "Key: code=F(1) kind=Press mods=none" "$output_file" || return 1
+}
+
+kitty_tab_key() {
+    LOG_FILE="$E2E_LOG_DIR/kitty_tab_key.log"
+    local output_file="$E2E_LOG_DIR/kitty_tab_key.pty"
+
+    log_test_start "kitty_tab_key"
+
+    PTY_SEND=$'\x1b[57346u' \
+    PTY_SEND_DELAY_MS=200 \
+    FTUI_HARNESS_INPUT_MODE=parser \
+    FTUI_HARNESS_EXIT_AFTER_MS=1200 \
+    PTY_TIMEOUT=4 \
+        pty_run "$output_file" "$E2E_HARNESS_BIN"
+
+    grep -a -q "Key: code=Tab kind=Press mods=none" "$output_file" || return 1
 }
 
 FAILURES=0
-run_case "kitty_basic_char" kitty_basic_char       || FAILURES=$((FAILURES + 1))
-run_case "kitty_ctrl_repeat" kitty_ctrl_repeat     || FAILURES=$((FAILURES + 1))
-run_case "kitty_function_key" kitty_function_key   || FAILURES=$((FAILURES + 1))
+run_case "kitty_basic_char" kitty_basic_char         || FAILURES=$((FAILURES + 1))
+run_case "kitty_ctrl_repeat" kitty_ctrl_repeat       || FAILURES=$((FAILURES + 1))
+run_case "kitty_function_key" kitty_function_key     || FAILURES=$((FAILURES + 1))
+run_case "kitty_tab_key" kitty_tab_key               || FAILURES=$((FAILURES + 1))
 exit "$FAILURES"

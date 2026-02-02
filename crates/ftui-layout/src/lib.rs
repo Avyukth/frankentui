@@ -11,6 +11,8 @@
 
 pub mod debug;
 pub mod grid;
+#[cfg(test)]
+mod repro_max_constraint;
 
 pub use ftui_core::geometry::{Rect, Sides};
 pub use grid::{Grid, GridArea, GridLayout};
