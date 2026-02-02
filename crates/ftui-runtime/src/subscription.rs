@@ -740,6 +740,11 @@ mod tests {
             })),
         ]);
 
+        // Drain any in-flight messages that were sent before the stop signal was processed.
+        // This clears the race window between stop signal and message send.
+        let _ = mgr.drain_messages();
+
+        // Now wait for new messages from the remaining subscriptions
         thread::sleep(Duration::from_millis(30));
         let msgs = mgr.drain_messages();
 
