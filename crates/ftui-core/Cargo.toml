@@ -16,7 +16,7 @@ caps-probe = []
 
 [dependencies]
 bitflags = "2.10.0"
-crossterm = "0.28"
+crossterm = "0.29.0"
 
 # Unix-only signal handling for cleanup on SIGINT/SIGTERM.
 [target.'cfg(unix)'.dependencies]

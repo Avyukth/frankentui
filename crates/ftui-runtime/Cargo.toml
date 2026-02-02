@@ -20,7 +20,7 @@ ftui-layout = { path = "../ftui-layout" }
 ftui-render = { path = "../ftui-render" }
 ftui-style = { path = "../ftui-style" }
 ftui-text = { path = "../ftui-text" }
-crossterm = "0.28"
+crossterm = "0.29.0"
 tracing = "0.1"
-unicode-segmentation = "1.11"
-unicode-width = "0.2"
+unicode-segmentation = "1.12.0"
+unicode-width = "0.2.2"

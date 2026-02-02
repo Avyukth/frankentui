@@ -15,9 +15,9 @@ normalization = ["dep:unicode-normalization"]
 ftui-layout = { path = "../ftui-layout" }
 ftui-style = { path = "../ftui-style" }
 ftui-render = { path = "../ftui-render", optional = true }
-unicode-width = "0.2"
-unicode-segmentation = "1.11"
-smallvec = "1.13"
+unicode-width = "0.2.2"
+unicode-segmentation = "1.12.0"
+smallvec = "1.15.1"
 tracing = "0.1"
 lru = "0.12"
 rustc-hash = "2"

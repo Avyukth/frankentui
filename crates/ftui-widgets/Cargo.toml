@@ -17,8 +17,8 @@ ftui-render = { path = "../ftui-render" }
 ftui-style = { path = "../ftui-style" }
 ftui-text = { path = "../ftui-text" }
 tracing = { version = "0.1", optional = true }
-unicode-segmentation = "1.11"
-unicode-width = "0.2"
+unicode-segmentation = "1.12.0"
+unicode-width = "0.2.2"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
