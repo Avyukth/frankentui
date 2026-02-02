@@ -626,14 +626,17 @@ impl<W: Write> TerminalWriter<W> {
 
     /// Write log output (goes to scrollback region in inline mode).
     ///
-    /// In inline mode, this writes above the UI region.
+    /// In inline mode, this writes to the log region (above UI for bottom-anchored,
+    /// below UI for top-anchored). The cursor is explicitly positioned in the log
+    /// region before writing to prevent UI corruption.
+    ///
     /// In AltScreen mode, logs are typically not shown (returns Ok silently).
     pub fn write_log(&mut self, text: &str) -> io::Result<()> {
         match self.screen_mode {
-            ScreenMode::Inline { .. } => {
-                // Log writes go to scrollback region (above UI)
-                // Just write normally - terminal scrolls
-                // The next present_ui will redraw UI in correct position
+            ScreenMode::Inline { ui_height } => {
+                // Position cursor in the log region before writing.
+                // This ensures log output never corrupts the UI region.
+                self.position_cursor_for_log(ui_height)?;
                 self.writer().write_all(text.as_bytes())?;
                 self.writer().flush()
             }
@@ -643,6 +646,37 @@ impl<W: Write> TerminalWriter<W> {
                 Ok(())
             }
         }
+    }
+
+    /// Position cursor at the bottom of the log region for writing.
+    ///
+    /// For bottom-anchored UI: log region is above the UI (rows 1 to term_height - ui_height).
+    /// For top-anchored UI: log region is below the UI (rows ui_height + 1 to term_height).
+    ///
+    /// Positions at the bottom row of the log region so newlines cause scrolling.
+    fn position_cursor_for_log(&mut self, ui_height: u16) -> io::Result<()> {
+        let visible_height = ui_height.min(self.term_height);
+        if visible_height >= self.term_height {
+            // No log region available when UI fills the terminal
+            return Ok(());
+        }
+
+        let log_row = match self.ui_anchor {
+            UiAnchor::Bottom => {
+                // Log region is above UI: rows 1 to (term_height - ui_height)
+                // Position at the bottom of the log region
+                self.term_height.saturating_sub(visible_height)
+            }
+            UiAnchor::Top => {
+                // Log region is below UI: rows (ui_height + 1) to term_height
+                // Position at the bottom of the log region (last row)
+                self.term_height
+            }
+        };
+
+        // Move to the target row, column 1 (1-indexed)
+        write!(self.writer(), "\x1b[{};1H", log_row)?;
+        Ok(())
     }
 
     /// Clear the screen.
@@ -1572,5 +1606,289 @@ mod tests {
                 .any(|w| w == CURSOR_RESTORE),
             "Scroll region mode should still restore cursor"
         );
+    }
+
+    // --- Log write cursor positioning tests (bd-xh8s) ---
+
+    #[test]
+    fn write_log_positions_cursor_bottom_anchor() {
+        // Verify log writes position cursor at the bottom of the log region
+        // for bottom-anchored UI (log region is above UI).
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            writer.set_size(80, 24);
+            writer.write_log("test log\n").unwrap();
+        }
+
+        // For bottom-anchored with ui_height=5, term_height=24:
+        // Log region is rows 1-19 (24-5=19 rows)
+        // Cursor should be positioned at row 19 (bottom of log region)
+        let expected_pos = b"\x1b[19;1H";
+        assert!(
+            output.windows(expected_pos.len()).any(|w| w == expected_pos),
+            "Log write should position cursor at row 19 for bottom anchor"
+        );
+    }
+
+    #[test]
+    fn write_log_positions_cursor_top_anchor() {
+        // Verify log writes position cursor at the bottom of the log region
+        // for top-anchored UI (log region is below UI).
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Top,
+                basic_caps(),
+            );
+            writer.set_size(80, 24);
+            writer.write_log("test log\n").unwrap();
+        }
+
+        // For top-anchored with ui_height=5, term_height=24:
+        // Log region is rows 6-24 (below UI)
+        // Cursor should be positioned at row 24 (bottom of log region)
+        let expected_pos = b"\x1b[24;1H";
+        assert!(
+            output.windows(expected_pos.len()).any(|w| w == expected_pos),
+            "Log write should position cursor at row 24 for top anchor"
+        );
+    }
+
+    #[test]
+    fn write_log_contains_text() {
+        // Verify the log text is actually written after cursor positioning.
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            writer.set_size(80, 24);
+            writer.write_log("hello world\n").unwrap();
+        }
+
+        let output_str = String::from_utf8_lossy(&output);
+        assert!(output_str.contains("hello world"));
+    }
+
+    #[test]
+    fn write_log_multiple_writes_position_each_time() {
+        // Verify cursor is positioned for each log write.
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            writer.set_size(80, 24);
+            writer.write_log("first\n").unwrap();
+            writer.write_log("second\n").unwrap();
+        }
+
+        // Should have cursor positioning twice
+        let expected_pos = b"\x1b[19;1H";
+        let count = output
+            .windows(expected_pos.len())
+            .filter(|w| *w == expected_pos)
+            .count();
+        assert_eq!(count, 2, "Should position cursor for each log write");
+    }
+
+    #[test]
+    fn write_log_after_present_ui_works_correctly() {
+        // Verify log writes work correctly after UI presentation.
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            writer.set_size(80, 24);
+
+            // Present UI first
+            let buffer = Buffer::new(80, 5);
+            writer.present_ui(&buffer).unwrap();
+
+            // Then write log
+            writer.write_log("after UI\n").unwrap();
+        }
+
+        let output_str = String::from_utf8_lossy(&output);
+        assert!(output_str.contains("after UI"));
+
+        // Log write should still position cursor
+        let expected_pos = b"\x1b[19;1H";
+        // Find position after cursor restore (log write happens after present_ui)
+        assert!(
+            output.windows(expected_pos.len()).any(|w| w == expected_pos),
+            "Log write after present_ui should position cursor"
+        );
+    }
+
+    #[test]
+    fn write_log_ui_fills_terminal_is_noop() {
+        // When UI fills the entire terminal, there's no log region.
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::Inline { ui_height: 24 },
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            writer.set_size(80, 24);
+            writer.write_log("should still write\n").unwrap();
+        }
+
+        // Text should still be written (no positioning since no log region)
+        let output_str = String::from_utf8_lossy(&output);
+        assert!(output_str.contains("should still write"));
+    }
+
+    #[test]
+    fn write_log_with_scroll_region_active() {
+        // Verify log writes work correctly when scroll region is active.
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Bottom,
+                scroll_region_caps(),
+            );
+            writer.set_size(80, 24);
+
+            // Present UI to activate scroll region
+            let buffer = Buffer::new(80, 5);
+            writer.present_ui(&buffer).unwrap();
+            assert!(writer.scroll_region_active());
+
+            // Log write should still position cursor
+            writer.write_log("with scroll region\n").unwrap();
+        }
+
+        let output_str = String::from_utf8_lossy(&output);
+        assert!(output_str.contains("with scroll region"));
+    }
+
+    #[test]
+    fn log_write_cursor_position_not_in_ui_region_bottom_anchor() {
+        // Verify the cursor position for log writes is never in the UI region.
+        // For bottom-anchored with ui_height=5, term_height=24:
+        // UI region is rows 20-24 (1-indexed)
+        // Log region is rows 1-19
+        // Log cursor should be at row 19 (bottom of log region)
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            writer.set_size(80, 24);
+            writer.write_log("test\n").unwrap();
+        }
+
+        // Parse cursor position commands in output
+        // Looking for ESC [ row ; col H patterns
+        let mut found_row = None;
+        let mut i = 0;
+        while i + 2 < output.len() {
+            if output[i] == 0x1b && output[i + 1] == b'[' {
+                let mut j = i + 2;
+                let mut row: u16 = 0;
+                while j < output.len() && output[j].is_ascii_digit() {
+                    row = row * 10 + (output[j] - b'0') as u16;
+                    j += 1;
+                }
+                if j < output.len() && output[j] == b';' {
+                    j += 1;
+                    while j < output.len() && output[j].is_ascii_digit() {
+                        j += 1;
+                    }
+                    if j < output.len() && output[j] == b'H' {
+                        found_row = Some(row);
+                    }
+                }
+            }
+            i += 1;
+        }
+
+        if let Some(row) = found_row {
+            // UI region starts at row 20 (24 - 5 + 1 = 20)
+            assert!(
+                row < 20,
+                "Log cursor row {} should be below UI start row 20",
+                row
+            );
+        }
+    }
+
+    #[test]
+    fn log_write_cursor_position_not_in_ui_region_top_anchor() {
+        // Verify the cursor position for log writes is never in the UI region.
+        // For top-anchored with ui_height=5, term_height=24:
+        // UI region is rows 1-5 (1-indexed)
+        // Log region is rows 6-24
+        // Log cursor should be at row 24 (bottom of log region)
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Top,
+                basic_caps(),
+            );
+            writer.set_size(80, 24);
+            writer.write_log("test\n").unwrap();
+        }
+
+        // Parse cursor position commands in output
+        let mut found_row = None;
+        let mut i = 0;
+        while i + 2 < output.len() {
+            if output[i] == 0x1b && output[i + 1] == b'[' {
+                let mut j = i + 2;
+                let mut row: u16 = 0;
+                while j < output.len() && output[j].is_ascii_digit() {
+                    row = row * 10 + (output[j] - b'0') as u16;
+                    j += 1;
+                }
+                if j < output.len() && output[j] == b';' {
+                    j += 1;
+                    while j < output.len() && output[j].is_ascii_digit() {
+                        j += 1;
+                    }
+                    if j < output.len() && output[j] == b'H' {
+                        found_row = Some(row);
+                    }
+                }
+            }
+            i += 1;
+        }
+
+        if let Some(row) = found_row {
+            // UI region is rows 1-5
+            assert!(
+                row > 5,
+                "Log cursor row {} should be above UI end row 5",
+                row
+            );
+        }
     }
 }

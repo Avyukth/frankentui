@@ -261,12 +261,8 @@ impl Default for MarkdownTheme {
             code_block: Style::new().fg(PackedRgba::rgb(200, 200, 200)),
 
             // Text formatting
-            blockquote: Style::new()
-                .fg(PackedRgba::rgb(150, 150, 150))
-                .italic(),
-            link: Style::new()
-                .fg(PackedRgba::rgb(100, 150, 255))
-                .underline(),
+            blockquote: Style::new().fg(PackedRgba::rgb(150, 150, 150)).italic(),
+            link: Style::new().fg(PackedRgba::rgb(100, 150, 255)).underline(),
             emphasis: Style::new().italic(),
             strong: Style::new().bold(),
             strikethrough: Style::new().strikethrough(),
@@ -280,35 +276,19 @@ impl Default for MarkdownTheme {
             task_todo: Style::new().fg(PackedRgba::rgb(150, 200, 220)),
 
             // Math: elegant purple/magenta for mathematical expressions
-            math_inline: Style::new()
-                .fg(PackedRgba::rgb(220, 150, 255))
-                .italic(),
-            math_block: Style::new()
-                .fg(PackedRgba::rgb(200, 140, 240))
-                .bold(),
+            math_inline: Style::new().fg(PackedRgba::rgb(220, 150, 255)).italic(),
+            math_block: Style::new().fg(PackedRgba::rgb(200, 140, 240)).bold(),
 
             // Footnotes: subtle teal
-            footnote_ref: Style::new()
-                .fg(PackedRgba::rgb(100, 180, 180))
-                .dim(),
+            footnote_ref: Style::new().fg(PackedRgba::rgb(100, 180, 180)).dim(),
             footnote_def: Style::new().fg(PackedRgba::rgb(120, 160, 160)),
 
             // Admonitions: semantic colors matching their meaning
-            admonition_note: Style::new()
-                .fg(PackedRgba::rgb(100, 150, 255))
-                .bold(), // Blue - informational
-            admonition_tip: Style::new()
-                .fg(PackedRgba::rgb(100, 200, 100))
-                .bold(), // Green - helpful
-            admonition_important: Style::new()
-                .fg(PackedRgba::rgb(180, 130, 255))
-                .bold(), // Purple - important
-            admonition_warning: Style::new()
-                .fg(PackedRgba::rgb(255, 200, 80))
-                .bold(), // Yellow/amber - warning
-            admonition_caution: Style::new()
-                .fg(PackedRgba::rgb(255, 100, 100))
-                .bold(), // Red - danger
+            admonition_note: Style::new().fg(PackedRgba::rgb(100, 150, 255)).bold(), // Blue - informational
+            admonition_tip: Style::new().fg(PackedRgba::rgb(100, 200, 100)).bold(), // Green - helpful
+            admonition_important: Style::new().fg(PackedRgba::rgb(180, 130, 255)).bold(), // Purple - important
+            admonition_warning: Style::new().fg(PackedRgba::rgb(255, 200, 80)).bold(), // Yellow/amber - warning
+            admonition_caution: Style::new().fg(PackedRgba::rgb(255, 100, 100)).bold(), // Red - danger
         }
     }
 }
