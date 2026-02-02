@@ -637,4 +637,319 @@ mod tests {
         let content = plain(&text);
         assert!(content.contains("│"));
     }
+
+    // =========================================================================
+    // ADDITIONAL TESTS - Markdown renderer edge cases (bd-2nu8.12.1)
+    // =========================================================================
+
+    #[test]
+    fn render_table() {
+        let md = "| A | B |\n|---|---|\n| 1 | 2 |";
+        let text = render_markdown(md);
+        let content = plain(&text);
+        assert!(content.contains("A"));
+        assert!(content.contains("B"));
+        assert!(content.contains("1"));
+        assert!(content.contains("2"));
+    }
+
+    #[test]
+    fn render_nested_blockquotes() {
+        let md = "> Level 1\n> > Level 2\n> > > Level 3";
+        let text = render_markdown(md);
+        let content = plain(&text);
+        assert!(content.contains("Level 1"));
+        assert!(content.contains("Level 2"));
+        assert!(content.contains("Level 3"));
+    }
+
+    #[test]
+    fn render_link_with_inline_code() {
+        let md = "[`code link`](https://example.com)";
+        let text = render_markdown(md);
+        let content = plain(&text);
+        assert!(content.contains("`code link`"));
+    }
+
+    #[test]
+    fn render_ordered_list_custom_start() {
+        let md = "5. Fifth\n6. Sixth\n7. Seventh";
+        let text = render_markdown(md);
+        let content = plain(&text);
+        // Should start at 5
+        assert!(content.contains("5. Fifth"));
+        assert!(content.contains("6. Sixth"));
+        assert!(content.contains("7. Seventh"));
+    }
+
+    #[test]
+    fn render_mixed_list_types() {
+        let md = "1. Ordered\n- Unordered\n2. Ordered again";
+        let text = render_markdown(md);
+        let content = plain(&text);
+        assert!(content.contains("1. Ordered"));
+        assert!(content.contains("• Unordered"));
+    }
+
+    #[test]
+    fn render_code_in_heading() {
+        let md = "# Heading with `code`";
+        let text = render_markdown(md);
+        let content = plain(&text);
+        assert!(content.contains("Heading with"));
+        assert!(content.contains("`code`"));
+    }
+
+    #[test]
+    fn render_emphasis_in_list() {
+        let md = "- Item with **bold** text";
+        let text = render_markdown(md);
+        let content = plain(&text);
+        assert!(content.contains("bold"));
+    }
+
+    #[test]
+    fn render_soft_break() {
+        let md = "Line one\nLine two";
+        let text = render_markdown(md);
+        let content = plain(&text);
+        // Soft break becomes space
+        assert!(content.contains("Line one"));
+        assert!(content.contains("Line two"));
+    }
+
+    #[test]
+    fn render_hard_break() {
+        let md = "Line one  \nLine two";  // Two spaces before newline
+        let text = render_markdown(md);
+        // Hard break creates new line
+        assert!(text.height() >= 2);
+    }
+
+    #[test]
+    fn theme_default_creates_valid_styles() {
+        use ftui_style::StyleFlags;
+        let theme = MarkdownTheme::default();
+        // All styles should be valid
+        assert!(theme.h1.has_attr(StyleFlags::BOLD));
+        assert!(theme.h2.has_attr(StyleFlags::BOLD));
+        assert!(theme.emphasis.has_attr(StyleFlags::ITALIC));
+        assert!(theme.strong.has_attr(StyleFlags::BOLD));
+        assert!(theme.strikethrough.has_attr(StyleFlags::STRIKETHROUGH));
+        assert!(theme.link.has_attr(StyleFlags::UNDERLINE));
+        assert!(theme.blockquote.has_attr(StyleFlags::ITALIC));
+    }
+
+    #[test]
+    fn theme_clone() {
+        use ftui_style::StyleFlags;
+        let theme1 = MarkdownTheme::default();
+        let theme2 = theme1.clone();
+        // Both should have same styles
+        assert_eq!(
+            theme1.h1.has_attr(StyleFlags::BOLD),
+            theme2.h1.has_attr(StyleFlags::BOLD)
+        );
+    }
+
+    #[test]
+    fn renderer_clone() {
+        let renderer1 = MarkdownRenderer::default();
+        let renderer2 = renderer1.clone();
+        // Both should render the same
+        let text1 = renderer1.render("# Test");
+        let text2 = renderer2.render("# Test");
+        assert_eq!(plain(&text1), plain(&text2));
+    }
+
+    #[test]
+    fn render_whitespace_only() {
+        let text = render_markdown("   \n   \n   ");
+        // Should handle gracefully
+        let content = plain(&text);
+        assert!(content.trim().is_empty() || content.contains(" "));
+    }
+
+    #[test]
+    fn render_complex_nested_structure() {
+        let md = r#"# Main Title
+
+Some intro text with **bold** and *italic*.
+
+## Section 1
+
+> A blockquote with:
+> - A list item
+> - Another item
+
+```rust
+fn example() {
+    println!("code");
+}
+```
+
+## Section 2
+
+1. First
+2. Second
+   - Nested bullet
+
+---
+
+The end.
+"#;
+        let text = render_markdown(md);
+        let content = plain(&text);
+        assert!(content.contains("Main Title"));
+        assert!(content.contains("Section 1"));
+        assert!(content.contains("Section 2"));
+        assert!(content.contains("blockquote"));
+        assert!(content.contains("fn example"));
+        assert!(content.contains("─"));
+        assert!(content.contains("The end"));
+    }
+
+    #[test]
+    fn render_unicode_in_markdown() {
+        let md = "# 日本語タイトル\n\n**太字** and *斜体*";
+        let text = render_markdown(md);
+        let content = plain(&text);
+        assert!(content.contains("日本語タイトル"));
+        assert!(content.contains("太字"));
+        assert!(content.contains("斜体"));
+    }
+
+    #[test]
+    fn render_emoji_in_markdown() {
+        let md = "# 🎉 Celebration\n\n**🚀 Launch** today!";
+        let text = render_markdown(md);
+        let content = plain(&text);
+        assert!(content.contains("🎉"));
+        assert!(content.contains("🚀"));
+    }
+
+    #[test]
+    fn render_consecutive_headings() {
+        let md = "# H1\n## H2\n### H3";
+        let text = render_markdown(md);
+        // Should have blank lines between headings
+        assert!(text.height() >= 5);
+    }
+
+    #[test]
+    fn render_link_in_blockquote() {
+        let md = "> Check [this link](https://example.com)";
+        let text = render_markdown(md);
+        let content = plain(&text);
+        assert!(content.contains("│"));
+        assert!(content.contains("this link"));
+    }
+
+    #[test]
+    fn render_code_block_with_language() {
+        let md = "```python\nprint('hello')\n```";
+        let text = render_markdown(md);
+        let content = plain(&text);
+        assert!(content.contains("print"));
+    }
+
+    #[test]
+    fn render_deeply_nested_list() {
+        let md = "- Level 1\n  - Level 2\n    - Level 3\n      - Level 4";
+        let text = render_markdown(md);
+        let content = plain(&text);
+        assert!(content.contains("Level 1"));
+        assert!(content.contains("Level 4"));
+    }
+
+    #[test]
+    fn render_multiple_code_blocks() {
+        let md = "```\nblock1\n```\n\n```\nblock2\n```";
+        let text = render_markdown(md);
+        let content = plain(&text);
+        assert!(content.contains("block1"));
+        assert!(content.contains("block2"));
+    }
+
+    #[test]
+    fn render_emphasis_across_words() {
+        let md = "*multiple words in italic*";
+        let text = render_markdown(md);
+        let content = plain(&text);
+        assert!(content.contains("multiple words in italic"));
+    }
+
+    #[test]
+    fn render_bold_and_italic_together() {
+        let md = "***bold and italic*** and **just bold** and *just italic*";
+        let text = render_markdown(md);
+        let content = plain(&text);
+        assert!(content.contains("bold and italic"));
+        assert!(content.contains("just bold"));
+        assert!(content.contains("just italic"));
+    }
+
+    #[test]
+    fn render_escaped_characters() {
+        let md = r#"\*not italic\* and \`not code\`"#;
+        let text = render_markdown(md);
+        let content = plain(&text);
+        // Escaped characters should appear as-is
+        assert!(content.contains("*not italic*"));
+    }
+
+    #[test]
+    fn markdown_renderer_default() {
+        let renderer = MarkdownRenderer::default();
+        let text = renderer.render("test");
+        assert!(!text.is_empty());
+    }
+
+    #[test]
+    fn render_markdown_function() {
+        let text = render_markdown("# Heading\nParagraph");
+        assert!(!text.is_empty());
+        let content = plain(&text);
+        assert!(content.contains("Heading"));
+        assert!(content.contains("Paragraph"));
+    }
+
+    #[test]
+    fn render_table_multicolumn() {
+        let md = "| Col1 | Col2 | Col3 |\n|------|------|------|\n| A | B | C |\n| D | E | F |";
+        let text = render_markdown(md);
+        let content = plain(&text);
+        assert!(content.contains("Col1"));
+        assert!(content.contains("Col2"));
+        assert!(content.contains("Col3"));
+        assert!(content.contains("A"));
+        assert!(content.contains("F"));
+    }
+
+    #[test]
+    fn render_very_long_line() {
+        let long_text = "word ".repeat(100);
+        let md = format!("# {}", long_text);
+        let text = render_markdown(&md);
+        assert!(!text.is_empty());
+    }
+
+    #[test]
+    fn render_only_whitespace_in_code_block() {
+        let md = "```\n   \n```";
+        let text = render_markdown(md);
+        // Should handle gracefully
+        assert!(text.height() >= 1);
+    }
+
+    #[test]
+    fn style_context_heading_levels() {
+        // Each heading level should have different styling
+        for level in 1..=6 {
+            let md = format!("{} Heading Level {}", "#".repeat(level), level);
+            let text = render_markdown(&md);
+            let content = plain(&text);
+            assert!(content.contains(&format!("Heading Level {}", level)));
+        }
+    }
 }
