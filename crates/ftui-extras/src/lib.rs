@@ -13,6 +13,7 @@
 //! | `canvas` | [`canvas`] | Pixel-level drawing primitives |
 //! | `charts` | [`charts`] | Chart widgets (depends on canvas) |
 //! | `clipboard` | [`clipboard`] | OSC 52 clipboard integration |
+//! | `diagram` | [`diagram`] | ASCII diagram detection and correction |
 //! | `console` | [`console`] | ANSI-aware console text processing |
 //! | `export` | [`export`] | Buffer export to HTML/SVG/text |
 //! | `filesize` | [`filesize`] | Human-readable file size formatting |
@@ -27,6 +28,8 @@
 //! | `syntax` | [`syntax`] | Syntax highlighting spans |
 //! | `timer` | [`timer`] | Countdown timer utility |
 //! | `traceback` | [`traceback`] | Error/stacktrace display |
+//! | `theme` | [`theme`] | Color themes + palette tokens |
+//! | `text-effects` | [`text_effects`] | Animated text effects (gradients, fades, ASCII art) |
 
 #[cfg(feature = "canvas")]
 pub mod canvas;
@@ -39,6 +42,9 @@ pub mod charts;
 
 #[cfg(feature = "clipboard")]
 pub mod clipboard;
+
+#[cfg(feature = "diagram")]
+pub mod diagram;
 
 #[cfg(feature = "export")]
 pub mod export;
@@ -78,3 +84,9 @@ pub mod stopwatch;
 
 #[cfg(feature = "timer")]
 pub mod timer;
+
+#[cfg(feature = "theme")]
+pub mod theme;
+
+#[cfg(feature = "text-effects")]
+pub mod text_effects;
