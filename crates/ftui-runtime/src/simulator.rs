@@ -601,10 +601,10 @@ mod tests {
             let mut frame_bytes = Vec::new();
             for y in 0..10 {
                 for x in 0..20 {
-                    if let Some(cell) = buf.get(x, y) {
-                        if let Some(c) = cell.content.as_char() {
-                            frame_bytes.push(c as u8);
-                        }
+                    if let Some(cell) = buf.get(x, y)
+                        && let Some(c) = cell.content.as_char()
+                    {
+                        frame_bytes.push(c as u8);
                     }
                 }
             }
@@ -697,7 +697,10 @@ mod tests {
         sim.send(SeqMsg::TriggerSeq);
 
         // Verify sequence is recorded
-        let has_sequence = sim.command_log().iter().any(|r| matches!(r, CmdRecord::Sequence(3)));
+        let has_sequence = sim
+            .command_log()
+            .iter()
+            .any(|r| matches!(r, CmdRecord::Sequence(3)));
         assert!(has_sequence, "Should record Sequence(3)");
 
         // Verify steps executed in order
@@ -715,7 +718,10 @@ mod tests {
         sim.send(CounterMsg::BatchIncrement(5));
 
         // Should have Batch(5) in the log
-        let has_batch = sim.command_log().iter().any(|r| matches!(r, CmdRecord::Batch(5)));
+        let has_batch = sim
+            .command_log()
+            .iter()
+            .any(|r| matches!(r, CmdRecord::Batch(5)));
         assert!(has_batch, "Should record Batch(5)");
 
         assert_eq!(sim.model().value, 5);
@@ -830,7 +836,10 @@ mod tests {
         assert_eq!(sim.model().result, Some(42));
 
         // Should have Task record in command log
-        let has_task = sim.command_log().iter().any(|r| matches!(r, CmdRecord::Task));
+        let has_task = sim
+            .command_log()
+            .iter()
+            .any(|r| matches!(r, CmdRecord::Task));
         assert!(has_task);
     }
 
@@ -891,7 +900,11 @@ mod tests {
         assert_eq!(content2, content3);
 
         // Should be "Count: 123" followed by None (unwritten cells)
-        let expected: Vec<Option<char>> = "Count: 123".chars().map(Some).chain(std::iter::repeat(None).take(5)).collect();
+        let expected: Vec<Option<char>> = "Count: 123"
+            .chars()
+            .map(Some)
+            .chain(std::iter::repeat_n(None, 5))
+            .collect();
         assert_eq!(content1, expected);
     }
 

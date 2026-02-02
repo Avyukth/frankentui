@@ -1,5 +1,54 @@
 # Session TODO List
 
+## 8. Current Session (DustyCanyon) — Agent Mail + E2E Kitty Keyboard
+- [x] **Confirm AGENTS.md + README.md fully read** (requirements + architecture context)
+- [x] **Run code investigation agent** to map FrankenTUI architecture and key crates
+- [x] **Start/verify Agent Mail server** and health-check `/health/liveness`
+- [x] **Register Agent Mail session** via `macro_start_session` (DustyCanyon)
+- [x] **Fetch agent roster** (`resource://agents/...`) and record active names for awareness
+- [x] **Check inbox** for DustyCanyon (no messages)
+- [x] **Send intro + coordination message** to GentleLantern (reservation conflict)
+- [x] **Send intro message** to GrayFox + LavenderMoose
+- [x] **Claim bead** `bd-2nu8.15.11` and set status `in_progress`
+- [x] **Create kitty keyboard E2E script** at `tests/e2e/scripts/test_kitty_keyboard.sh`
+- [x] **Ensure kitty suite wired into run_all** (already present)
+- [x] **Run kitty keyboard E2E suite** and capture results (all cases passed)
+- [x] **If failures:** inspect PTY logs + fix harness/test expectations (not needed)
+- [x] **Update bead** `bd-2nu8.15.11` to `closed` when passing
+- [x] **Sync beads** (`br sync --flush-only`) after completion
+- [x] **Release file reservations** for `tests/e2e/scripts/**`
+- [x] **Post completion message** in Agent Mail thread `bd-2nu8.15.11`
+
+## 9. Current Session (DustyCanyon) — E2E OSC 8 Hyperlinks (bd-2nu8.15.13)
+- [x] **Select next bead via bv** (bd-2nu8.15.13)
+- [x] **Set bead status** to `in_progress`
+- [x] **Reserve file** `tests/e2e/scripts/test_osc8.sh` (note overlap w/ GentleLantern)
+- [x] **Notify GentleLantern** about reservation overlap + scope
+- [x] **Review OSC 8 handling** in render/presenter + harness output expectations
+- [x] **Create E2E script** `tests/e2e/scripts/test_osc8.sh` with OSC 8 open/close cases
+- [x] **Wire OSC 8 suite** into `tests/e2e/scripts/run_all.sh`
+- [x] **Run OSC 8 suite** with `E2E_HARNESS_BIN=/data/tmp/cargo-target/debug/ftui-harness`
+- [x] **If failures:** inspect PTY capture + adjust expectations (not needed)
+- [x] **Close bead** `bd-2nu8.15.13` when green
+- [x] **Sync beads** (`br sync --flush-only`)
+- [x] **Release reservation** for `tests/e2e/scripts/test_osc8.sh`
+- [x] **Post completion message** in Agent Mail thread `bd-2nu8.15.13`
+
+## 10. Current Session (DustyCanyon) — E2E Mux Behavior (bd-2nu8.15.14)
+- [x] **Set bead status** to `in_progress`
+- [x] **Reserve file** `tests/e2e/scripts/test_mux.sh` (note overlap w/ GentleLantern)
+- [x] **Notify GentleLantern** about reservation overlap + scope
+- [x] **Audit mux detection logic** (tmux/screen/zellij env vars) in core capabilities
+- [x] **Draft E2E cases**: tmux, screen, zellij, and no-mux baseline
+- [x] **Create script** `tests/e2e/scripts/test_mux.sh`
+- [x] **Wire mux suite** into `tests/e2e/scripts/run_all.sh`
+- [x] **Run mux suite** with `E2E_HARNESS_BIN=/data/tmp/cargo-target/debug/ftui-harness`
+- [x] **If failures:** inspect PTY capture + adjust expectations (not needed)
+- [ ] **Close bead** `bd-2nu8.15.14` when green
+- [ ] **Sync beads** (`br sync --flush-only`)
+- [ ] **Release reservation** for `tests/e2e/scripts/test_mux.sh`
+- [ ] **Post completion message** in Agent Mail thread `bd-2nu8.15.14`
+
 ## 1. Restore Terminal Safety
 - [x] **Read Cargo.toml**: Confirm current `panic` setting.
 - [x] **Update Cargo.toml**: Changed `panic = "abort"` to `panic = "unwind"` to ensure RAII cleanup.

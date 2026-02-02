@@ -1,5 +1,5 @@
 # FrankenTUI CI/CD Pipeline
-# bd-xn2: Continuous integration for code quality and testing
+# bd-2nu8.13: Continuous integration for code quality and testing
 #
 # Runs on every PR and push to main branch.
 # Matrix tests across OS and Rust versions.
@@ -58,6 +58,17 @@ jobs:
 
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Enforce no-mock policy (bd-2nu8.18)
+        run: |
+          if rg -n -i '\b(mock|fake|stub)s?\b' crates tests -g '*.rs' \
+            --glob '!crates/ftui-runtime/src/subscription.rs' \
+            --glob '!crates/ftui-core/src/inline_mode.rs' \
+            --glob '!crates/ftui-widgets/src/debug_overlay.rs' \
+            --glob '!crates/ftui-render/src/sanitize.rs'; then
+            echo "No-mock policy violation detected. See docs/testing/no-mock-policy.md."
+            exit 1
+          fi
 
       - name: Build workspace
         run: cargo build --workspace

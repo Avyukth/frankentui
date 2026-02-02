@@ -242,6 +242,8 @@ pub struct ProgramConfig {
     pub bracketed_paste: bool,
     /// Enable focus reporting.
     pub focus_reporting: bool,
+    /// Enable Kitty keyboard protocol (repeat/release events).
+    pub kitty_keyboard: bool,
 }
 
 impl Default for ProgramConfig {
@@ -255,6 +257,7 @@ impl Default for ProgramConfig {
             mouse: false,
             bracketed_paste: true,
             focus_reporting: false,
+            kitty_keyboard: false,
         }
     }
 }
@@ -426,7 +429,7 @@ impl<M: Model> Program<M, Stdout> {
             mouse_capture: config.mouse,
             bracketed_paste: config.bracketed_paste,
             focus_events: config.focus_reporting,
-            kitty_keyboard: false,
+            kitty_keyboard: config.kitty_keyboard,
         })?;
 
         let mut writer = TerminalWriter::new(

@@ -159,7 +159,7 @@ pub fn search_case_insensitive(haystack: &str, needle: &str) -> Vec<SearchResult
         };
 
         // Avoid duplicate ranges when a single grapheme expands into multiple
-        // normalized bytes (e.g., "ß" -> "ss").
+        // normalized bytes (e.g., fullwidth "Ａ" -> "a" under NFKC).
         if results
             .last()
             .is_some_and(|r: &SearchResult| r.range.start == orig_start && r.range.end == orig_end)

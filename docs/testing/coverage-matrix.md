@@ -4,12 +4,12 @@ This document encodes the project's expectations for unit test coverage by crate
 It prevents "test later" drift, keeps kernel invariants continuously verified, and makes CI
 decisions explicit.
 
-See Bead: bd-3hy.
+See Bead: bd-2nu8.17.
 
 ## How to Use
 - When adding a new module, add it here.
 - When adding a new public API, add explicit unit tests here.
-- CI should enforce these thresholds (see bd-xn2).
+- CI should enforce these thresholds (see bd-2nu8.13).
 
 ## Coverage Targets (v1)
 - ftui-render: >= 85% (kernel)
@@ -21,20 +21,22 @@ See Bead: bd-3hy.
 - ftui-widgets: >= 70%
 - ftui-extras: >= 60% (feature-gated)
 
+Non-gated crates (report-only, no threshold): ftui, ftui-harness, ftui-demo-showcase, ftui-pty, ftui-simd.
+
 Note: Integration-heavy PTY tests are enforced separately; do not "unit test" around reality.
 
 ## Last Measured: 2026-02-02 (cargo llvm-cov, 2630 tests)
 
 | Crate | Target | Actual | Status |
 |-------|--------|--------|--------|
-| ftui-render | >= 85% | ~95% | PASS |
-| ftui-core | >= 80% | ~95% | PASS |
-| ftui-style | >= 80% | ~99% | PASS |
-| ftui-text | >= 80% | ~94% | PASS |
-| ftui-layout | >= 75% | ~97% | PASS |
-| ftui-runtime | >= 75% | ~84% | PASS (program.rs at 34% drags average) |
-| ftui-widgets | >= 70% | ~90% | PASS |
-| ftui-extras | >= 60% | ~90% | PASS |
+| ftui-render | >= 85% | 95.06% | PASS |
+| ftui-core | >= 80% | 94.86% | PASS |
+| ftui-style | >= 80% | 98.53% | PASS |
+| ftui-text | >= 80% | 94.44% | PASS |
+| ftui-layout | >= 75% | 97.39% | PASS |
+| ftui-runtime | >= 75% | 84.03% | PASS (program.rs at 34% drags average) |
+| ftui-widgets | >= 70% | 90.04% | PASS |
+| ftui-extras | >= 60% | 89.66% | PASS |
 
 ## ftui-render (>= 85%) — Actual: ~95%
 Kernel correctness lives here.

@@ -720,7 +720,7 @@ mod tests {
 
     #[test]
     fn render_hard_break() {
-        let md = "Line one  \nLine two";  // Two spaces before newline
+        let md = "Line one  \nLine two"; // Two spaces before newline
         let text = render_markdown(md);
         // Hard break creates new line
         assert!(text.height() >= 2);

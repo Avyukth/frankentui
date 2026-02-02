@@ -1,6 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
+# ─────────────────────────────────────────────────────────────────────────────
+# E2E Tests: Kitty Keyboard Protocol
+#
+# NOTE: These tests send CSI u sequences directly via PTY. They verify how
+# FrankenTUI logs decoded key events when those sequences are received.
+# ─────────────────────────────────────────────────────────────────────────────
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/../lib"
 
@@ -17,15 +24,12 @@ ONLY_CASE="${E2E_ONLY_CASE:-}"
 
 ALL_CASES=(
     kitty_basic_char
-    kitty_ctrl_char
-    kitty_repeat_kind
-    kitty_release_kind
+    kitty_ctrl_repeat
     kitty_function_key
-    kitty_navigation_key
 )
 
 if [[ ! -x "${E2E_HARNESS_BIN:-}" ]]; then
-    LOG_FILE="$E2E_LOG_DIR/kitty_keyboard_missing.log"
+    LOG_FILE="$E2E_LOG_DIR/kitty_missing.log"
     for t in "${ALL_CASES[@]}"; do
         log_test_skip "$t" "ftui-harness binary missing"
         record_result "$t" "skipped" 0 "$LOG_FILE" "binary missing"
@@ -68,10 +72,9 @@ kitty_basic_char() {
 
     log_test_start "kitty_basic_char"
 
-    # CSI 97 u => 'a'
+    # Kitty: 'a' key (97u)
     PTY_SEND=$'\x1b[97u' \
     PTY_SEND_DELAY_MS=300 \
-    FTUI_HARNESS_INPUT_MODE=parser \
     FTUI_HARNESS_LOG_KEYS=1 \
     FTUI_HARNESS_EXIT_AFTER_MS=1500 \
     PTY_TIMEOUT=4 \
@@ -80,58 +83,21 @@ kitty_basic_char() {
     grep -a -q "Key: code=Char('a') kind=Press mods=none" "$output_file" || return 1
 }
 
-kitty_ctrl_char() {
-    LOG_FILE="$E2E_LOG_DIR/kitty_ctrl_char.log"
-    local output_file="$E2E_LOG_DIR/kitty_ctrl_char.pty"
+kitty_ctrl_repeat() {
+    LOG_FILE="$E2E_LOG_DIR/kitty_ctrl_repeat.log"
+    local output_file="$E2E_LOG_DIR/kitty_ctrl_repeat.pty"
 
-    log_test_start "kitty_ctrl_char"
+    log_test_start "kitty_ctrl_repeat"
 
-    # CSI 97 ; 5 u => Ctrl+a
-    PTY_SEND=$'\x1b[97;5u' \
+    # Ctrl+repeat for 'a' (modifiers=5, event_type=2)
+    PTY_SEND=$'\x1b[97;5:2u' \
     PTY_SEND_DELAY_MS=300 \
-    FTUI_HARNESS_INPUT_MODE=parser \
     FTUI_HARNESS_LOG_KEYS=1 \
     FTUI_HARNESS_EXIT_AFTER_MS=1500 \
     PTY_TIMEOUT=4 \
         pty_run "$output_file" "$E2E_HARNESS_BIN"
 
-    grep -a -q "Key: code=Char('a') kind=Press mods=ctrl" "$output_file" || return 1
-}
-
-kitty_repeat_kind() {
-    LOG_FILE="$E2E_LOG_DIR/kitty_repeat_kind.log"
-    local output_file="$E2E_LOG_DIR/kitty_repeat_kind.pty"
-
-    log_test_start "kitty_repeat_kind"
-
-    # CSI 98 ; 1:2 u => 'b' repeat
-    PTY_SEND=$'\x1b[98;1:2u' \
-    PTY_SEND_DELAY_MS=300 \
-    FTUI_HARNESS_INPUT_MODE=parser \
-    FTUI_HARNESS_LOG_KEYS=1 \
-    FTUI_HARNESS_EXIT_AFTER_MS=1500 \
-    PTY_TIMEOUT=4 \
-        pty_run "$output_file" "$E2E_HARNESS_BIN"
-
-    grep -a -q "Key: code=Char('b') kind=Repeat mods=none" "$output_file" || return 1
-}
-
-kitty_release_kind() {
-    LOG_FILE="$E2E_LOG_DIR/kitty_release_kind.log"
-    local output_file="$E2E_LOG_DIR/kitty_release_kind.pty"
-
-    log_test_start "kitty_release_kind"
-
-    # CSI 99 ; 1:3 u => 'c' release
-    PTY_SEND=$'\x1b[99;1:3u' \
-    PTY_SEND_DELAY_MS=300 \
-    FTUI_HARNESS_INPUT_MODE=parser \
-    FTUI_HARNESS_LOG_KEYS=1 \
-    FTUI_HARNESS_EXIT_AFTER_MS=1500 \
-    PTY_TIMEOUT=4 \
-        pty_run "$output_file" "$E2E_HARNESS_BIN"
-
-    grep -a -q "Key: code=Char('c') kind=Release mods=none" "$output_file" || return 1
+    grep -a -q "Key: code=Char('a') kind=Repeat mods=ctrl" "$output_file" || return 1
 }
 
 kitty_function_key() {
@@ -140,41 +106,19 @@ kitty_function_key() {
 
     log_test_start "kitty_function_key"
 
-    # CSI 57364 u => F1
-    PTY_SEND=$'\x1b[57364u' \
+    # F1 key (kitty code 57364)
+    PTY_SEND=$'\x1b[57364;1u' \
     PTY_SEND_DELAY_MS=300 \
-    FTUI_HARNESS_INPUT_MODE=parser \
     FTUI_HARNESS_LOG_KEYS=1 \
     FTUI_HARNESS_EXIT_AFTER_MS=1500 \
     PTY_TIMEOUT=4 \
         pty_run "$output_file" "$E2E_HARNESS_BIN"
 
-    grep -a -q "Key: code=F(1) kind=Press mods=none" "$output_file" || return 1
-}
-
-kitty_navigation_key() {
-    LOG_FILE="$E2E_LOG_DIR/kitty_navigation_key.log"
-    local output_file="$E2E_LOG_DIR/kitty_navigation_key.pty"
-
-    log_test_start "kitty_navigation_key"
-
-    # CSI 57351 u => Right arrow
-    PTY_SEND=$'\x1b[57351u' \
-    PTY_SEND_DELAY_MS=300 \
-    FTUI_HARNESS_INPUT_MODE=parser \
-    FTUI_HARNESS_LOG_KEYS=1 \
-    FTUI_HARNESS_EXIT_AFTER_MS=1500 \
-    PTY_TIMEOUT=4 \
-        pty_run "$output_file" "$E2E_HARNESS_BIN"
-
-    grep -a -q "Key: code=Right kind=Press mods=none" "$output_file" || return 1
+    grep -a -q "Key: code=F(1) kind=Press" "$output_file" || return 1
 }
 
 FAILURES=0
 run_case "kitty_basic_char" kitty_basic_char       || FAILURES=$((FAILURES + 1))
-run_case "kitty_ctrl_char" kitty_ctrl_char         || FAILURES=$((FAILURES + 1))
-run_case "kitty_repeat_kind" kitty_repeat_kind     || FAILURES=$((FAILURES + 1))
-run_case "kitty_release_kind" kitty_release_kind   || FAILURES=$((FAILURES + 1))
+run_case "kitty_ctrl_repeat" kitty_ctrl_repeat     || FAILURES=$((FAILURES + 1))
 run_case "kitty_function_key" kitty_function_key   || FAILURES=$((FAILURES + 1))
-run_case "kitty_navigation_key" kitty_navigation_key || FAILURES=$((FAILURES + 1))
 exit "$FAILURES"

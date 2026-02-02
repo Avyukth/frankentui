@@ -456,11 +456,25 @@ impl Buffer {
     /// Respects scissor region.
     pub fn copy_from(&mut self, src: &Buffer, src_rect: Rect, dst_x: u16, dst_y: u16) {
         for dy in 0..src_rect.height {
+            // Compute destination y with overflow check
+            let Some(target_y) = dst_y.checked_add(dy) else {
+                continue;
+            };
+            let Some(sy) = src_rect.y.checked_add(dy) else {
+                continue;
+            };
+
             for dx in 0..src_rect.width {
-                let sx = src_rect.x + dx;
-                let sy = src_rect.y + dy;
+                // Compute coordinates with overflow checks
+                let Some(target_x) = dst_x.checked_add(dx) else {
+                    continue;
+                };
+                let Some(sx) = src_rect.x.checked_add(dx) else {
+                    continue;
+                };
+
                 if let Some(cell) = src.get(sx, sy) {
-                    self.set(dst_x + dx, dst_y + dy, *cell);
+                    self.set(target_x, target_y, *cell);
                 }
             }
         }

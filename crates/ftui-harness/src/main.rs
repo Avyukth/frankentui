@@ -781,10 +781,15 @@ fn main() -> std::io::Result<()> {
         .ok()
         .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
 
+    let enable_kitty_keyboard = std::env::var("FTUI_HARNESS_ENABLE_KITTY_KEYBOARD")
+        .ok()
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+
     let config = ProgramConfig {
         screen_mode,
         mouse: enable_mouse,
         focus_reporting: enable_focus,
+        kitty_keyboard: enable_kitty_keyboard,
         ..Default::default()
     };
 

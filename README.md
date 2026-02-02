@@ -339,9 +339,11 @@ BLESS=1 cargo test -p ftui-harness
 - `docs/concepts/screen-modes.md`
 - `docs/spec/state-machines.md`
 - `docs/testing/coverage-matrix.md`
+- `docs/testing/coverage-playbook.md`
 - `docs/one-writer-rule.md`
 - `docs/ansi-reference.md`
 - `docs/WINDOWS.md`
+- `docs/testing/e2e-playbook.md`
 
 ---
 

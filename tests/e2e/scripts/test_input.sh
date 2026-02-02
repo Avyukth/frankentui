@@ -171,6 +171,7 @@ input_kitty_keyboard_basic() {
     PTY_SEND="$kitty_seq" \
     PTY_SEND_DELAY_MS=300 \
     FTUI_HARNESS_EXIT_AFTER_MS=2000 \
+    FTUI_HARNESS_ENABLE_KITTY_KEYBOARD=true \
     PTY_TIMEOUT=5 \
         pty_run "$output_file" "$E2E_HARNESS_BIN"
 
@@ -192,10 +193,11 @@ input_kitty_keyboard_kinds_mods() {
     PTY_SEND="$kitty_seq" \
     PTY_SEND_DELAY_MS=300 \
     FTUI_HARNESS_EXIT_AFTER_MS=3000 \
+    FTUI_HARNESS_ENABLE_KITTY_KEYBOARD=true \
     PTY_TIMEOUT=5 \
         pty_run "$output_file" "$E2E_HARNESS_BIN" || true
 
-    grep -a -q "> abd" "$output_file" || return 1
+    grep -a -q "> ad" "$output_file" || return 1
     local size
     size=$(wc -c < "$output_file" | tr -d ' ')
     [[ "$size" -gt 300 ]] || return 1

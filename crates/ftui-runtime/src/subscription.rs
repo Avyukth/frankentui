@@ -530,9 +530,7 @@ mod tests {
         let (signal, trigger) = StopSignal::new();
 
         let signal_clone = signal.clone();
-        let handle = thread::spawn(move || {
-            signal_clone.wait_timeout(Duration::from_secs(10))
-        });
+        let handle = thread::spawn(move || signal_clone.wait_timeout(Duration::from_secs(10)));
 
         // Give thread time to start waiting
         thread::sleep(Duration::from_millis(20));
@@ -562,7 +560,10 @@ mod tests {
 
     #[test]
     fn mock_subscription_stops_on_disconnected_receiver() {
-        let sub = MockSubscription::new(1, vec![TestMsg::Value(1), TestMsg::Value(2), TestMsg::Value(3)]);
+        let sub = MockSubscription::new(
+            1,
+            vec![TestMsg::Value(1), TestMsg::Value(2), TestMsg::Value(3)],
+        );
         let (tx, rx) = mpsc::channel();
         let (signal, _trigger) = StopSignal::new();
 
@@ -618,8 +619,16 @@ mod tests {
         let elapsed = start.elapsed();
 
         // Should have approximately 3 ticks (at 50ms intervals over 160ms)
-        assert!(msgs.len() >= 2, "Expected at least 2 ticks, got {}", msgs.len());
-        assert!(msgs.len() <= 4, "Expected at most 4 ticks, got {}", msgs.len());
+        assert!(
+            msgs.len() >= 2,
+            "Expected at least 2 ticks, got {}",
+            msgs.len()
+        );
+        assert!(
+            msgs.len() <= 4,
+            "Expected at most 4 ticks, got {}",
+            msgs.len()
+        );
         assert!(elapsed >= Duration::from_millis(150));
     }
 
@@ -636,9 +645,10 @@ mod tests {
     #[test]
     fn subscription_manager_drain_messages_returns_all() {
         let mut mgr = SubscriptionManager::<TestMsg>::new();
-        let subs: Vec<Box<dyn Subscription<TestMsg>>> = vec![
-            Box::new(MockSubscription::new(1, vec![TestMsg::Value(1), TestMsg::Value(2)])),
-        ];
+        let subs: Vec<Box<dyn Subscription<TestMsg>>> = vec![Box::new(MockSubscription::new(
+            1,
+            vec![TestMsg::Value(1), TestMsg::Value(2)],
+        ))];
 
         mgr.reconcile(subs);
         thread::sleep(Duration::from_millis(20));
@@ -658,13 +668,19 @@ mod tests {
         let mut mgr = SubscriptionManager::<TestMsg>::new();
 
         // Start with ID 1
-        mgr.reconcile(vec![Box::new(MockSubscription::new(1, vec![TestMsg::Value(1)]))]);
+        mgr.reconcile(vec![Box::new(MockSubscription::new(
+            1,
+            vec![TestMsg::Value(1)],
+        ))]);
         thread::sleep(Duration::from_millis(20));
         let msgs1 = mgr.drain_messages();
         assert_eq!(msgs1, vec![TestMsg::Value(1)]);
 
         // Replace with ID 2
-        mgr.reconcile(vec![Box::new(MockSubscription::new(2, vec![TestMsg::Value(2)]))]);
+        mgr.reconcile(vec![Box::new(MockSubscription::new(
+            2,
+            vec![TestMsg::Value(2)],
+        ))]);
         thread::sleep(Duration::from_millis(20));
         let msgs2 = mgr.drain_messages();
         assert_eq!(msgs2, vec![TestMsg::Value(2)]);
@@ -700,9 +716,15 @@ mod tests {
 
         // Start with 3 subscriptions
         mgr.reconcile(vec![
-            Box::new(Every::with_id(1, Duration::from_millis(10), || TestMsg::Value(1))),
-            Box::new(Every::with_id(2, Duration::from_millis(10), || TestMsg::Value(2))),
-            Box::new(Every::with_id(3, Duration::from_millis(10), || TestMsg::Value(3))),
+            Box::new(Every::with_id(1, Duration::from_millis(10), || {
+                TestMsg::Value(1)
+            })),
+            Box::new(Every::with_id(2, Duration::from_millis(10), || {
+                TestMsg::Value(2)
+            })),
+            Box::new(Every::with_id(3, Duration::from_millis(10), || {
+                TestMsg::Value(3)
+            })),
         ]);
 
         thread::sleep(Duration::from_millis(30));
@@ -710,24 +732,38 @@ mod tests {
 
         // Remove subscription 2, keep 1 and 3
         mgr.reconcile(vec![
-            Box::new(Every::with_id(1, Duration::from_millis(10), || TestMsg::Value(1))),
-            Box::new(Every::with_id(3, Duration::from_millis(10), || TestMsg::Value(3))),
+            Box::new(Every::with_id(1, Duration::from_millis(10), || {
+                TestMsg::Value(1)
+            })),
+            Box::new(Every::with_id(3, Duration::from_millis(10), || {
+                TestMsg::Value(3)
+            })),
         ]);
 
         thread::sleep(Duration::from_millis(30));
         let msgs = mgr.drain_messages();
 
         // Should only have values 1 and 3, not 2
-        let values: Vec<i32> = msgs.iter().filter_map(|m| {
-            match m {
+        let values: Vec<i32> = msgs
+            .iter()
+            .filter_map(|m| match m {
                 TestMsg::Value(v) => Some(*v),
                 _ => None,
-            }
-        }).collect();
+            })
+            .collect();
 
-        assert!(values.contains(&1), "Should still receive from subscription 1");
-        assert!(values.contains(&3), "Should still receive from subscription 3");
-        assert!(!values.contains(&2), "Should not receive from stopped subscription 2");
+        assert!(
+            values.contains(&1),
+            "Should still receive from subscription 1"
+        );
+        assert!(
+            values.contains(&3),
+            "Should still receive from subscription 3"
+        );
+        assert!(
+            !values.contains(&2),
+            "Should not receive from stopped subscription 2"
+        );
     }
 
     #[test]
@@ -766,7 +802,10 @@ mod tests {
         }
 
         thread::sleep(Duration::from_millis(50));
-        assert!(flag.load(std::sync::atomic::Ordering::SeqCst), "Subscription should have stopped on drop");
+        assert!(
+            flag.load(std::sync::atomic::Ordering::SeqCst),
+            "Subscription should have stopped on drop"
+        );
     }
 
     #[test]
@@ -836,12 +875,13 @@ mod tests {
         thread::sleep(Duration::from_millis(30));
         let msgs = mgr.drain_messages();
 
-        let values: Vec<i32> = msgs.iter().filter_map(|m| {
-            match m {
+        let values: Vec<i32> = msgs
+            .iter()
+            .filter_map(|m| match m {
                 TestMsg::Value(v) => Some(*v),
                 _ => None,
-            }
-        }).collect();
+            })
+            .collect();
 
         assert_eq!(values, vec![1, 2, 3, 4, 5]);
     }

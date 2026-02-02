@@ -118,8 +118,7 @@ proc = subprocess.Popen(
     env=os.environ.copy(),
     start_new_session=True,
 )
-
-os.close(slave_fd)
+slave_fd_open = slave_fd
 
 captured = bytearray()
 sent = False
@@ -145,7 +144,15 @@ try:
                     import termios
 
                     winsize = struct.pack("HHHH", resize_rows_int, resize_cols_int, 0, 0)
-                    fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+                    try:
+                        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+                    except Exception:
+                        pass
+                    if slave_fd_open is not None:
+                        try:
+                            fcntl.ioctl(slave_fd_open, termios.TIOCSWINSZ, winsize)
+                        except Exception:
+                            pass
                     try:
                         os.killpg(proc.pid, signal.SIGWINCH)
                     except Exception:
@@ -198,6 +205,11 @@ finally:
         os.close(master_fd)
     except Exception:
         pass
+    if slave_fd_open is not None:
+        try:
+            os.close(slave_fd_open)
+        except Exception:
+            pass
 
 exit_code = proc.poll()
 if exit_code is None:

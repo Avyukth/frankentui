@@ -124,7 +124,7 @@ paste_unicode() {
     log_test_start "paste_unicode"
 
     if [[ ! -f "$fixture" ]]; then
-        log_test_fail "paste_unicode" "missing fixture $fixture"
+        log_error "Missing fixture: $fixture"
         return 1
     fi
 
@@ -185,10 +185,9 @@ marker_len = 64
 if len(prefix) + marker_len >= max_len:
     raise SystemExit("Marker setup exceeds max length")
 
-fill_len = max_len - len(prefix) - marker_len
 marker = tail_marker + ("Z" * (marker_len - len(tail_marker)))
-overflow = "B" * 256 + "SUFFIX"
-content = prefix + ("A" * fill_len) + marker + overflow
+fill_len = (max_len - len(prefix) - marker_len) + 1
+content = prefix + ("A" * fill_len) + marker
 
 if len(content) <= max_len:
     raise SystemExit("Payload does not exceed MAX_PASTE_LEN")

@@ -348,12 +348,6 @@ impl MarkupParser {
 
         // Restore the style to what it was before this tag was pushed
         self.current_style = entry.previous_style;
-        self.current_link = entry.link_url;
-
-        if tag_lower == "link" {
-            self.in_link = false;
-            self.current_link = None;
-        }
 
         // Re-apply styles from any stack entries that were above the removed
         // entry (now shifted down to entry_idx..).
@@ -362,11 +356,19 @@ impl MarkupParser {
             // accumulated style chain. We use the stored style_delta to exactly
             // replay the effect of each remaining tag.
             self.current_style = self.current_style.merge(&remaining.style_delta);
+        }
 
-            // Restore link state from remaining entries
+        // Derive link state from remaining entries on the stack.
+        // We cannot use entry.link_url because it may be stale if the link
+        // was closed before this entry was popped (interleaved tags).
+        self.in_link = false;
+        self.current_link = None;
+        for remaining in &self.style_stack {
             if remaining.tag == "link" {
                 self.in_link = true;
                 self.current_link = remaining.link_url.clone();
+                // Links cannot nest, so there's at most one
+                break;
             }
         }
 
@@ -794,6 +796,34 @@ mod tests {
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].link.as_deref(), Some("https://a.com"));
         assert_eq!(spans[1].link, None);
+    }
+
+    #[test]
+    fn parse_link_with_nested_tag_outlasting_link() {
+        // Interleaved case: [link=a][bold]text[/link]more[/bold]after
+        // Link is closed before bold. Text after link close should NOT have the link,
+        // even though bold was opened inside the link.
+        let text = parse_markup("[link=https://a.com][bold]text[/link]more[/bold]after").unwrap();
+        let spans = text.lines()[0].spans();
+
+        // "text" should have link (inside both link and bold)
+        assert_eq!(spans[0].link.as_deref(), Some("https://a.com"));
+
+        // "more" should NOT have link (link was closed, even though bold is still open)
+        assert!(
+            spans[1].link.is_none(),
+            "span 'more' should NOT have link after [/link], got {:?}",
+            spans[1].link
+        );
+
+        // "after" should NOT have link (both tags closed)
+        if let Some(span) = spans.get(2) {
+            assert!(
+                span.link.is_none(),
+                "span 'after' should NOT have link, got {:?}",
+                span.link
+            );
+        }
     }
 
     #[test]

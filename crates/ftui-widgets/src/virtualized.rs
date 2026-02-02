@@ -806,7 +806,12 @@ impl<T: RenderItem> StatefulWidget for VirtualizedList<'_, T> {
         if let Some(selected) = state.selected
             && selected >= total_items
         {
-            state.selected = Some(total_items - 1);
+            // Use saturating_sub to handle empty list case (total_items = 0)
+            state.selected = if total_items > 0 {
+                Some(total_items - 1)
+            } else {
+                None
+            };
         }
 
         // Ensure visible range includes selected item
