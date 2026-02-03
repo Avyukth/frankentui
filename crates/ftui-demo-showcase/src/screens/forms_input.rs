@@ -803,9 +803,7 @@ impl FormsInput {
         } else {
             theme::muted()
         };
-        if show_footer
-            && let Some(footer_area) = chunks.get(idx)
-        {
+        if show_footer && let Some(footer_area) = chunks.get(idx) {
             Paragraph::new(hint)
                 .style(hint_style)
                 .render(*footer_area, frame);
