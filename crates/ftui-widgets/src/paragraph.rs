@@ -6,7 +6,7 @@ use crate::{Widget, draw_text_span_scrolled, draw_text_span_with_link, set_style
 use ftui_core::geometry::{Rect, Size};
 use ftui_render::frame::Frame;
 use ftui_style::Style;
-use ftui_text::{Text, WrapMode, wrap_text};
+use ftui_text::{Text, WrapMode};
 use unicode_width::UnicodeWidthStr;
 
 /// A widget that renders multi-line styled text.
@@ -334,16 +334,15 @@ impl Paragraph<'_> {
         let mut total_lines = 0;
 
         for line in self.text.lines() {
-            let plain = line.to_plain_text();
-            let line_width = UnicodeWidthStr::width(plain.as_str());
-
-            if line_width <= wrap_width {
+            let line_width = line.width();
+            if wrap_mode == WrapMode::None || line_width <= wrap_width {
                 total_lines += 1;
-            } else {
-                // Wrap this line and count resulting lines
-                let wrapped = wrap_text(&plain, wrap_width, wrap_mode);
-                total_lines += wrapped.len().max(1);
+                continue;
             }
+
+            // Wrap this line and count resulting lines (style-preserving path).
+            let wrapped = line.wrap(wrap_width, wrap_mode);
+            total_lines += wrapped.len().max(1);
         }
 
         total_lines.max(1)

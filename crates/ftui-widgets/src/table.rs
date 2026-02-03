@@ -52,6 +52,7 @@ impl Row {
 pub struct Table<'a> {
     rows: Vec<Row>,
     widths: Vec<Constraint>,
+    intrinsic_col_widths: Vec<u16>,
     header: Option<Row>,
     block: Option<Block<'a>>,
     style: Style,
@@ -68,9 +69,14 @@ impl<'a> Table<'a> {
         rows: impl IntoIterator<Item = Row>,
         widths: impl IntoIterator<Item = Constraint>,
     ) -> Self {
+        let rows: Vec<Row> = rows.into_iter().collect();
+        let widths: Vec<Constraint> = widths.into_iter().collect();
+        let col_count = widths.len();
+        let intrinsic_col_widths = Self::compute_intrinsic_widths(&rows, None, col_count);
         Self {
-            rows: rows.into_iter().collect(),
-            widths: widths.into_iter().collect(),
+            rows,
+            widths,
+            intrinsic_col_widths,
             header: None,
             block: None,
             style: Style::default(),
@@ -82,6 +88,11 @@ impl<'a> Table<'a> {
 
     /// Set the header row.
     pub fn header(mut self, header: Row) -> Self {
+        let col_count = self.widths.len();
+        if col_count > 0 {
+            self.intrinsic_col_widths =
+                Self::compute_intrinsic_widths(&self.rows, Some(&header), col_count);
+        }
         self.header = Some(header);
         self
     }
@@ -118,6 +129,30 @@ impl<'a> Table<'a> {
     pub fn hit_id(mut self, id: HitId) -> Self {
         self.hit_id = Some(id);
         self
+    }
+
+    fn compute_intrinsic_widths(rows: &[Row], header: Option<&Row>, col_count: usize) -> Vec<u16> {
+        if col_count == 0 {
+            return Vec::new();
+        }
+
+        let mut col_widths: Vec<u16> = vec![0; col_count];
+
+        if let Some(header) = header {
+            for (i, cell) in header.cells.iter().enumerate().take(col_count) {
+                let cell_width = cell.width() as u16;
+                col_widths[i] = col_widths[i].max(cell_width);
+            }
+        }
+
+        for row in rows {
+            for (i, cell) in row.cells.iter().enumerate().take(col_count) {
+                let cell_width = cell.width() as u16;
+                col_widths[i] = col_widths[i].max(cell_width);
+            }
+        }
+
+        col_widths
     }
 }
 
@@ -608,30 +643,13 @@ impl MeasurableWidget for Table<'_> {
             return SizeConstraints::ZERO;
         }
 
-        // Calculate column widths from cell content
-        let mut col_widths: Vec<u16> = vec![0; col_count];
-
-        // Measure header cells
-        if let Some(header) = &self.header {
-            for (i, cell) in header.cells.iter().enumerate() {
-                if i >= col_count {
-                    break;
-                }
-                let cell_width = cell.width() as u16;
-                col_widths[i] = col_widths[i].max(cell_width);
-            }
-        }
-
-        // Measure data cells
-        for row in &self.rows {
-            for (i, cell) in row.cells.iter().enumerate() {
-                if i >= col_count {
-                    break;
-                }
-                let cell_width = cell.width() as u16;
-                col_widths[i] = col_widths[i].max(cell_width);
-            }
-        }
+        let fallback;
+        let col_widths = if self.intrinsic_col_widths.len() == col_count {
+            &self.intrinsic_col_widths
+        } else {
+            fallback = Self::compute_intrinsic_widths(&self.rows, self.header.as_ref(), col_count);
+            &fallback
+        };
 
         // Total width = sum of column widths + column spacing
         // Use saturating arithmetic to prevent overflow with many/wide columns
