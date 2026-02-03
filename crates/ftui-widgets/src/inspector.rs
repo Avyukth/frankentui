@@ -34,9 +34,486 @@ use ftui_render::frame::{Frame, HitCell, HitData, HitId, HitRegion};
 
 use crate::{Widget, set_style_area};
 use ftui_style::Style;
+use std::io::Write;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Instant;
 
 #[cfg(feature = "tracing")]
 use tracing::{info_span, trace};
+
+// =============================================================================
+// Diagnostics + Telemetry (bd-17h9.8)
+// =============================================================================
+
+/// Global diagnostic enable flag (checked once at startup).
+static INSPECTOR_DIAGNOSTICS_ENABLED: AtomicBool = AtomicBool::new(false);
+/// Global monotonic event counter for deterministic ordering.
+static INSPECTOR_EVENT_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Initialize diagnostic settings from environment.
+pub fn init_diagnostics() {
+    let enabled = std::env::var("FTUI_INSPECTOR_DIAGNOSTICS")
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    INSPECTOR_DIAGNOSTICS_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Check if diagnostics are enabled.
+#[inline]
+pub fn diagnostics_enabled() -> bool {
+    INSPECTOR_DIAGNOSTICS_ENABLED.load(Ordering::Relaxed)
+}
+
+/// Set diagnostics enabled state (for testing).
+pub fn set_diagnostics_enabled(enabled: bool) {
+    INSPECTOR_DIAGNOSTICS_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Get next monotonic event sequence number.
+#[inline]
+fn next_event_seq() -> u64 {
+    INSPECTOR_EVENT_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Reset event counter (for testing determinism).
+pub fn reset_event_counter() {
+    INSPECTOR_EVENT_COUNTER.store(0, Ordering::Relaxed);
+}
+
+/// Check if deterministic mode is enabled.
+pub fn is_deterministic_mode() -> bool {
+    std::env::var("FTUI_INSPECTOR_DETERMINISTIC")
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Diagnostic event types for JSONL logging.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticEventKind {
+    /// Inspector toggled on/off.
+    InspectorToggled,
+    /// Inspector mode changed.
+    ModeChanged,
+    /// Hover position changed.
+    HoverChanged,
+    /// Selection changed.
+    SelectionChanged,
+    /// Detail panel toggled.
+    DetailPanelToggled,
+    /// Hit region visibility toggled.
+    HitsToggled,
+    /// Widget bounds visibility toggled.
+    BoundsToggled,
+    /// Widget name labels toggled.
+    NamesToggled,
+    /// Render time labels toggled.
+    TimesToggled,
+    /// Widgets cleared for a new frame.
+    WidgetsCleared,
+    /// Widget registered for inspection.
+    WidgetRegistered,
+}
+
+impl DiagnosticEventKind {
+    /// Get the JSONL event type string.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InspectorToggled => "inspector_toggled",
+            Self::ModeChanged => "mode_changed",
+            Self::HoverChanged => "hover_changed",
+            Self::SelectionChanged => "selection_changed",
+            Self::DetailPanelToggled => "detail_panel_toggled",
+            Self::HitsToggled => "hits_toggled",
+            Self::BoundsToggled => "bounds_toggled",
+            Self::NamesToggled => "names_toggled",
+            Self::TimesToggled => "times_toggled",
+            Self::WidgetsCleared => "widgets_cleared",
+            Self::WidgetRegistered => "widget_registered",
+        }
+    }
+}
+
+/// JSONL diagnostic log entry.
+#[derive(Debug, Clone)]
+pub struct DiagnosticEntry {
+    /// Monotonic sequence number.
+    pub seq: u64,
+    /// Timestamp in microseconds.
+    pub timestamp_us: u64,
+    /// Event kind.
+    pub kind: DiagnosticEventKind,
+    /// Current inspector mode.
+    pub mode: Option<InspectorMode>,
+    /// Previous inspector mode.
+    pub previous_mode: Option<InspectorMode>,
+    /// Hover position.
+    pub hover_pos: Option<(u16, u16)>,
+    /// Selected widget id.
+    pub selected: Option<HitId>,
+    /// Widget name (if applicable).
+    pub widget_name: Option<String>,
+    /// Widget area (if applicable).
+    pub widget_area: Option<Rect>,
+    /// Widget depth (if applicable).
+    pub widget_depth: Option<u8>,
+    /// Widget hit id (if applicable).
+    pub widget_hit_id: Option<HitId>,
+    /// Total widget count (if applicable).
+    pub widget_count: Option<usize>,
+    /// Flag name (for toggles).
+    pub flag: Option<String>,
+    /// Flag enabled state (for toggles).
+    pub enabled: Option<bool>,
+    /// Additional context string.
+    pub context: Option<String>,
+    /// Checksum for determinism verification.
+    pub checksum: u64,
+}
+
+impl DiagnosticEntry {
+    /// Create a new diagnostic entry with current timestamp.
+    pub fn new(kind: DiagnosticEventKind) -> Self {
+        let seq = next_event_seq();
+        let timestamp_us = if is_deterministic_mode() {
+            seq.saturating_mul(1_000)
+        } else {
+            static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+            let start = START.get_or_init(Instant::now);
+            start.elapsed().as_micros() as u64
+        };
+
+        Self {
+            seq,
+            timestamp_us,
+            kind,
+            mode: None,
+            previous_mode: None,
+            hover_pos: None,
+            selected: None,
+            widget_name: None,
+            widget_area: None,
+            widget_depth: None,
+            widget_hit_id: None,
+            widget_count: None,
+            flag: None,
+            enabled: None,
+            context: None,
+            checksum: 0,
+        }
+    }
+
+    /// Set inspector mode.
+    #[must_use]
+    pub fn with_mode(mut self, mode: InspectorMode) -> Self {
+        self.mode = Some(mode);
+        self
+    }
+
+    /// Set previous inspector mode.
+    #[must_use]
+    pub fn with_previous_mode(mut self, mode: InspectorMode) -> Self {
+        self.previous_mode = Some(mode);
+        self
+    }
+
+    /// Set hover position.
+    #[must_use]
+    pub fn with_hover_pos(mut self, pos: Option<(u16, u16)>) -> Self {
+        self.hover_pos = pos;
+        self
+    }
+
+    /// Set selected widget id.
+    #[must_use]
+    pub fn with_selected(mut self, selected: Option<HitId>) -> Self {
+        self.selected = selected;
+        self
+    }
+
+    /// Set widget info.
+    #[must_use]
+    pub fn with_widget(mut self, widget: &WidgetInfo) -> Self {
+        self.widget_name = Some(widget.name.clone());
+        self.widget_area = Some(widget.area);
+        self.widget_depth = Some(widget.depth);
+        self.widget_hit_id = widget.hit_id;
+        self
+    }
+
+    /// Set widget count.
+    #[must_use]
+    pub fn with_widget_count(mut self, count: usize) -> Self {
+        self.widget_count = Some(count);
+        self
+    }
+
+    /// Set flag toggle details.
+    #[must_use]
+    pub fn with_flag(mut self, flag: impl Into<String>, enabled: bool) -> Self {
+        self.flag = Some(flag.into());
+        self.enabled = Some(enabled);
+        self
+    }
+
+    /// Set context string.
+    #[must_use]
+    pub fn with_context(mut self, context: impl Into<String>) -> Self {
+        self.context = Some(context.into());
+        self
+    }
+
+    /// Compute and set checksum.
+    #[must_use]
+    pub fn with_checksum(mut self) -> Self {
+        self.checksum = self.compute_checksum();
+        self
+    }
+
+    /// Compute FNV-1a hash of entry fields.
+    fn compute_checksum(&self) -> u64 {
+        let mut hash: u64 = 0xcbf29ce484222325;
+        let payload = format!(
+            "{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}",
+            self.kind,
+            self.mode,
+            self.previous_mode,
+            self.hover_pos,
+            self.selected.map(|id| id.id()),
+            self.widget_name.as_deref().unwrap_or(""),
+            self.widget_area
+                .map(|r| format!("{},{},{},{}", r.x, r.y, r.width, r.height))
+                .unwrap_or_default(),
+            self.widget_depth.unwrap_or(0),
+            self.widget_hit_id.map(|id| id.id()).unwrap_or(0),
+            self.widget_count.unwrap_or(0),
+            self.flag.as_deref().unwrap_or(""),
+            self.enabled.unwrap_or(false)
+        );
+        for &b in payload.as_bytes() {
+            hash ^= b as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash
+    }
+
+    /// Format as JSONL string.
+    pub fn to_jsonl(&self) -> String {
+        let mut parts = vec![
+            format!("\"seq\":{}", self.seq),
+            format!("\"ts_us\":{}", self.timestamp_us),
+            format!("\"kind\":\"{}\"", self.kind.as_str()),
+        ];
+
+        if let Some(mode) = self.mode {
+            parts.push(format!("\"mode\":\"{}\"", mode.as_str()));
+        }
+        if let Some(mode) = self.previous_mode {
+            parts.push(format!("\"prev_mode\":\"{}\"", mode.as_str()));
+        }
+        if let Some((x, y)) = self.hover_pos {
+            parts.push(format!("\"hover_x\":{x}"));
+            parts.push(format!("\"hover_y\":{y}"));
+        }
+        if let Some(id) = self.selected {
+            parts.push(format!("\"selected_id\":{}", id.id()));
+        }
+        if let Some(ref name) = self.widget_name {
+            let escaped = name.replace('\\', "\\\\").replace('"', "\\\"");
+            parts.push(format!("\"widget\":\"{escaped}\""));
+        }
+        if let Some(area) = self.widget_area {
+            parts.push(format!("\"widget_x\":{}", area.x));
+            parts.push(format!("\"widget_y\":{}", area.y));
+            parts.push(format!("\"widget_w\":{}", area.width));
+            parts.push(format!("\"widget_h\":{}", area.height));
+        }
+        if let Some(depth) = self.widget_depth {
+            parts.push(format!("\"widget_depth\":{depth}"));
+        }
+        if let Some(id) = self.widget_hit_id {
+            parts.push(format!("\"widget_hit_id\":{}", id.id()));
+        }
+        if let Some(count) = self.widget_count {
+            parts.push(format!("\"widget_count\":{count}"));
+        }
+        if let Some(ref flag) = self.flag {
+            let escaped = flag.replace('\\', "\\\\").replace('"', "\\\"");
+            parts.push(format!("\"flag\":\"{escaped}\""));
+        }
+        if let Some(enabled) = self.enabled {
+            parts.push(format!("\"enabled\":{enabled}"));
+        }
+        if let Some(ref ctx) = self.context {
+            let escaped = ctx.replace('\\', "\\\\").replace('"', "\\\"");
+            parts.push(format!("\"context\":\"{escaped}\""));
+        }
+        parts.push(format!("\"checksum\":\"{:016x}\"", self.checksum));
+
+        format!("{{{}}}", parts.join(","))
+    }
+}
+
+/// Diagnostic log collector.
+#[derive(Debug, Default)]
+pub struct DiagnosticLog {
+    entries: Vec<DiagnosticEntry>,
+    max_entries: usize,
+    write_stderr: bool,
+}
+
+impl DiagnosticLog {
+    /// Create a new diagnostic log.
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            max_entries: 5000,
+            write_stderr: false,
+        }
+    }
+
+    /// Create a log that writes to stderr.
+    pub fn with_stderr(mut self) -> Self {
+        self.write_stderr = true;
+        self
+    }
+
+    /// Set maximum entries to keep.
+    pub fn with_max_entries(mut self, max: usize) -> Self {
+        self.max_entries = max;
+        self
+    }
+
+    /// Record a diagnostic entry.
+    pub fn record(&mut self, entry: DiagnosticEntry) {
+        if self.write_stderr {
+            let _ = writeln!(std::io::stderr(), "{}", entry.to_jsonl());
+        }
+        if self.max_entries > 0 && self.entries.len() >= self.max_entries {
+            self.entries.remove(0);
+        }
+        self.entries.push(entry);
+    }
+
+    /// Get all entries.
+    pub fn entries(&self) -> &[DiagnosticEntry] {
+        &self.entries
+    }
+
+    /// Get entries of a specific kind.
+    pub fn entries_of_kind(&self, kind: DiagnosticEventKind) -> Vec<&DiagnosticEntry> {
+        self.entries.iter().filter(|e| e.kind == kind).collect()
+    }
+
+    /// Clear all entries.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Export all entries as JSONL string.
+    pub fn to_jsonl(&self) -> String {
+        self.entries
+            .iter()
+            .map(DiagnosticEntry::to_jsonl)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+/// Callback type for telemetry hooks.
+pub type TelemetryCallback = Box<dyn Fn(&DiagnosticEntry) + Send + Sync>;
+
+/// Telemetry hooks for observing inspector events.
+#[derive(Default)]
+pub struct TelemetryHooks {
+    on_toggle: Option<TelemetryCallback>,
+    on_mode_change: Option<TelemetryCallback>,
+    on_hover_change: Option<TelemetryCallback>,
+    on_selection_change: Option<TelemetryCallback>,
+    on_any_event: Option<TelemetryCallback>,
+}
+
+impl std::fmt::Debug for TelemetryHooks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TelemetryHooks")
+            .field("on_toggle", &self.on_toggle.is_some())
+            .field("on_mode_change", &self.on_mode_change.is_some())
+            .field("on_hover_change", &self.on_hover_change.is_some())
+            .field("on_selection_change", &self.on_selection_change.is_some())
+            .field("on_any_event", &self.on_any_event.is_some())
+            .finish()
+    }
+}
+
+impl TelemetryHooks {
+    /// Create new empty hooks.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set toggle callback.
+    pub fn on_toggle(mut self, f: impl Fn(&DiagnosticEntry) + Send + Sync + 'static) -> Self {
+        self.on_toggle = Some(Box::new(f));
+        self
+    }
+
+    /// Set mode change callback.
+    pub fn on_mode_change(mut self, f: impl Fn(&DiagnosticEntry) + Send + Sync + 'static) -> Self {
+        self.on_mode_change = Some(Box::new(f));
+        self
+    }
+
+    /// Set hover change callback.
+    pub fn on_hover_change(mut self, f: impl Fn(&DiagnosticEntry) + Send + Sync + 'static) -> Self {
+        self.on_hover_change = Some(Box::new(f));
+        self
+    }
+
+    /// Set selection change callback.
+    pub fn on_selection_change(
+        mut self,
+        f: impl Fn(&DiagnosticEntry) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_selection_change = Some(Box::new(f));
+        self
+    }
+
+    /// Set catch-all callback.
+    pub fn on_any(mut self, f: impl Fn(&DiagnosticEntry) + Send + Sync + 'static) -> Self {
+        self.on_any_event = Some(Box::new(f));
+        self
+    }
+
+    /// Dispatch an entry to relevant hooks.
+    fn dispatch(&self, entry: &DiagnosticEntry) {
+        if let Some(ref cb) = self.on_any_event {
+            cb(entry);
+        }
+
+        match entry.kind {
+            DiagnosticEventKind::InspectorToggled => {
+                if let Some(ref cb) = self.on_toggle {
+                    cb(entry);
+                }
+            }
+            DiagnosticEventKind::ModeChanged => {
+                if let Some(ref cb) = self.on_mode_change {
+                    cb(entry);
+                }
+            }
+            DiagnosticEventKind::HoverChanged => {
+                if let Some(ref cb) = self.on_hover_change {
+                    cb(entry);
+                }
+            }
+            DiagnosticEventKind::SelectionChanged => {
+                if let Some(ref cb) = self.on_selection_change {
+                    cb(entry);
+                }
+            }
+            _ => {}
+        }
+    }
+}
 
 /// Inspector display mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -70,6 +547,16 @@ impl InspectorMode {
     #[inline]
     pub fn is_active(self) -> bool {
         self != Self::Off
+    }
+
+    /// Get a stable string representation for diagnostics.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::HitRegions => "hit_regions",
+            Self::WidgetBounds => "widget_bounds",
+            Self::Full => "full",
+        }
     }
 
     /// Check if hit regions should be shown.
@@ -226,27 +713,69 @@ pub struct InspectorState {
     pub show_names: bool,
     /// Toggle for render time display.
     pub show_times: bool,
+    /// Diagnostic log for telemetry (bd-17h9.8).
+    diagnostic_log: Option<DiagnosticLog>,
+    /// Telemetry hooks for external observers (bd-17h9.8).
+    telemetry_hooks: Option<TelemetryHooks>,
 }
 
 impl InspectorState {
     /// Create a new inspector state.
     #[must_use]
     pub fn new() -> Self {
+        let diagnostic_log = if diagnostics_enabled() {
+            Some(DiagnosticLog::new().with_stderr())
+        } else {
+            None
+        };
         Self {
             show_hits: true,
             show_bounds: true,
             show_names: true,
             show_times: false,
+            diagnostic_log,
+            telemetry_hooks: None,
             ..Default::default()
         }
     }
 
+    /// Create with diagnostic log enabled (for testing).
+    pub fn with_diagnostics(mut self) -> Self {
+        self.diagnostic_log = Some(DiagnosticLog::new());
+        self
+    }
+
+    /// Create with telemetry hooks.
+    pub fn with_telemetry_hooks(mut self, hooks: TelemetryHooks) -> Self {
+        self.telemetry_hooks = Some(hooks);
+        self
+    }
+
+    /// Get the diagnostic log (for testing).
+    pub fn diagnostic_log(&self) -> Option<&DiagnosticLog> {
+        self.diagnostic_log.as_ref()
+    }
+
+    /// Get mutable diagnostic log (for testing).
+    pub fn diagnostic_log_mut(&mut self) -> Option<&mut DiagnosticLog> {
+        self.diagnostic_log.as_mut()
+    }
+
     /// Toggle the inspector on/off.
     pub fn toggle(&mut self) {
+        let prev = self.mode;
         if self.mode.is_active() {
             self.mode = InspectorMode::Off;
         } else {
             self.mode = InspectorMode::Full;
+        }
+        if self.mode != prev {
+            self.record_diagnostic(
+                DiagnosticEntry::new(DiagnosticEventKind::InspectorToggled)
+                    .with_previous_mode(prev)
+                    .with_mode(self.mode)
+                    .with_flag("inspector", self.mode.is_active()),
+            );
         }
     }
 
@@ -258,69 +787,142 @@ impl InspectorState {
 
     /// Cycle through display modes.
     pub fn cycle_mode(&mut self) {
+        let prev = self.mode;
         self.mode = self.mode.cycle();
+        if self.mode != prev {
+            self.record_diagnostic(
+                DiagnosticEntry::new(DiagnosticEventKind::ModeChanged)
+                    .with_previous_mode(prev)
+                    .with_mode(self.mode),
+            );
+        }
     }
 
     /// Set mode directly (0=Off, 1=HitRegions, 2=WidgetBounds, 3=Full).
     pub fn set_mode(&mut self, mode_num: u8) {
+        let prev = self.mode;
         self.mode = match mode_num {
             0 => InspectorMode::Off,
             1 => InspectorMode::HitRegions,
             2 => InspectorMode::WidgetBounds,
             _ => InspectorMode::Full,
         };
+        if self.mode != prev {
+            self.record_diagnostic(
+                DiagnosticEntry::new(DiagnosticEventKind::ModeChanged)
+                    .with_previous_mode(prev)
+                    .with_mode(self.mode),
+            );
+        }
     }
 
     /// Update hover position from mouse event.
     pub fn set_hover(&mut self, pos: Option<(u16, u16)>) {
-        self.hover_pos = pos;
+        if self.hover_pos != pos {
+            self.hover_pos = pos;
+            self.record_diagnostic(
+                DiagnosticEntry::new(DiagnosticEventKind::HoverChanged).with_hover_pos(pos),
+            );
+        }
     }
 
     /// Select a widget by hit ID.
     pub fn select(&mut self, id: Option<HitId>) {
-        self.selected = id;
+        if self.selected != id {
+            self.selected = id;
+            self.record_diagnostic(
+                DiagnosticEntry::new(DiagnosticEventKind::SelectionChanged).with_selected(id),
+            );
+        }
     }
 
     /// Clear selection.
     pub fn clear_selection(&mut self) {
-        self.selected = None;
+        self.select(None);
     }
 
     /// Toggle the detail panel.
     pub fn toggle_detail_panel(&mut self) {
         self.show_detail_panel = !self.show_detail_panel;
+        self.record_diagnostic(
+            DiagnosticEntry::new(DiagnosticEventKind::DetailPanelToggled)
+                .with_flag("detail_panel", self.show_detail_panel),
+        );
     }
 
     /// Toggle hit regions visibility.
     pub fn toggle_hits(&mut self) {
         self.show_hits = !self.show_hits;
+        self.record_diagnostic(
+            DiagnosticEntry::new(DiagnosticEventKind::HitsToggled)
+                .with_flag("hits", self.show_hits),
+        );
     }
 
     /// Toggle widget bounds visibility.
     pub fn toggle_bounds(&mut self) {
         self.show_bounds = !self.show_bounds;
+        self.record_diagnostic(
+            DiagnosticEntry::new(DiagnosticEventKind::BoundsToggled)
+                .with_flag("bounds", self.show_bounds),
+        );
     }
 
     /// Toggle name labels visibility.
     pub fn toggle_names(&mut self) {
         self.show_names = !self.show_names;
+        self.record_diagnostic(
+            DiagnosticEntry::new(DiagnosticEventKind::NamesToggled)
+                .with_flag("names", self.show_names),
+        );
     }
 
     /// Toggle render time visibility.
     pub fn toggle_times(&mut self) {
         self.show_times = !self.show_times;
+        self.record_diagnostic(
+            DiagnosticEntry::new(DiagnosticEventKind::TimesToggled)
+                .with_flag("times", self.show_times),
+        );
     }
 
     /// Clear widget info for new frame.
     pub fn clear_widgets(&mut self) {
+        let count = self.widgets.len();
         self.widgets.clear();
+        if count > 0 {
+            self.record_diagnostic(
+                DiagnosticEntry::new(DiagnosticEventKind::WidgetsCleared).with_widget_count(count),
+            );
+        }
     }
 
     /// Register a widget for inspection.
     pub fn register_widget(&mut self, info: WidgetInfo) {
         #[cfg(feature = "tracing")]
         trace!(name = info.name, area = ?info.area, "Registered widget for inspection");
+        let widget_count = self.widgets.len() + 1;
+        self.record_diagnostic(
+            DiagnosticEntry::new(DiagnosticEventKind::WidgetRegistered)
+                .with_widget(&info)
+                .with_widget_count(widget_count),
+        );
         self.widgets.push(info);
+    }
+
+    fn record_diagnostic(&mut self, entry: DiagnosticEntry) {
+        if self.diagnostic_log.is_none() && self.telemetry_hooks.is_none() {
+            return;
+        }
+        let entry = entry.with_checksum();
+
+        if let Some(ref hooks) = self.telemetry_hooks {
+            hooks.dispatch(&entry);
+        }
+
+        if let Some(ref mut log) = self.diagnostic_log {
+            log.record(entry);
+        }
     }
 
     /// Check if we should render hit regions.
