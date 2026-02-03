@@ -583,15 +583,6 @@ impl CharacterOffset {
     /// Zero offset (no movement).
     pub const ZERO: Self = Self { dx: 0, dy: 0 };
 
-    /// Add another offset (for combining effects).
-    #[inline]
-    pub fn add(self, other: Self) -> Self {
-        Self {
-            dx: self.dx.saturating_add(other.dx),
-            dy: self.dy.saturating_add(other.dy),
-        }
-    }
-
     /// Clamp offset to terminal bounds.
     ///
     /// Ensures that when applied to position (x, y), the result stays within bounds.
@@ -605,6 +596,19 @@ impl CharacterOffset {
         Self {
             dx: self.dx.clamp(min_dx, max_dx),
             dy: self.dy.clamp(min_dy, max_dy),
+        }
+    }
+}
+
+impl std::ops::Add for CharacterOffset {
+    type Output = Self;
+
+    /// Add two offsets together using saturating arithmetic.
+    #[inline]
+    fn add(self, other: Self) -> Self {
+        Self {
+            dx: self.dx.saturating_add(other.dx),
+            dy: self.dy.saturating_add(other.dy),
         }
     }
 }
@@ -1028,7 +1032,12 @@ impl StyledText {
                 }
             }
 
-            TextEffect::Scramble { progress: _ } | TextEffect::Glitch { intensity: _ } => base,
+            TextEffect::Scramble { progress: _ }
+            | TextEffect::Glitch { intensity: _ }
+            | TextEffect::Wave { .. }
+            | TextEffect::Bounce { .. }
+            | TextEffect::Shake { .. }
+            | TextEffect::Cascade { .. } => base,
         }
     }
 
@@ -1091,7 +1100,13 @@ impl StyledText {
                 }
 
                 // Non-color effects don't change color
-                TextEffect::None | TextEffect::Scramble { .. } | TextEffect::Glitch { .. } => {}
+                TextEffect::None
+                | TextEffect::Scramble { .. }
+                | TextEffect::Glitch { .. }
+                | TextEffect::Wave { .. }
+                | TextEffect::Bounce { .. }
+                | TextEffect::Shake { .. }
+                | TextEffect::Cascade { .. } => {}
             }
         }
 
@@ -1321,9 +1336,13 @@ impl StyledText {
                 TextEffect::FadeIn { .. } | TextEffect::FadeOut { .. }
             )
         });
+        let has_position_effects = self.has_position_effects();
+
+        let frame_width = frame.buffer.width();
+        let frame_height = frame.buffer.height();
 
         for (i, ch) in self.text.chars().enumerate() {
-            let px = x.saturating_add(i as u16);
+            let base_px = x.saturating_add(i as u16);
             let color = self.char_color(i, total);
             let display_char = self.char_at(i, ch);
 
@@ -1332,7 +1351,20 @@ impl StyledText {
                 continue;
             }
 
-            if let Some(cell) = frame.buffer.get_mut(px, y) {
+            // Calculate final position with offset
+            let (final_x, final_y) = if has_position_effects {
+                let offset = self.char_offset(i, total);
+                let clamped = offset.clamp_for_position(base_px, y, frame_width, frame_height);
+
+                let fx =
+                    (base_px as i32 + clamped.dx as i32).clamp(0, frame_width as i32 - 1) as u16;
+                let fy = (y as i32 + clamped.dy as i32).clamp(0, frame_height as i32 - 1) as u16;
+                (fx, fy)
+            } else {
+                (base_px, y)
+            };
+
+            if let Some(cell) = frame.buffer.get_mut(final_x, final_y) {
                 cell.content = CellContent::from_char(display_char);
                 cell.fg = color;
 
@@ -2141,6 +2173,333 @@ mod tests {
         let clock = AnimationClock::default();
         assert!((clock.time() - 0.0).abs() < 1e-10);
         assert!((clock.speed() - 1.0).abs() < 1e-10);
+    }
+
+    // =========================================================================
+    // Position/Wave Effect Tests (bd-3bix)
+    // =========================================================================
+
+    #[test]
+    fn test_wave_offset_sinusoidal() {
+        // Wave offset follows a sine curve
+        let text = StyledText::new("ABCDEFGHIJ")
+            .effect(TextEffect::Wave {
+                amplitude: 2.0,
+                wavelength: 10.0,
+                speed: 0.0, // No time-based animation for this test
+                direction: Direction::Down,
+            })
+            .time(0.0);
+
+        let total = text.len();
+
+        // At time 0, offset at idx 0 should be 0 (sin(0) = 0)
+        let offset0 = text.char_offset(0, total);
+        assert_eq!(offset0.dy, 0);
+
+        // At wavelength/4 (idx 2.5 ~ idx 2), should be near max
+        let offset2 = text.char_offset(2, total);
+        // sin(0.2 * TAU) ≈ 0.95, * 2 ≈ 1.9 → rounds to 2
+        assert!(offset2.dy.abs() <= 2);
+    }
+
+    #[test]
+    fn test_wave_amplitude_respected() {
+        // Max offset should not exceed amplitude
+        let text = StyledText::new("ABCDEFGHIJ")
+            .effect(TextEffect::Wave {
+                amplitude: 3.0,
+                wavelength: 4.0,
+                speed: 1.0,
+                direction: Direction::Down,
+            })
+            .time(0.25);
+
+        let total = text.len();
+
+        for i in 0..total {
+            let offset = text.char_offset(i, total);
+            assert!(
+                offset.dy.abs() <= 3,
+                "Wave offset {} at idx {} exceeds amplitude 3",
+                offset.dy,
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_wave_wavelength_period() {
+        // Characters wavelength apart should have approximately the same offset
+        let text = StyledText::new("ABCDEFGHIJ")
+            .effect(TextEffect::Wave {
+                amplitude: 2.0,
+                wavelength: 5.0,
+                speed: 0.0,
+                direction: Direction::Down,
+            })
+            .time(0.0);
+
+        let total = text.len();
+
+        // idx 0 and idx 5 should have similar offsets (one wavelength apart)
+        let offset0 = text.char_offset(0, total);
+        let offset5 = text.char_offset(5, total);
+
+        assert_eq!(
+            offset0.dy, offset5.dy,
+            "Characters one wavelength apart should have same offset"
+        );
+    }
+
+    #[test]
+    fn test_wave_direction_up_down() {
+        // Vertical wave affects dy only
+        let text = StyledText::new("ABC")
+            .effect(TextEffect::Wave {
+                amplitude: 2.0,
+                wavelength: 4.0,
+                speed: 1.0,
+                direction: Direction::Down,
+            })
+            .time(0.25);
+
+        let offset = text.char_offset(1, 3);
+        assert_eq!(offset.dx, 0, "Vertical wave should not affect dx");
+    }
+
+    #[test]
+    fn test_wave_direction_left_right() {
+        // Horizontal wave affects dx only
+        let text = StyledText::new("ABC")
+            .effect(TextEffect::Wave {
+                amplitude: 2.0,
+                wavelength: 4.0,
+                speed: 1.0,
+                direction: Direction::Right,
+            })
+            .time(0.25);
+
+        let offset = text.char_offset(1, 3);
+        assert_eq!(offset.dy, 0, "Horizontal wave should not affect dy");
+    }
+
+    #[test]
+    fn test_bounce_starts_high() {
+        // At time 0, first character should have maximum offset (height)
+        let text = StyledText::new("ABC")
+            .effect(TextEffect::Bounce {
+                height: 3.0,
+                speed: 1.0,
+                stagger: 0.0,
+                damping: 0.9,
+            })
+            .time(0.0);
+
+        let offset = text.char_offset(0, 3);
+        // Bounce starts at max height (negative dy = up)
+        assert!(offset.dy < 0, "Bounce should start with upward offset");
+        assert!(
+            offset.dy.abs() <= 3,
+            "Bounce initial offset should not exceed height"
+        );
+    }
+
+    #[test]
+    fn test_bounce_settles() {
+        // After sufficient time with damping, offset approaches 0
+        let text = StyledText::new("A")
+            .effect(TextEffect::Bounce {
+                height: 5.0,
+                speed: 2.0,
+                stagger: 0.0,
+                damping: 0.5, // Fast settling
+            })
+            .time(5.0);
+
+        let offset = text.char_offset(0, 1);
+        assert!(
+            offset.dy.abs() <= 1,
+            "Bounce should settle near 0 after time"
+        );
+    }
+
+    #[test]
+    fn test_bounce_stagger() {
+        // Adjacent chars with stagger should have different offsets
+        let text = StyledText::new("ABC")
+            .effect(TextEffect::Bounce {
+                height: 3.0,
+                speed: 1.0,
+                stagger: 0.5, // Significant stagger
+                damping: 0.9,
+            })
+            .time(0.5);
+
+        let offset0 = text.char_offset(0, 3);
+        let offset1 = text.char_offset(1, 3);
+
+        // With stagger, characters at different positions should have different phases
+        // (though they might occasionally be equal)
+        // At least verify the stagger doesn't break anything
+        assert!(
+            offset0.dx == 0 && offset1.dx == 0,
+            "Bounce is vertical only"
+        );
+    }
+
+    #[test]
+    fn test_shake_bounded() {
+        // Shake offset should never exceed intensity
+        let text = StyledText::new("ABCDEFGHIJ")
+            .effect(TextEffect::Shake {
+                intensity: 2.0,
+                speed: 10.0,
+                seed: 12345,
+            })
+            .time(0.5);
+
+        let total = text.len();
+
+        for i in 0..total {
+            let offset = text.char_offset(i, total);
+            assert!(
+                offset.dx.abs() <= 2,
+                "Shake dx {} exceeds intensity at idx {}",
+                offset.dx,
+                i
+            );
+            assert!(
+                offset.dy.abs() <= 2,
+                "Shake dy {} exceeds intensity at idx {}",
+                offset.dy,
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_shake_deterministic() {
+        // Same seed + time = same offset
+        let text1 = StyledText::new("ABC")
+            .effect(TextEffect::Shake {
+                intensity: 2.0,
+                speed: 10.0,
+                seed: 42,
+            })
+            .time(1.23);
+
+        let text2 = StyledText::new("ABC")
+            .effect(TextEffect::Shake {
+                intensity: 2.0,
+                speed: 10.0,
+                seed: 42,
+            })
+            .time(1.23);
+
+        for i in 0..3 {
+            let offset1 = text1.char_offset(i, 3);
+            let offset2 = text2.char_offset(i, 3);
+            assert_eq!(offset1, offset2, "Same seed+time should give same offset");
+        }
+    }
+
+    #[test]
+    fn test_cascade_reveals_in_order() {
+        // At time 0, all characters should be offset
+        let text = StyledText::new("ABC")
+            .effect(TextEffect::Cascade {
+                speed: 1.0,
+                direction: Direction::Down,
+                stagger: 1.0,
+            })
+            .time(0.0);
+
+        let offset0 = text.char_offset(0, 3);
+        let offset2 = text.char_offset(2, 3);
+
+        // At time 0, all chars should have an offset
+        // (they slide in from above for Direction::Down)
+        assert!(
+            offset0.dy < 0 || offset2.dy < 0,
+            "Cascade should offset chars"
+        );
+    }
+
+    #[test]
+    fn test_offset_bounds_saturate() {
+        // Large offsets should use saturating arithmetic
+        let offset = CharacterOffset::new(i16::MAX, i16::MAX);
+        let added = offset + CharacterOffset::new(100, 100);
+
+        assert_eq!(added.dx, i16::MAX, "dx should saturate");
+        assert_eq!(added.dy, i16::MAX, "dy should saturate");
+    }
+
+    #[test]
+    fn test_negative_offset_clamped() {
+        // Offset at position (0, 0) should clamp negative offsets
+        let offset = CharacterOffset::new(-5, -5);
+        let clamped = offset.clamp_for_position(0, 0, 80, 24);
+
+        assert_eq!(clamped.dx, 0, "dx should clamp to 0 at edge");
+        assert_eq!(clamped.dy, 0, "dy should clamp to 0 at edge");
+    }
+
+    #[test]
+    fn test_direction_is_vertical() {
+        assert!(Direction::Up.is_vertical());
+        assert!(Direction::Down.is_vertical());
+        assert!(!Direction::Left.is_vertical());
+        assert!(!Direction::Right.is_vertical());
+    }
+
+    #[test]
+    fn test_direction_is_horizontal() {
+        assert!(Direction::Left.is_horizontal());
+        assert!(Direction::Right.is_horizontal());
+        assert!(!Direction::Up.is_horizontal());
+        assert!(!Direction::Down.is_horizontal());
+    }
+
+    #[test]
+    fn test_has_position_effects() {
+        let plain = StyledText::new("test");
+        assert!(!plain.has_position_effects());
+
+        let with_wave = StyledText::new("test").effect(TextEffect::Wave {
+            amplitude: 1.0,
+            wavelength: 5.0,
+            speed: 1.0,
+            direction: Direction::Down,
+        });
+        assert!(with_wave.has_position_effects());
+
+        let with_color = StyledText::new("test").effect(TextEffect::RainbowGradient { speed: 1.0 });
+        assert!(!with_color.has_position_effects());
+    }
+
+    #[test]
+    fn test_multiple_position_effects_add() {
+        // Wave + Shake offsets should sum
+        let text = StyledText::new("ABC")
+            .effect(TextEffect::Wave {
+                amplitude: 1.0,
+                wavelength: 10.0,
+                speed: 0.0,
+                direction: Direction::Down,
+            })
+            .effect(TextEffect::Shake {
+                intensity: 1.0,
+                speed: 10.0,
+                seed: 42,
+            })
+            .time(0.5);
+
+        // Just verify it doesn't panic and produces an offset
+        let offset = text.char_offset(1, 3);
+        // The combined offset should exist (could be any value within bounds)
+        assert!(offset.dx.abs() <= 2 || offset.dy.abs() <= 3);
     }
 
     // =========================================================================

@@ -349,6 +349,179 @@ impl<'a> MacroPlayer<'a> {
 }
 
 // ---------------------------------------------------------------------------
+// MacroPlayback – deterministic scheduler for live playback
+// ---------------------------------------------------------------------------
+
+/// Deterministic playback scheduler with speed and looping controls.
+///
+/// Invariants:
+/// - Event order is preserved.
+/// - `elapsed` is monotonic for a given `advance` sequence.
+/// - No events are emitted without their cumulative delay being satisfied.
+///
+/// Failure modes:
+/// - If total duration is zero and looping is enabled, looping is ignored to
+///   avoid infinite emission within a single `advance` call.
+#[derive(Debug, Clone)]
+pub struct MacroPlayback<'a> {
+    input_macro: &'a InputMacro,
+    position: usize,
+    elapsed: Duration,
+    next_due: Duration,
+    speed: f64,
+    looping: bool,
+}
+
+impl<'a> MacroPlayback<'a> {
+    /// Create a new playback scheduler for the given macro.
+    pub fn new(input_macro: &'a InputMacro) -> Self {
+        let next_due = input_macro
+            .events()
+            .first()
+            .map(|e| e.delay)
+            .unwrap_or(Duration::ZERO);
+        Self {
+            input_macro,
+            position: 0,
+            elapsed: Duration::ZERO,
+            next_due,
+            speed: 1.0,
+            looping: false,
+        }
+    }
+
+    /// Set playback speed (must be finite and positive).
+    pub fn set_speed(&mut self, speed: f64) {
+        self.speed = normalize_speed(speed);
+    }
+
+    /// Fluent speed setter.
+    pub fn with_speed(mut self, speed: f64) -> Self {
+        self.set_speed(speed);
+        self
+    }
+
+    /// Enable or disable looping.
+    pub fn set_looping(&mut self, looping: bool) {
+        self.looping = looping;
+    }
+
+    /// Fluent looping setter.
+    pub fn with_looping(mut self, looping: bool) -> Self {
+        self.set_looping(looping);
+        self
+    }
+
+    /// Get the current playback speed.
+    pub fn speed(&self) -> f64 {
+        self.speed
+    }
+
+    /// Get current playback position (event index).
+    pub fn position(&self) -> usize {
+        self.position
+    }
+
+    /// Get elapsed virtual time.
+    pub fn elapsed(&self) -> Duration {
+        self.elapsed
+    }
+
+    /// Check if playback is complete (non-looping).
+    pub fn is_done(&self) -> bool {
+        !self.looping && self.position >= self.input_macro.len()
+    }
+
+    /// Reset playback to the beginning.
+    pub fn reset(&mut self) {
+        self.position = 0;
+        self.elapsed = Duration::ZERO;
+        self.next_due = self
+            .input_macro
+            .events()
+            .first()
+            .map(|e| e.delay)
+            .unwrap_or(Duration::ZERO);
+    }
+
+    /// Advance playback time and return any events now due.
+    pub fn advance(&mut self, delta: Duration) -> Vec<Event> {
+        if self.input_macro.is_empty() || self.is_done() {
+            return Vec::new();
+        }
+
+        self.elapsed += scale_duration(delta, self.speed);
+        self.drain_due_events()
+    }
+
+    fn drain_due_events(&mut self) -> Vec<Event> {
+        let mut out = Vec::new();
+        let total_duration = self.input_macro.total_duration();
+        let can_loop = self.looping && total_duration > Duration::ZERO;
+        if can_loop && self.position >= self.input_macro.len() {
+            let total_secs = total_duration.as_secs_f64();
+            if total_secs > 0.0 {
+                let elapsed_secs = self.elapsed.as_secs_f64() % total_secs;
+                self.elapsed = Duration::from_secs_f64(elapsed_secs);
+            } else {
+                self.elapsed = Duration::ZERO;
+            }
+            self.position = 0;
+            self.next_due = self
+                .input_macro
+                .events()
+                .first()
+                .map(|e| e.delay)
+                .unwrap_or(Duration::ZERO);
+        }
+
+        while self.position < self.input_macro.len() && self.elapsed >= self.next_due {
+            let timed = &self.input_macro.events[self.position];
+            #[cfg(feature = "tracing")]
+            tracing::debug!(event = ?timed.event, delay = ?timed.delay, "macro playback event");
+            out.push(timed.event.clone());
+            self.position += 1;
+            if self.position < self.input_macro.len() {
+                self.next_due += self.input_macro.events[self.position].delay;
+            } else if can_loop {
+                // Carry any overflow elapsed time into the next loop.
+                self.elapsed = self.elapsed.saturating_sub(total_duration);
+                self.position = 0;
+                self.next_due = self
+                    .input_macro
+                    .events()
+                    .first()
+                    .map(|e| e.delay)
+                    .unwrap_or(Duration::ZERO);
+            }
+        }
+
+        out
+    }
+}
+
+fn normalize_speed(speed: f64) -> f64 {
+    if !speed.is_finite() {
+        return 1.0;
+    }
+    if speed <= 0.0 {
+        return 0.0;
+    }
+    speed
+}
+
+fn scale_duration(delta: Duration, speed: f64) -> Duration {
+    if delta == Duration::ZERO {
+        return Duration::ZERO;
+    }
+    let speed = normalize_speed(speed);
+    if speed == 1.0 {
+        return delta;
+    }
+    Duration::from_secs_f64(delta.as_secs_f64() * speed)
+}
+
+// ---------------------------------------------------------------------------
 // EventRecorder – live event stream recording with start/stop/pause
 // ---------------------------------------------------------------------------
 
@@ -967,6 +1140,79 @@ mod tests {
             vec![Duration::from_millis(10), Duration::from_millis(25)]
         );
         assert_eq!(sim.model().value, 3);
+    }
+
+    // ---------- MacroPlayback tests ----------
+
+    #[test]
+    fn playback_emits_due_events_in_order() {
+        let events = vec![
+            TimedEvent::new(key_event('+'), Duration::from_millis(10)),
+            TimedEvent::new(key_event('+'), Duration::from_millis(10)),
+        ];
+        let m = InputMacro::new(
+            events,
+            MacroMetadata {
+                name: "playback".to_string(),
+                terminal_size: (80, 24),
+                total_duration: Duration::from_millis(20),
+            },
+        );
+
+        let mut playback = MacroPlayback::new(&m);
+        assert!(playback.advance(Duration::from_millis(5)).is_empty());
+        let first = playback.advance(Duration::from_millis(5));
+        assert_eq!(first.len(), 1);
+        let second = playback.advance(Duration::from_millis(10));
+        assert_eq!(second.len(), 1);
+        assert!(playback.advance(Duration::from_millis(10)).is_empty());
+    }
+
+    #[test]
+    fn playback_speed_scales_time() {
+        let events = vec![TimedEvent::new(key_event('+'), Duration::from_millis(10))];
+        let m = InputMacro::new(
+            events,
+            MacroMetadata {
+                name: "speed".to_string(),
+                terminal_size: (80, 24),
+                total_duration: Duration::from_millis(10),
+            },
+        );
+
+        let mut playback = MacroPlayback::new(&m).with_speed(2.0);
+        let events = playback.advance(Duration::from_millis(5));
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn playback_looping_handles_large_delta() {
+        let events = vec![
+            TimedEvent::new(key_event('+'), Duration::from_millis(10)),
+            TimedEvent::new(key_event('+'), Duration::from_millis(10)),
+        ];
+        let m = InputMacro::new(
+            events,
+            MacroMetadata {
+                name: "loop".to_string(),
+                terminal_size: (80, 24),
+                total_duration: Duration::from_millis(20),
+            },
+        );
+
+        let mut playback = MacroPlayback::new(&m).with_looping(true);
+        let events = playback.advance(Duration::from_millis(50));
+        assert_eq!(events.len(), 5);
+    }
+
+    #[test]
+    fn playback_zero_duration_does_not_loop_forever() {
+        let m = InputMacro::from_events("zero", vec![key_event('+'), key_event('+')]);
+        let mut playback = MacroPlayback::new(&m).with_looping(true);
+
+        let events = playback.advance(Duration::ZERO);
+        assert_eq!(events.len(), 2);
+        assert!(playback.advance(Duration::from_millis(10)).is_empty());
     }
 
     #[test]

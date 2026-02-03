@@ -397,11 +397,7 @@ impl Scrim {
     }
 
     /// Vertical fade scrim using a custom color (bounded opacity).
-    pub fn vertical_fade_color(
-        color: PackedRgba,
-        top_opacity: f32,
-        bottom_opacity: f32,
-    ) -> Self {
+    pub fn vertical_fade_color(color: PackedRgba, top_opacity: f32, bottom_opacity: f32) -> Self {
         Self::VerticalFade {
             top_opacity: ScrimOpacity::bounded(top_opacity),
             bottom_opacity: ScrimOpacity::bounded(bottom_opacity),
@@ -914,5 +910,76 @@ mod tests {
         let cap2 = backdrop.fx_buf.borrow().capacity();
 
         assert_eq!(cap1, cap2);
+    }
+
+    #[test]
+    fn clamp_scrim_opacity_bounds() {
+        assert_eq!(clamp_scrim_opacity(-1.0), SCRIM_OPACITY_MIN);
+        assert_eq!(clamp_scrim_opacity(2.0), SCRIM_OPACITY_MAX);
+        assert_eq!(clamp_scrim_opacity(0.4), 0.4);
+    }
+
+    #[test]
+    fn luminance_black_white() {
+        let black = PackedRgba::rgb(0, 0, 0);
+        let white = PackedRgba::rgb(255, 255, 255);
+        let l_black = luminance(black);
+        let l_white = luminance(white);
+        assert!(l_black <= 0.0001);
+        assert!(l_white >= 0.999);
+    }
+
+    #[test]
+    fn contrast_ratio_black_white_is_high() {
+        let black = PackedRgba::rgb(0, 0, 0);
+        let white = PackedRgba::rgb(255, 255, 255);
+        let ratio = contrast_ratio(white, black);
+        assert!(ratio > 20.0);
+    }
+
+    #[test]
+    fn scrim_uniform_bounded_clamps_to_min() {
+        let theme = ThemeInputs::default_dark();
+        let scrim = Scrim::uniform(0.0);
+        let overlay = scrim.overlay_at(&theme, 0, 0, 4, 4);
+        let expected = theme.bg_overlay.with_opacity(SCRIM_OPACITY_MIN);
+        assert_eq!(overlay, expected);
+    }
+
+    #[test]
+    fn scrim_uniform_raw_allows_zero() {
+        let theme = ThemeInputs::default_dark();
+        let scrim = Scrim::uniform_raw(0.0);
+        let overlay = scrim.overlay_at(&theme, 0, 0, 4, 4);
+        assert_eq!(overlay.a(), 0);
+        assert_eq!(overlay.r(), theme.bg_overlay.r());
+        assert_eq!(overlay.g(), theme.bg_overlay.g());
+        assert_eq!(overlay.b(), theme.bg_overlay.b());
+    }
+
+    #[test]
+    fn scrim_vertical_fade_interpolates() {
+        let theme = ThemeInputs::default_dark();
+        let scrim = Scrim::vertical_fade(0.1, 0.5);
+        let top = scrim.overlay_at(&theme, 0, 0, 1, 3);
+        let mid = scrim.overlay_at(&theme, 0, 1, 1, 3);
+        let bottom = scrim.overlay_at(&theme, 0, 2, 1, 3);
+
+        let top_expected = theme.bg_overlay.with_opacity(0.1);
+        let mid_expected = theme.bg_overlay.with_opacity(0.3);
+        let bottom_expected = theme.bg_overlay.with_opacity(0.5);
+
+        assert_eq!(top, top_expected);
+        assert_eq!(mid, mid_expected);
+        assert_eq!(bottom, bottom_expected);
+    }
+
+    #[test]
+    fn scrim_vignette_edges_are_darker() {
+        let theme = ThemeInputs::default_dark();
+        let scrim = Scrim::vignette(0.6);
+        let center = scrim.overlay_at(&theme, 2, 2, 5, 5).a();
+        let edge = scrim.overlay_at(&theme, 0, 0, 5, 5).a();
+        assert!(edge >= center);
     }
 }

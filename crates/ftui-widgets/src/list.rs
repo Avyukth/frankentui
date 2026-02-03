@@ -652,9 +652,9 @@ mod tests {
     #[test]
     fn list_measure_multiple_items() {
         let items = vec![
-            ListItem::new("Short"),    // 5 chars
+            ListItem::new("Short"),      // 5 chars
             ListItem::new("LongerItem"), // 10 chars
-            ListItem::new("Tiny"),     // 4 chars
+            ListItem::new("Tiny"),       // 4 chars
         ];
         let list = List::new(items);
         let constraints = list.measure(Size::MAX);

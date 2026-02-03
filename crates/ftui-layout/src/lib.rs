@@ -496,7 +496,10 @@ where
                 remaining = remaining.saturating_sub(size);
                 // FitContent items don't grow beyond preferred
             }
-            Constraint::FitContentBounded { min: min_bound, max: max_bound } => {
+            Constraint::FitContentBounded {
+                min: min_bound,
+                max: max_bound,
+            } => {
                 // Use measurer to get preferred size, clamped to bounds
                 let hint = measurer(i, remaining);
                 let preferred = hint.preferred.max(min_bound).min(max_bound);
@@ -940,6 +943,248 @@ mod tests {
                 "Rect {:?} exceeds vertical bounds of {:?}",
                 rect,
                 inner
+            );
+        }
+    }
+
+    // --- Fill constraint ---
+
+    #[test]
+    fn fill_takes_remaining_space() {
+        let flex = Flex::horizontal().constraints([Constraint::Fixed(20), Constraint::Fill]);
+        let rects = flex.split(Rect::new(0, 0, 100, 10));
+        assert_eq!(rects[0].width, 20);
+        assert_eq!(rects[1].width, 80); // Fill gets remaining
+    }
+
+    #[test]
+    fn multiple_fills_share_space() {
+        let flex = Flex::horizontal().constraints([Constraint::Fill, Constraint::Fill]);
+        let rects = flex.split(Rect::new(0, 0, 100, 10));
+        assert_eq!(rects[0].width, 50);
+        assert_eq!(rects[1].width, 50);
+    }
+
+    // --- FitContent constraint ---
+
+    #[test]
+    fn fit_content_uses_preferred_size() {
+        let flex = Flex::horizontal().constraints([Constraint::FitContent, Constraint::Fill]);
+        let rects = flex.split_with_measurer(Rect::new(0, 0, 100, 10), |idx, _| {
+            if idx == 0 {
+                LayoutSizeHint {
+                    min: 5,
+                    preferred: 30,
+                    max: None,
+                }
+            } else {
+                LayoutSizeHint::ZERO
+            }
+        });
+        assert_eq!(rects[0].width, 30); // FitContent gets preferred
+        assert_eq!(rects[1].width, 70); // Fill gets remainder
+    }
+
+    #[test]
+    fn fit_content_clamps_to_available() {
+        let flex = Flex::horizontal().constraints([Constraint::FitContent, Constraint::FitContent]);
+        let rects = flex.split_with_measurer(Rect::new(0, 0, 100, 10), |_, _| LayoutSizeHint {
+            min: 10,
+            preferred: 80,
+            max: None,
+        });
+        // First FitContent takes 80, second gets remaining 20
+        assert_eq!(rects[0].width, 80);
+        assert_eq!(rects[1].width, 20);
+    }
+
+    #[test]
+    fn fit_content_without_measurer_gets_zero() {
+        // Without measurer (via split()), FitContent gets zero from default hint
+        let flex = Flex::horizontal().constraints([Constraint::FitContent, Constraint::Fill]);
+        let rects = flex.split(Rect::new(0, 0, 100, 10));
+        assert_eq!(rects[0].width, 0); // No preferred size
+        assert_eq!(rects[1].width, 100); // Fill gets all
+    }
+
+    // --- FitContentBounded constraint ---
+
+    #[test]
+    fn fit_content_bounded_clamps_to_min() {
+        let flex = Flex::horizontal().constraints([
+            Constraint::FitContentBounded { min: 20, max: 50 },
+            Constraint::Fill,
+        ]);
+        let rects = flex.split_with_measurer(Rect::new(0, 0, 100, 10), |_, _| LayoutSizeHint {
+            min: 5,
+            preferred: 10, // Below min bound
+            max: None,
+        });
+        assert_eq!(rects[0].width, 20); // Clamped to min bound
+        assert_eq!(rects[1].width, 80);
+    }
+
+    #[test]
+    fn fit_content_bounded_clamps_to_max() {
+        let flex = Flex::horizontal().constraints([
+            Constraint::FitContentBounded { min: 10, max: 30 },
+            Constraint::Fill,
+        ]);
+        let rects = flex.split_with_measurer(Rect::new(0, 0, 100, 10), |_, _| LayoutSizeHint {
+            min: 5,
+            preferred: 50, // Above max bound
+            max: None,
+        });
+        assert_eq!(rects[0].width, 30); // Clamped to max bound
+        assert_eq!(rects[1].width, 70);
+    }
+
+    #[test]
+    fn fit_content_bounded_uses_preferred_when_in_range() {
+        let flex = Flex::horizontal().constraints([
+            Constraint::FitContentBounded { min: 10, max: 50 },
+            Constraint::Fill,
+        ]);
+        let rects = flex.split_with_measurer(Rect::new(0, 0, 100, 10), |_, _| LayoutSizeHint {
+            min: 5,
+            preferred: 35, // Within bounds
+            max: None,
+        });
+        assert_eq!(rects[0].width, 35);
+        assert_eq!(rects[1].width, 65);
+    }
+
+    // --- FitMin constraint ---
+
+    #[test]
+    fn fit_min_uses_minimum_size() {
+        let flex = Flex::horizontal().constraints([Constraint::FitMin, Constraint::Fill]);
+        let rects = flex.split_with_measurer(Rect::new(0, 0, 100, 10), |idx, _| {
+            if idx == 0 {
+                LayoutSizeHint {
+                    min: 15,
+                    preferred: 40,
+                    max: None,
+                }
+            } else {
+                LayoutSizeHint::ZERO
+            }
+        });
+        // FitMin gets minimum (15) + grows with remaining
+        // Since Fill is also a grow candidate, they share the 85 remaining
+        // FitMin base: 15, grows by (85/2) = 42.5 rounded to 42
+        // Actually: FitMin gets 15 initially, remaining = 85
+        // Then both FitMin and Fill compete for 85 with equal weight
+        // FitMin gets 15 + 42 = 57, Fill gets 43
+        // Wait, let me trace through the logic more carefully.
+        //
+        // After first pass: FitMin gets 15, remaining = 85. FitMin added to grow_indices.
+        // Fill gets 0, added to grow_indices.
+        // In grow loop: 85 distributed evenly (weight 1 each) = 42.5 each
+        // FitMin: 15 + 42 = 57 (or 58 if rounding gives it the extra)
+        // Actually the last item gets remainder to ensure exact sum
+        let total: u16 = rects.iter().map(|r| r.width).sum();
+        assert_eq!(total, 100);
+        assert!(rects[0].width >= 15, "FitMin should get at least minimum");
+    }
+
+    #[test]
+    fn fit_min_without_measurer_gets_zero() {
+        let flex = Flex::horizontal().constraints([Constraint::FitMin, Constraint::Fill]);
+        let rects = flex.split(Rect::new(0, 0, 100, 10));
+        // Without measurer, min is 0, so FitMin gets 0 initially, then grows
+        // Both FitMin and Fill share 100 evenly
+        assert_eq!(rects[0].width, 50);
+        assert_eq!(rects[1].width, 50);
+    }
+
+    // --- LayoutSizeHint tests ---
+
+    #[test]
+    fn layout_size_hint_zero_is_default() {
+        assert_eq!(LayoutSizeHint::default(), LayoutSizeHint::ZERO);
+    }
+
+    #[test]
+    fn layout_size_hint_exact() {
+        let h = LayoutSizeHint::exact(25);
+        assert_eq!(h.min, 25);
+        assert_eq!(h.preferred, 25);
+        assert_eq!(h.max, Some(25));
+    }
+
+    #[test]
+    fn layout_size_hint_at_least() {
+        let h = LayoutSizeHint::at_least(10, 30);
+        assert_eq!(h.min, 10);
+        assert_eq!(h.preferred, 30);
+        assert_eq!(h.max, None);
+    }
+
+    #[test]
+    fn layout_size_hint_clamp() {
+        let h = LayoutSizeHint {
+            min: 10,
+            preferred: 20,
+            max: Some(30),
+        };
+        assert_eq!(h.clamp(5), 10); // Below min
+        assert_eq!(h.clamp(15), 15); // In range
+        assert_eq!(h.clamp(50), 30); // Above max
+    }
+
+    #[test]
+    fn layout_size_hint_clamp_unbounded() {
+        let h = LayoutSizeHint::at_least(5, 10);
+        assert_eq!(h.clamp(3), 5); // Below min
+        assert_eq!(h.clamp(1000), 1000); // No max, stays as-is
+    }
+
+    // --- Integration: FitContent with other constraints ---
+
+    #[test]
+    fn fit_content_with_fixed_and_fill() {
+        let flex = Flex::horizontal().constraints([
+            Constraint::Fixed(20),
+            Constraint::FitContent,
+            Constraint::Fill,
+        ]);
+        let rects = flex.split_with_measurer(Rect::new(0, 0, 100, 10), |idx, _| {
+            if idx == 1 {
+                LayoutSizeHint {
+                    min: 5,
+                    preferred: 25,
+                    max: None,
+                }
+            } else {
+                LayoutSizeHint::ZERO
+            }
+        });
+        assert_eq!(rects[0].width, 20); // Fixed
+        assert_eq!(rects[1].width, 25); // FitContent preferred
+        assert_eq!(rects[2].width, 55); // Fill gets remainder
+    }
+
+    #[test]
+    fn total_allocation_never_exceeds_available_with_fit_content() {
+        for available in [10u16, 50, 100, 255] {
+            let flex = Flex::horizontal().constraints([
+                Constraint::FitContent,
+                Constraint::FitContent,
+                Constraint::Fill,
+            ]);
+            let rects =
+                flex.split_with_measurer(Rect::new(0, 0, available, 10), |_, _| LayoutSizeHint {
+                    min: 10,
+                    preferred: 40,
+                    max: None,
+                });
+            let total: u16 = rects.iter().map(|r| r.width).sum();
+            assert!(
+                total <= available,
+                "Total {} exceeded available {} with FitContent",
+                total,
+                available
             );
         }
     }
