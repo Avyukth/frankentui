@@ -525,7 +525,7 @@ fn property_line_count_matches_newlines() {
 
     // Line count should be newlines + 1 (or newlines if ends with \n)
     let expected = if text.ends_with('\n') {
-        newlines + 1
+        newlines
     } else {
         newlines + 1
     };

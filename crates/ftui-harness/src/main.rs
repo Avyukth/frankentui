@@ -47,6 +47,8 @@ use ftui_extras::theme;
 use ftui_layout::{Constraint, Flex, Grid, GridArea};
 use ftui_render::cell::Cell;
 use ftui_render::frame::Frame;
+#[cfg(feature = "telemetry")]
+use ftui_runtime::TelemetryConfig;
 use ftui_runtime::{Cmd, Every, Model, Program, ProgramConfig, ScreenMode, Subscription};
 use ftui_style::Style;
 use ftui_text::WrapMode;
@@ -1009,6 +1011,15 @@ fn main() -> std::io::Result<()> {
     if input_mode == "parser" || input_mode == "input-parser" || input_mode == "input_parser" {
         return run_input_trace(parse_exit_after());
     }
+
+    #[cfg(feature = "telemetry")]
+    let _telemetry_guard = match TelemetryConfig::from_env().install() {
+        Ok(guard) => Some(guard),
+        Err(err) => {
+            eprintln!("Telemetry init failed: {err}");
+            None
+        }
+    };
 
     let ui_height = std::env::var("FTUI_HARNESS_UI_HEIGHT")
         .ok()
