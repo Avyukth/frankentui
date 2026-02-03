@@ -343,8 +343,8 @@ impl I18nDemo {
         let rows = Flex::vertical()
             .constraints([
                 Constraint::Fixed(3),
-                Constraint::Fill(1),
-                Constraint::Fill(1),
+                Constraint::Fill,
+                Constraint::Fill,
             ])
             .gap(0)
             .split(area);
@@ -500,7 +500,7 @@ impl Screen for I18nDemo {
         let rows = Flex::vertical()
             .constraints([
                 Constraint::Fixed(3), // locale bar
-                Constraint::Fill(1),  // main content
+                Constraint::Fill,  // main content
                 Constraint::Fixed(1), // status bar
             ])
             .split(area);
