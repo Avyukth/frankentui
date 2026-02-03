@@ -766,6 +766,169 @@ impl DecisionSummary {
     }
 }
 
+// =============================================================================
+// Telemetry Hooks (bd-1rz0.7)
+// =============================================================================
+
+/// Callback type for resize applied events.
+pub type OnResizeApplied = Box<dyn Fn(&DecisionLog) + Send + Sync>;
+/// Callback type for regime change events.
+pub type OnRegimeChange = Box<dyn Fn(Regime, Regime) + Send + Sync>;
+/// Callback type for coalesce decision events.
+pub type OnCoalesceDecision = Box<dyn Fn(&DecisionLog) + Send + Sync>;
+
+/// Telemetry hooks for observing resize coalescer events.
+///
+/// # Example
+///
+/// ```ignore
+/// use ftui_runtime::resize_coalescer::{ResizeCoalescer, TelemetryHooks, CoalescerConfig};
+///
+/// let hooks = TelemetryHooks::new()
+///     .on_resize_applied(|entry| println!("Applied: {}x{}", entry.applied_size.unwrap().0, entry.applied_size.unwrap().1))
+///     .on_regime_change(|from, to| println!("Regime: {:?} -> {:?}", from, to));
+///
+/// let mut coalescer = ResizeCoalescer::new(CoalescerConfig::default(), (80, 24))
+///     .with_telemetry_hooks(hooks);
+/// ```
+pub struct TelemetryHooks {
+    /// Called when a resize is applied.
+    on_resize_applied: Option<OnResizeApplied>,
+    /// Called when regime changes (Steady <-> Burst).
+    on_regime_change: Option<OnRegimeChange>,
+    /// Called for every decision (coalesce, apply, skip).
+    on_decision: Option<OnCoalesceDecision>,
+    /// Enable tracing events (requires `tracing` feature).
+    emit_tracing: bool,
+}
+
+impl Default for TelemetryHooks {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for TelemetryHooks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TelemetryHooks")
+            .field("on_resize_applied", &self.on_resize_applied.is_some())
+            .field("on_regime_change", &self.on_regime_change.is_some())
+            .field("on_decision", &self.on_decision.is_some())
+            .field("emit_tracing", &self.emit_tracing)
+            .finish()
+    }
+}
+
+impl TelemetryHooks {
+    /// Create a new empty hooks instance.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            on_resize_applied: None,
+            on_regime_change: None,
+            on_decision: None,
+            emit_tracing: false,
+        }
+    }
+
+    /// Set callback for resize applied events.
+    #[must_use]
+    pub fn on_resize_applied<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(&DecisionLog) + Send + Sync + 'static,
+    {
+        self.on_resize_applied = Some(Box::new(callback));
+        self
+    }
+
+    /// Set callback for regime change events.
+    #[must_use]
+    pub fn on_regime_change<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(Regime, Regime) + Send + Sync + 'static,
+    {
+        self.on_regime_change = Some(Box::new(callback));
+        self
+    }
+
+    /// Set callback for all decision events.
+    #[must_use]
+    pub fn on_decision<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(&DecisionLog) + Send + Sync + 'static,
+    {
+        self.on_decision = Some(Box::new(callback));
+        self
+    }
+
+    /// Enable tracing event emission for OpenTelemetry integration.
+    ///
+    /// When enabled, decision events are emitted as `tracing::event!` calls
+    /// with target `ftui.decision.resize` and all evidence ledger fields.
+    #[must_use]
+    pub fn with_tracing(mut self, enabled: bool) -> Self {
+        self.emit_tracing = enabled;
+        self
+    }
+
+    /// Invoke the resize applied callback if set.
+    fn fire_resize_applied(&self, entry: &DecisionLog) {
+        if let Some(ref cb) = self.on_resize_applied {
+            cb(entry);
+        }
+        if self.emit_tracing {
+            Self::emit_resize_tracing(entry);
+        }
+    }
+
+    /// Invoke the regime change callback if set.
+    fn fire_regime_change(&self, from: Regime, to: Regime) {
+        if let Some(ref cb) = self.on_regime_change {
+            cb(from, to);
+        }
+        if self.emit_tracing {
+            tracing::debug!(
+                target: "ftui.decision.resize",
+                from_regime = %from.as_str(),
+                to_regime = %to.as_str(),
+                "regime_change"
+            );
+        }
+    }
+
+    /// Invoke the decision callback if set.
+    fn fire_decision(&self, entry: &DecisionLog) {
+        if let Some(ref cb) = self.on_decision {
+            cb(entry);
+        }
+    }
+
+    /// Emit a tracing event for resize decisions.
+    fn emit_resize_tracing(entry: &DecisionLog) {
+        let (pending_w, pending_h) = entry.pending_size.unwrap_or((0, 0));
+        let (applied_w, applied_h) = entry.applied_size.unwrap_or((0, 0));
+        let coalesce_ms = entry.coalesce_ms.unwrap_or(0.0);
+
+        tracing::info!(
+            target: "ftui.decision.resize",
+            event_idx = entry.event_idx,
+            elapsed_ms = entry.elapsed_ms,
+            dt_ms = entry.dt_ms,
+            event_rate = entry.event_rate,
+            regime = %entry.regime.as_str(),
+            action = entry.action,
+            pending_w = pending_w,
+            pending_h = pending_h,
+            applied_w = applied_w,
+            applied_h = applied_h,
+            time_since_render_ms = entry.time_since_render_ms,
+            coalesce_ms = coalesce_ms,
+            forced = entry.forced,
+            "resize_decision"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

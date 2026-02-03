@@ -75,7 +75,7 @@ pub use flake_detector::{EvidenceLog, FlakeConfig, FlakeDecision, FlakeDetector,
 pub use reactive::{BatchScope, Binding, BindingScope, Computed, Observable, TwoWayBinding};
 pub use resize_coalescer::{
     CoalesceAction, CoalescerConfig, CoalescerStats, DecisionLog, DecisionSummary, Regime,
-    ResizeCoalescer,
+    ResizeCoalescer, TelemetryHooks,
 };
 pub use undo::{
     CommandBatch, CommandError, CommandMetadata, CommandResult, CommandSource, HistoryConfig,
