@@ -121,6 +121,7 @@ pub mod block;
 pub mod borders;
 pub mod cached;
 pub mod columns;
+pub mod command_palette;
 pub mod constraint_overlay;
 #[cfg(feature = "debug-overlay")]
 pub mod debug_overlay;
@@ -142,6 +143,8 @@ pub mod log_viewer;
 pub mod measurable;
 /// Measure cache for memoizing widget measure results.
 pub mod measure_cache;
+/// Notification queue for managing multiple toast notifications.
+pub mod notification_queue;
 pub mod padding;
 pub mod paginator;
 pub mod panel;
@@ -159,6 +162,8 @@ pub mod stopwatch;
 pub mod table;
 pub mod textarea;
 pub mod timer;
+/// Toast widget for transient notifications.
+pub mod toast;
 pub mod tree;
 pub mod virtualized;
 
@@ -182,6 +187,16 @@ pub use status_line::{StatusItem, StatusLine};
 pub use virtualized::{
     HeightCache, ItemHeight, RenderItem, Virtualized, VirtualizedList, VirtualizedListState,
     VirtualizedStorage,
+};
+
+// Toast notification widget
+pub use toast::{
+    Toast, ToastConfig, ToastContent, ToastIcon, ToastId, ToastPosition, ToastState, ToastStyle,
+};
+
+// Notification queue manager
+pub use notification_queue::{
+    NotificationPriority, NotificationQueue, QueueAction, QueueConfig, QueueStats,
 };
 
 // Measurable widget support for intrinsic sizing
