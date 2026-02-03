@@ -697,6 +697,28 @@ fn e2e_minimum_viable_sizes() {
 }
 
 #[test]
+fn e2e_large_screen_custom_storm() {
+    // Explicit large + tiny sizes to stress high-resolution paths and tiny fallback.
+    let config = StormConfig::default()
+        .with_seed(42)
+        .with_pattern(StormPattern::Custom {
+            events: vec![
+                (240, 80, 0),
+                (200, 60, 0),
+                (240, 80, 0),
+                (40, 12, 0),
+                (200, 60, 0),
+                (240, 80, 0),
+            ],
+        })
+        .with_case_name("large_screen_custom");
+
+    let storm = ResizeStorm::new(config);
+    let result = run_storm_e2e("large_screen_custom", &storm, FRAME_BUDGET_US);
+    assert_storm_result(&result);
+}
+
+#[test]
 fn e2e_shrink_sequence() {
     // Progressive shrinking — stress-tests ghosting detection
     let events: Vec<(u16, u16, u64)> = (0..20)
