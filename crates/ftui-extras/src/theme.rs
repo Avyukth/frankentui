@@ -5,6 +5,7 @@
 //! This module provides a small set of coherent, high-contrast themes and
 //! color tokens that resolve against the current theme at runtime.
 
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(feature = "syntax")]
@@ -338,8 +339,7 @@ pub enum ColorToken {
 }
 
 impl ColorToken {
-    pub fn resolve(self) -> PackedRgba {
-        let palette = current_palette();
+    pub fn resolve_in(self, palette: &ThemePalette) -> PackedRgba {
         match self {
             ColorToken::BgDeep => palette.bg_deep,
             ColorToken::BgBase => palette.bg_base,
@@ -403,6 +403,10 @@ impl ColorToken {
             ColorToken::IssueEpic => palette.accent_warning,
         }
     }
+
+    pub fn resolve(self) -> PackedRgba {
+        self.resolve_in(current_palette())
+    }
 }
 
 impl From<ColorToken> for PackedRgba {
@@ -453,6 +457,38 @@ pub fn blend_over(overlay: ColorToken, base: ColorToken, opacity: f32) -> Packed
 /// Blend raw colors using source-over.
 pub fn blend_colors(overlay: PackedRgba, base: PackedRgba, opacity: f32) -> PackedRgba {
     overlay.with_opacity(opacity).over(base)
+}
+
+/// Sample a smooth, repeating gradient over the current theme's accent slots.
+///
+/// `t` is periodic with period 1.0 (i.e., `t=0.0` and `t=1.0` return the same color).
+///
+/// This is intended for visual polish (sparklines, animated accents, demo effects) while
+/// staying coherent with the active theme.
+pub fn accent_gradient(t: f64) -> PackedRgba {
+    let slots = &current_palette().accent_slots;
+    let t = t.rem_euclid(1.0);
+    let t = t.clamp(0.0, 1.0);
+    if slots.is_empty() {
+        return accent::PRIMARY.resolve();
+    }
+
+    if slots.len() == 1 {
+        return slots[0];
+    }
+
+    let max_idx = slots.len() - 1;
+    let pos = t * max_idx as f64;
+    let idx = (pos.floor() as usize).min(max_idx);
+    let frac = pos - idx as f64;
+
+    let a = slots[idx];
+    let b = slots[(idx + 1).min(max_idx)];
+
+    let r = (a.r() as f64 + (b.r() as f64 - a.r() as f64) * frac).round() as u8;
+    let g = (a.g() as f64 + (b.g() as f64 - a.g() as f64) * frac).round() as u8;
+    let b_val = (a.b() as f64 + (b.b() as f64 - a.b() as f64) * frac).round() as u8;
+    PackedRgba::rgb(r, g, b_val)
 }
 
 fn ensure_contrast(
@@ -834,14 +870,19 @@ impl SemanticSwatch {
         }
     }
 
-    fn from_token(token: ColorToken, base_bg: PackedRgba, opacity: f32) -> Self {
-        let fg = token.resolve();
+    fn from_token_in(
+        token: ColorToken,
+        palette: &ThemePalette,
+        base_bg: PackedRgba,
+        opacity: f32,
+    ) -> Self {
+        let fg = token.resolve_in(palette);
         let bg = fg.with_opacity(opacity);
         let composed = bg.over(base_bg);
         let candidates = [
-            fg::PRIMARY.resolve(),
-            fg::SECONDARY.resolve(),
-            bg::DEEP.resolve(),
+            palette.fg_primary,
+            palette.fg_secondary,
+            palette.bg_deep,
             PackedRgba::WHITE,
             PackedRgba::BLACK,
         ];
@@ -891,37 +932,55 @@ pub struct SemanticStyles {
     pub intent: IntentStyles,
 }
 
-/// Pre-compute semantic styles for the current theme.
-pub fn semantic_styles() -> SemanticStyles {
-    let base_bg = bg::BASE.resolve();
+static SEMANTIC_STYLES_ALL: OnceLock<[SemanticStyles; ThemeId::ALL.len()]> = OnceLock::new();
+
+fn semantic_styles_for(theme: ThemeId) -> SemanticStyles {
+    let palette = palette(theme);
+    let base_bg = palette.bg_base;
     let opacity = SEMANTIC_TINT_OPACITY;
     SemanticStyles {
         status: StatusStyles {
-            open: SemanticSwatch::from_token(status::OPEN, base_bg, opacity),
-            in_progress: SemanticSwatch::from_token(status::IN_PROGRESS, base_bg, opacity),
-            blocked: SemanticSwatch::from_token(status::BLOCKED, base_bg, opacity),
-            closed: SemanticSwatch::from_token(status::CLOSED, base_bg, opacity),
+            open: SemanticSwatch::from_token_in(status::OPEN, palette, base_bg, opacity),
+            in_progress: SemanticSwatch::from_token_in(
+                status::IN_PROGRESS,
+                palette,
+                base_bg,
+                opacity,
+            ),
+            blocked: SemanticSwatch::from_token_in(status::BLOCKED, palette, base_bg, opacity),
+            closed: SemanticSwatch::from_token_in(status::CLOSED, palette, base_bg, opacity),
         },
         priority: PriorityStyles {
-            p0: SemanticSwatch::from_token(priority::P0, base_bg, opacity),
-            p1: SemanticSwatch::from_token(priority::P1, base_bg, opacity),
-            p2: SemanticSwatch::from_token(priority::P2, base_bg, opacity),
-            p3: SemanticSwatch::from_token(priority::P3, base_bg, opacity),
-            p4: SemanticSwatch::from_token(priority::P4, base_bg, opacity),
+            p0: SemanticSwatch::from_token_in(priority::P0, palette, base_bg, opacity),
+            p1: SemanticSwatch::from_token_in(priority::P1, palette, base_bg, opacity),
+            p2: SemanticSwatch::from_token_in(priority::P2, palette, base_bg, opacity),
+            p3: SemanticSwatch::from_token_in(priority::P3, palette, base_bg, opacity),
+            p4: SemanticSwatch::from_token_in(priority::P4, palette, base_bg, opacity),
         },
         issue_type: IssueTypeStyles {
-            bug: SemanticSwatch::from_token(issue_type::BUG, base_bg, opacity),
-            feature: SemanticSwatch::from_token(issue_type::FEATURE, base_bg, opacity),
-            task: SemanticSwatch::from_token(issue_type::TASK, base_bg, opacity),
-            epic: SemanticSwatch::from_token(issue_type::EPIC, base_bg, opacity),
+            bug: SemanticSwatch::from_token_in(issue_type::BUG, palette, base_bg, opacity),
+            feature: SemanticSwatch::from_token_in(issue_type::FEATURE, palette, base_bg, opacity),
+            task: SemanticSwatch::from_token_in(issue_type::TASK, palette, base_bg, opacity),
+            epic: SemanticSwatch::from_token_in(issue_type::EPIC, palette, base_bg, opacity),
         },
         intent: IntentStyles {
-            success: SemanticSwatch::from_token(intent::SUCCESS, base_bg, opacity),
-            warning: SemanticSwatch::from_token(intent::WARNING, base_bg, opacity),
-            info: SemanticSwatch::from_token(intent::INFO, base_bg, opacity),
-            error: SemanticSwatch::from_token(intent::ERROR, base_bg, opacity),
+            success: SemanticSwatch::from_token_in(intent::SUCCESS, palette, base_bg, opacity),
+            warning: SemanticSwatch::from_token_in(intent::WARNING, palette, base_bg, opacity),
+            info: SemanticSwatch::from_token_in(intent::INFO, palette, base_bg, opacity),
+            error: SemanticSwatch::from_token_in(intent::ERROR, palette, base_bg, opacity),
         },
     }
+}
+
+/// Pre-compute semantic styles for the current theme.
+pub fn semantic_styles() -> SemanticStyles {
+    *semantic_styles_cached()
+}
+
+/// Borrow pre-computed semantic styles for the current theme (cached per built-in theme).
+pub fn semantic_styles_cached() -> &'static SemanticStyles {
+    let all = SEMANTIC_STYLES_ALL.get_or_init(|| ThemeId::ALL.map(semantic_styles_for));
+    &all[current_theme().index()]
 }
 
 /// Build a syntax highlight theme from the active palette.
@@ -998,6 +1057,15 @@ mod tests {
             .with_opacity(0.5)
             .over(bg::BASE.resolve());
         assert_eq!(blended, expected);
+    }
+
+    #[test]
+    fn accent_gradient_wraps() {
+        for theme in ThemeId::ALL {
+            set_theme(theme);
+            assert_eq!(accent_gradient(0.0), accent_gradient(1.0));
+            assert_eq!(accent_gradient(-1.0), accent_gradient(0.0));
+        }
     }
 
     #[test]

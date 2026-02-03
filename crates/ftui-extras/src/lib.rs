@@ -30,6 +30,7 @@
 //! | `traceback` | [`traceback`] | Error/stacktrace display |
 //! | `theme` | [`theme`] | Color themes + palette tokens |
 //! | `text-effects` | [`text_effects`] | Animated text effects (gradients, fades, ASCII art) |
+//! | `visual-fx` | [`visual_fx`] | Feature-gated visual FX primitives (backdrops, CPU/GPU adapters) |
 
 #[cfg(feature = "canvas")]
 pub mod canvas;
@@ -90,3 +91,6 @@ pub mod theme;
 
 #[cfg(feature = "text-effects")]
 pub mod text_effects;
+
+#[cfg(feature = "visual-fx")]
+pub mod visual_fx;
