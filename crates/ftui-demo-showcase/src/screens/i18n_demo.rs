@@ -167,7 +167,11 @@ impl I18nDemo {
         let bar_text = items.join("  ");
 
         let paragraph = Paragraph::new(bar_text)
-            .style(Style::new().fg(theme::fg::PRIMARY).bg(theme::alpha::SURFACE))
+            .style(
+                Style::new()
+                    .fg(theme::fg::PRIMARY)
+                    .bg(theme::alpha::SURFACE),
+            )
             .alignment(Alignment::Center)
             .block(
                 Block::new()
@@ -200,10 +204,7 @@ impl I18nDemo {
                 .catalog
                 .get(locale, "demo.title")
                 .unwrap_or("i18n Demo");
-            let greeting = self
-                .catalog
-                .get(locale, "greeting")
-                .unwrap_or("Hello");
+            let greeting = self.catalog.get(locale, "greeting").unwrap_or("Hello");
             let welcome = self
                 .catalog
                 .format(locale, "welcome", &[("name", self.interp_name)])
@@ -313,9 +314,7 @@ impl I18nDemo {
         }
 
         lines.push("  Use Up/Down to change count".to_string());
-        lines.push(format!(
-            "  Counts to try: 0, 1, 2, 3, 5, 11, 21, 100, 101"
-        ));
+        lines.push(format!("  Counts to try: 0, 1, 2, 3, 5, 11, 21, 100, 101"));
 
         let text = lines.join("\n");
         let paragraph = Paragraph::new(text)
@@ -336,11 +335,7 @@ impl I18nDemo {
         }
         // Show side-by-side LTR vs RTL layout.
         let rows = Flex::vertical()
-            .constraints([
-                Constraint::Fixed(3),
-                Constraint::Fill,
-                Constraint::Fill,
-            ])
+            .constraints([Constraint::Fixed(3), Constraint::Fill, Constraint::Fill])
             .gap(0)
             .split(area);
 
@@ -365,24 +360,24 @@ impl I18nDemo {
         self.render_direction_sample(frame, rows[2], FlowDirection::Rtl);
     }
 
-    fn render_direction_sample(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        flow: FlowDirection,
-        colors: &theme::ThemeColors,
-    ) {
-        let label = if flow.is_rtl() { "RTL" } else { "LTR" };
+    fn render_direction_sample(&self, frame: &mut Frame, area: Rect, flow: FlowDirection) {
+        let title_text = if flow.is_rtl() {
+            "RTL Layout"
+        } else {
+            "LTR Layout"
+        };
+
+        let border_color = if flow.is_rtl() {
+            theme::accent::PRIMARY
+        } else {
+            theme::fg::SECONDARY
+        };
 
         let outer = Block::new()
-            .title(format!("{} Layout", label))
+            .title(title_text)
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::new().fg(if flow.is_rtl() {
-                colors.accent
-            } else {
-                colors.secondary
-            }));
+            .border_style(Style::new().fg(border_color));
         let inner = outer.inner(area);
         outer.render(area, frame);
 
@@ -401,7 +396,11 @@ impl I18nDemo {
             .split(inner);
 
         let labels = ["Sidebar", "Content", "Panel"];
-        let label_colors = [colors.accent, colors.text, colors.secondary];
+        let label_colors = [
+            theme::accent::PRIMARY,
+            theme::fg::PRIMARY,
+            theme::fg::SECONDARY,
+        ];
 
         for (i, (&col, &lbl)) in cols.iter().zip(labels.iter()).enumerate() {
             if col.is_empty() {
@@ -413,7 +412,7 @@ impl I18nDemo {
                 .block(
                     Block::new()
                         .borders(Borders::ALL)
-                        .border_style(Style::new().fg(colors.border)),
+                        .border_style(Style::new().fg(theme::fg::MUTED)),
                 );
             p.render(col, frame);
         }
@@ -423,7 +422,6 @@ impl I18nDemo {
         if area.is_empty() {
             return;
         }
-        let colors = theme::current();
         let info = self.current_info();
 
         let panel_names = ["Overview", "Plurals", "RTL Layout"];
@@ -438,7 +436,7 @@ impl I18nDemo {
         );
 
         let paragraph = Paragraph::new(status)
-            .style(Style::new().fg(colors.surface).bg(colors.accent));
+            .style(Style::new().fg(theme::bg::BASE).bg(theme::accent::PRIMARY));
         paragraph.render(area, frame);
     }
 }
@@ -495,7 +493,7 @@ impl Screen for I18nDemo {
         let rows = Flex::vertical()
             .constraints([
                 Constraint::Fixed(3), // locale bar
-                Constraint::Fill,  // main content
+                Constraint::Fill,     // main content
                 Constraint::Fixed(1), // status bar
             ])
             .split(area);
@@ -634,10 +632,7 @@ fn build_catalog() -> StringCatalog {
             "demo.title",
             "\u{418}\u{43d}\u{442}\u{435}\u{440}\u{43d}\u{430}\u{446}\u{438}\u{43e}\u{43d}\u{430}\u{43b}\u{438}\u{437}\u{430}\u{446}\u{438}\u{44f}",
         );
-        s.insert(
-            "greeting",
-            "\u{41f}\u{440}\u{438}\u{432}\u{435}\u{442}!",
-        );
+        s.insert("greeting", "\u{41f}\u{440}\u{438}\u{432}\u{435}\u{442}!");
         s.insert(
             "welcome",
             "\u{414}\u{43e}\u{431}\u{440}\u{43e} \u{43f}\u{43e}\u{436}\u{430}\u{43b}\u{43e}\u{432}\u{430}\u{442}\u{44c}, {name}!",
@@ -682,14 +677,8 @@ fn build_catalog() -> StringCatalog {
             "demo.title",
             "\u{627}\u{644}\u{62a}\u{62f}\u{648}\u{64a}\u{644}",
         );
-        s.insert(
-            "greeting",
-            "\u{645}\u{631}\u{62d}\u{628}\u{627}\u{64b}!",
-        );
-        s.insert(
-            "welcome",
-            "\u{623}\u{647}\u{644}\u{627}\u{64b} {name}!",
-        );
+        s.insert("greeting", "\u{645}\u{631}\u{62d}\u{628}\u{627}\u{64b}!");
+        s.insert("welcome", "\u{623}\u{647}\u{644}\u{627}\u{64b} {name}!");
         s.insert(
             "direction",
             "\u{645}\u{646} \u{627}\u{644}\u{64a}\u{645}\u{64a}\u{646} \u{625}\u{644}\u{649} \u{627}\u{644}\u{64a}\u{633}\u{627}\u{631}",
@@ -722,10 +711,7 @@ fn build_catalog() -> StringCatalog {
     // Japanese
     {
         let mut s = LocaleStrings::new();
-        s.insert(
-            "demo.title",
-            "\u{56fd}\u{969b}\u{5316}",
-        );
+        s.insert("demo.title", "\u{56fd}\u{969b}\u{5316}");
         s.insert(
             "greeting",
             "\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}\u{ff01}",
@@ -734,10 +720,7 @@ fn build_catalog() -> StringCatalog {
             "welcome",
             "\u{3088}\u{3046}\u{3053}\u{305d}\u{3001}{name}\u{3055}\u{3093}\u{ff01}",
         );
-        s.insert(
-            "direction",
-            "\u{5de6}\u{304b}\u{3089}\u{53f3}",
-        );
+        s.insert("direction", "\u{5de6}\u{304b}\u{3089}\u{53f3}");
         // CJK: no plural distinction.
         s.insert_plural(
             "items",
@@ -845,11 +828,7 @@ mod tests {
         let catalog = build_catalog();
         let locales = catalog.locales();
         for loc in LOCALES {
-            assert!(
-                locales.contains(&loc.tag),
-                "missing locale: {}",
-                loc.tag
-            );
+            assert!(locales.contains(&loc.tag), "missing locale: {}", loc.tag);
         }
     }
 
@@ -975,8 +954,7 @@ mod tests {
                 assert_ne!(
                     hash, 0,
                     "panel={} locale={} must render",
-                    panel,
-                    LOCALES[loc_idx].tag
+                    panel, LOCALES[loc_idx].tag
                 );
             }
         }
