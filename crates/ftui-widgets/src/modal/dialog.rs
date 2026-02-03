@@ -27,6 +27,7 @@ use ftui_core::geometry::Rect;
 use ftui_render::cell::Cell;
 use ftui_render::frame::{Frame, HitData, HitId, HitRegion};
 use ftui_style::{Style, StyleFlags};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Hit region for dialog buttons.
 pub const DIALOG_HIT_BUTTON: HitRegion = HitRegion::Custom(10);
@@ -571,11 +572,16 @@ impl Dialog {
         text: &str,
         style: Style,
     ) {
-        let text_len = text.len().min(width as usize);
-        let offset = (width as usize - text_len) / 2;
+        let text_width = UnicodeWidthStr::width(text).min(width as usize);
+        let offset = (width as usize - text_width) / 2;
 
-        for (i, c) in text.chars().take(width as usize).enumerate() {
-            let cx = x + offset as u16 + i as u16;
+        let mut col = 0usize;
+        for c in text.chars() {
+            let char_width = UnicodeWidthChar::width(c).unwrap_or(0);
+            if col + char_width > width as usize {
+                break;
+            }
+            let cx = x + offset as u16 + col as u16;
             if cx < x + width {
                 let mut cell = Cell::from_char(c);
                 if let Some(fg) = style.fg {
@@ -586,6 +592,7 @@ impl Dialog {
                 }
                 frame.buffer.set(cx, y, cell);
             }
+            col += char_width;
         }
     }
 
@@ -602,11 +609,12 @@ impl Dialog {
             &state.input_value
         };
 
-        for (i, c) in display_text
-            .chars()
-            .take(input_area.width as usize)
-            .enumerate()
-        {
+        let mut col = 0usize;
+        for c in display_text.chars() {
+            let char_width = UnicodeWidthChar::width(c).unwrap_or(0);
+            if col + char_width > input_area.width as usize {
+                break;
+            }
             let mut cell = Cell::from_char(c);
             if let Some(fg) = input_style.fg {
                 cell.fg = fg;
@@ -615,13 +623,14 @@ impl Dialog {
                 let cell_flags: ftui_render::cell::StyleFlags = attrs.into();
                 cell.attrs = cell.attrs.with_flags(cell_flags);
             }
-            frame.buffer.set(input_area.x + i as u16, y, cell);
+            frame.buffer.set(input_area.x + col as u16, y, cell);
+            col += char_width;
         }
 
         // Draw cursor if focused
         if state.input_focused {
-            let cursor_x =
-                input_area.x + state.input_value.len().min(input_area.width as usize) as u16;
+            let input_width = UnicodeWidthStr::width(state.input_value.as_str());
+            let cursor_x = input_area.x + input_width.min(input_area.width as usize) as u16;
             if cursor_x < input_area.right() {
                 frame.cursor_position = Some((cursor_x, y));
                 frame.cursor_visible = true;
@@ -959,5 +968,25 @@ mod tests {
         let dialog = Dialog::custom("Custom", "No buttons").build();
         assert_eq!(dialog.buttons.len(), 1);
         assert_eq!(dialog.buttons[0].label, "OK");
+    }
+
+    #[test]
+    fn render_unicode_message_does_not_panic() {
+        // CJK characters are 2 columns wide each
+        let dialog = Dialog::alert("你好", "这是一条消息 🎉");
+        let mut state = DialogState::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        dialog.render(Rect::new(0, 0, 80, 24), &mut frame, &mut state);
+    }
+
+    #[test]
+    fn prompt_with_unicode_input_renders_correctly() {
+        let dialog = Dialog::prompt("入力", "名前を入力:");
+        let mut state = DialogState::new();
+        state.input_value = "田中太郎".to_string(); // CJK input
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        dialog.render(Rect::new(0, 0, 80, 24), &mut frame, &mut state);
     }
 }
