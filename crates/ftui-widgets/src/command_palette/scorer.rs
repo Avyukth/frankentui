@@ -340,6 +340,18 @@ impl BayesianScorer {
         title: &str,
         title_lower: &str,
     ) -> MatchResult {
+        self.score_with_lowered_title_and_words(query, query_lower, title, title_lower, None)
+    }
+
+    /// Score a query with pre-lowercased title and optional word-start cache.
+    pub fn score_with_lowered_title_and_words(
+        &self,
+        query: &str,
+        query_lower: &str,
+        title: &str,
+        title_lower: &str,
+        word_starts: Option<&[usize]>,
+    ) -> MatchResult {
         // Quick rejection: query longer than title
         if query.len() > title.len() {
             return MatchResult::no_match();
@@ -351,7 +363,8 @@ impl BayesianScorer {
         }
 
         // Determine match type
-        let (match_type, positions) = self.detect_match_type(query_lower, title_lower, title);
+        let (match_type, positions) =
+            self.detect_match_type_with_words(query_lower, title_lower, title, word_starts);
 
         if match_type == MatchType::NoMatch {
             return MatchResult::no_match();
