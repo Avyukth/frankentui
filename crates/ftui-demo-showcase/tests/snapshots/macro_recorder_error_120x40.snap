@@ -1,0 +1,40 @@
+╭────────────────────────────────────────────────────Macro Recorder────────────────────────────────────────────────────╮
+│State: ⚠ Error   Events: 0   Duration: 0ms   Filtered: 0                                                              │
+│Controls: r record/stop  p play/pause  l loop  +/- speed  Esc stop                                                    │
+│Speed: 1.00x   Loop: Off   Progress:   0%                                                                             │
+│⚠ Error: No macro recorded — press 'r' to start recording                                                             │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭───────────────────────────────Timeline───────────────────────────────╮╭───────────────Scenario Runner────────────────╮
+│No macro recorded yet.                                                ││Preset scenarios (WIP)                        │
+│                                                                      ││                                              │
+│                                                                      ││Tab Tour                                      │
+│                                                                      ││  Cycle screens, toggle help, return to record│
+│                                                                      ││                                              │
+│                                                                      ││Search Flow                                   │
+│                                                                      ││  Open Shakespeare screen, search for a phrase│
+│                                                                      ││                                              │
+│                                                                      ││Layout Lab                                    │
+│                                                                      ││  Adjust constraints and switch grid presets  │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯

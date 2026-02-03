@@ -715,6 +715,126 @@ fn app_all_screens_80x24() {
 }
 
 // ============================================================================
+// Macro Recorder — Per-state snapshots (bd-2lus.3)
+// ============================================================================
+
+#[test]
+fn macro_recorder_idle_80x24() {
+    let screen = ftui_demo_showcase::screens::macro_recorder::MacroRecorderScreen::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("macro_recorder_idle_80x24", &frame.buffer);
+}
+
+#[test]
+fn macro_recorder_idle_120x40() {
+    let screen = ftui_demo_showcase::screens::macro_recorder::MacroRecorderScreen::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    let area = Rect::new(0, 0, 120, 40);
+    screen.view(&mut frame, area);
+    assert_snapshot!("macro_recorder_idle_120x40", &frame.buffer);
+}
+
+#[test]
+fn macro_recorder_stopped_80x24() {
+    let mut screen = ftui_demo_showcase::screens::macro_recorder::MacroRecorderScreen::new();
+    // Start recording, add events, stop — ends in Stopped with macro data
+    screen.update(&press(KeyCode::Char('r')));
+    screen.record_event(&press(KeyCode::Char('a')), false);
+    screen.record_event(&press(KeyCode::Char('b')), false);
+    screen.record_event(&press(KeyCode::Char('c')), false);
+    screen.update(&press(KeyCode::Char('r'))); // stop
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("macro_recorder_stopped_80x24", &frame.buffer);
+}
+
+#[test]
+fn macro_recorder_stopped_120x40() {
+    let mut screen = ftui_demo_showcase::screens::macro_recorder::MacroRecorderScreen::new();
+    screen.update(&press(KeyCode::Char('r')));
+    screen.record_event(&press(KeyCode::Char('a')), false);
+    screen.record_event(&press(KeyCode::Char('b')), false);
+    screen.record_event(&press(KeyCode::Char('c')), false);
+    screen.update(&press(KeyCode::Char('r')));
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    let area = Rect::new(0, 0, 120, 40);
+    screen.view(&mut frame, area);
+    assert_snapshot!("macro_recorder_stopped_120x40", &frame.buffer);
+}
+
+#[test]
+fn macro_recorder_playing_80x24() {
+    let mut screen = ftui_demo_showcase::screens::macro_recorder::MacroRecorderScreen::new();
+    screen.update(&press(KeyCode::Char('r')));
+    screen.record_event(&press(KeyCode::Char('a')), false);
+    screen.record_event(&press(KeyCode::Char('b')), false);
+    screen.record_event(&press(KeyCode::Char('c')), false);
+    screen.update(&press(KeyCode::Char('r'))); // stop recording
+    screen.update(&press(KeyCode::Char('p'))); // start playing
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("macro_recorder_playing_80x24", &frame.buffer);
+}
+
+#[test]
+fn macro_recorder_playing_120x40() {
+    let mut screen = ftui_demo_showcase::screens::macro_recorder::MacroRecorderScreen::new();
+    screen.update(&press(KeyCode::Char('r')));
+    screen.record_event(&press(KeyCode::Char('a')), false);
+    screen.record_event(&press(KeyCode::Char('b')), false);
+    screen.record_event(&press(KeyCode::Char('c')), false);
+    screen.update(&press(KeyCode::Char('r')));
+    screen.update(&press(KeyCode::Char('p')));
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    let area = Rect::new(0, 0, 120, 40);
+    screen.view(&mut frame, area);
+    assert_snapshot!("macro_recorder_playing_120x40", &frame.buffer);
+}
+
+#[test]
+fn macro_recorder_error_no_macro_80x24() {
+    let mut screen = ftui_demo_showcase::screens::macro_recorder::MacroRecorderScreen::new();
+    // Play without recording first — triggers "No macro recorded" error
+    screen.update(&press(KeyCode::Char('p')));
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("macro_recorder_error_no_macro_80x24", &frame.buffer);
+}
+
+#[test]
+fn macro_recorder_error_120x40() {
+    let mut screen = ftui_demo_showcase::screens::macro_recorder::MacroRecorderScreen::new();
+    screen.update(&press(KeyCode::Char('p')));
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    let area = Rect::new(0, 0, 120, 40);
+    screen.view(&mut frame, area);
+    assert_snapshot!("macro_recorder_error_120x40", &frame.buffer);
+}
+
+#[test]
+fn macro_recorder_tiny_40x10() {
+    let screen = ftui_demo_showcase::screens::macro_recorder::MacroRecorderScreen::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(40, 10, &mut pool);
+    let area = Rect::new(0, 0, 40, 10);
+    screen.view(&mut frame, area);
+    assert_snapshot!("macro_recorder_tiny_40x10", &frame.buffer);
+}
+
+// ============================================================================
 // Responsive Demo — Breakpoint-specific snapshots
 // ============================================================================
 

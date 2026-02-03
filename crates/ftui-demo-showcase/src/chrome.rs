@@ -273,6 +273,8 @@ pub fn accent_for(id: ScreenId) -> theme::ColorToken {
         ScreenId::MarkdownRichText => theme::screen_accent::MARKDOWN,
         ScreenId::VisualEffects => theme::screen_accent::VISUAL_EFFECTS,
         ScreenId::ResponsiveDemo => theme::screen_accent::RESPONSIVE_DEMO,
+        ScreenId::LogSearch => theme::screen_accent::LOG_SEARCH,
+        ScreenId::Notifications => theme::screen_accent::ADVANCED,
     }
 }
 

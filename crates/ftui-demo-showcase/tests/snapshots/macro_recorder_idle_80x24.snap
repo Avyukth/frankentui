@@ -1,0 +1,24 @@
+╭────────────────────────────────Macro Recorder────────────────────────────────╮
+│State: ○ Idle   Events: 0   Duration: 0ms   Filtered: 0                       │
+│Controls: r record/stop  p play/pause  l loop  +/- speed  Esc stop            │
+│Speed: 1.00x   Loop: Off   Progress:   0%                                     │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭───────────────────Timeline───────────────────╮╭───────Scenario Runner────────╮
+│No macro recorded yet.                        ││Preset scenarios (WIP)        │
+│                                              ││                              │
+│                                              ││Tab Tour                      │
+│                                              ││  Cycle screens, toggle help, │
+│                                              ││                              │
+│                                              ││Search Flow                   │
+│                                              ││  Open Shakespeare screen, sea│
+│                                              ││                              │
+│                                              ││Layout Lab                    │
+│                                              ││  Adjust constraints and switc│
+│                                              ││                              │
+│                                              ││                              │
+│                                              ││                              │
+│                                              ││                              │
+│                                              ││                              │
+│                                              ││                              │
+╰──────────────────────────────────────────────╯╰──────────────────────────────╯

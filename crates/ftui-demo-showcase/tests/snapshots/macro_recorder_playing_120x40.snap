@@ -1,0 +1,40 @@
+╭────────────────────────────────────────────────────Macro Recorder────────────────────────────────────────────────────╮
+│State: ▶ Playing   Events: 3   Duration: 0ms   Filtered: 0                                                            │
+│Controls: r record/stop  p play/pause  l loop  +/- speed  Esc stop                                                    │
+│Speed: 1.00x   Loop: Off   Progress: 100%                                                                             │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭───────────────────────────────Timeline───────────────────────────────╮╭───────────────Scenario Runner────────────────╮
+│▶ 001  +   0ms  @    0ms  a                                           ││Preset scenarios (WIP)                        │
+│○ 002  +   0ms  @    0ms  b                                           ││                                              │
+│○ 003  +   0ms  @    0ms  c                                           ││Tab Tour                                      │
+│                                                                      ││  Cycle screens, toggle help, return to record│
+│                                                                      ││                                              │
+│                                                                      ││Search Flow                                   │
+│                                                                      ││  Open Shakespeare screen, search for a phrase│
+│                                                                      ││                                              │
+│                                                                      ││Layout Lab                                    │
+│                                                                      ││  Adjust constraints and switch grid presets  │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
