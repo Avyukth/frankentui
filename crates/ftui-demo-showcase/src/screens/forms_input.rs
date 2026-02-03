@@ -24,7 +24,7 @@ use ftui_widgets::borders::{BorderType, Borders};
 use ftui_widgets::input::TextInput;
 use ftui_widgets::paragraph::Paragraph;
 use ftui_widgets::textarea::TextArea;
-use ftui_widgets::{StatefulWidget, TextInputUndoExt, Widget};
+use ftui_widgets::{Badge, StatefulWidget, TextInputUndoExt, Widget};
 
 use super::{HelpEntry, Screen};
 use crate::theme;
@@ -276,7 +276,8 @@ impl FormsInput {
     }
 
     pub fn apply_theme(&mut self) {
-        self.form.set_style(Style::new().fg(theme::fg::PRIMARY));
+        self.form
+            .set_style(Style::new().fg(theme::fg::PRIMARY).bg(theme::alpha::SURFACE));
         self.form
             .set_label_style(Style::new().fg(theme::fg::SECONDARY));
         self.form.set_focused_style(
@@ -286,28 +287,38 @@ impl FormsInput {
                 .attrs(StyleFlags::BOLD),
         );
         self.form
-            .set_error_style(Style::new().fg(theme::accent::ERROR));
+            .set_error_style(Style::new().fg(theme::accent::ERROR).bold());
         self.form
             .set_success_style(Style::new().fg(theme::accent::SUCCESS));
         self.form
             .set_disabled_style(Style::new().fg(theme::fg::MUTED).attrs(StyleFlags::DIM));
         self.form
-            .set_required_style(Style::new().fg(theme::accent::WARNING));
+            .set_required_style(Style::new().fg(theme::accent::WARNING).bold());
 
         let input_style = Style::new()
             .fg(theme::fg::PRIMARY)
             .bg(theme::alpha::SURFACE);
         let placeholder_style = Style::new().fg(theme::fg::MUTED);
+        let cursor_style = Style::new()
+            .fg(theme::bg::BASE)
+            .bg(theme::screen_accent::FORMS_INPUT);
+        let selection_style = Style::new()
+            .bg(theme::alpha::HIGHLIGHT)
+            .fg(theme::fg::PRIMARY);
         self.search_input = self
             .search_input
             .clone()
             .with_style(input_style)
-            .with_placeholder_style(placeholder_style);
+            .with_placeholder_style(placeholder_style)
+            .with_cursor_style(cursor_style)
+            .with_selection_style(selection_style);
         self.password_input = self
             .password_input
             .clone()
             .with_style(input_style)
-            .with_placeholder_style(placeholder_style);
+            .with_placeholder_style(placeholder_style)
+            .with_cursor_style(cursor_style)
+            .with_selection_style(selection_style);
         self.textarea = self
             .textarea
             .clone()
@@ -386,12 +397,19 @@ impl FormsInput {
             self.redo_stack.len()
         );
         let error_info = format!("Errors: {}", form_state.errors.len());
+        let (required_done, required_total) = self.required_progress();
+        let required_info = if required_total == 0 {
+            "Required: n/a".to_string()
+        } else {
+            format!("Required: {required_done}/{required_total}")
+        };
         let history_hint = if self.undo_panel_visible {
             "Ctrl+U: Hide history"
         } else {
             "Ctrl+U: Show history"
         };
-        self.status_text = format!("{base} | {undo_info} | {error_info} | {history_hint}");
+        self.status_text =
+            format!("{base} | {required_info} | {undo_info} | {error_info} | {history_hint}");
     }
 
     fn update_form_validation(&mut self, force_all: bool) {
@@ -406,6 +424,122 @@ impl FormsInput {
             .into_iter()
             .filter(|err| state.is_touched(err.field) || state.is_dirty(err.field))
             .collect();
+    }
+
+    fn field_is_filled(field: &FormField) -> bool {
+        match field {
+            FormField::Text { value, .. } => !value.trim().is_empty(),
+            FormField::Checkbox { checked, .. } => *checked,
+            FormField::Radio { options, selected, .. } => {
+                !options.is_empty() && *selected < options.len()
+            }
+            FormField::Select { options, selected, .. } => {
+                !options.is_empty() && *selected < options.len()
+            }
+            FormField::Number { .. } => true,
+        }
+    }
+
+    fn required_progress(&self) -> (usize, usize) {
+        let mut total = 0usize;
+        let mut filled = 0usize;
+        for idx in 0..self.form.field_count() {
+            if !self.form.is_required(idx) {
+                continue;
+            }
+            total += 1;
+            if let Some(field) = self.form.field(idx)
+                && Self::field_is_filled(field)
+            {
+                filled += 1;
+            }
+        }
+        (filled, total)
+    }
+
+    fn filled_progress(&self) -> (usize, usize) {
+        let total = self.form.field_count();
+        let mut filled = 0usize;
+        for idx in 0..total {
+            if let Some(field) = self.form.field(idx)
+                && Self::field_is_filled(field)
+            {
+                filled += 1;
+            }
+        }
+        (filled, total)
+    }
+
+    fn render_badge_row(&self, frame: &mut Frame, area: Rect, badges: &[(&str, Style)]) {
+        if area.is_empty() {
+            return;
+        }
+
+        let mut x = area.x;
+        let max_x = area.right();
+        for (label, style) in badges {
+            let badge = Badge::new(label).with_style(*style);
+            let width = badge.width().min(area.width);
+            if x >= max_x || x.saturating_add(width) > max_x {
+                break;
+            }
+            badge.render(Rect::new(x, area.y, width, 1), frame);
+            x = x.saturating_add(width).saturating_add(1);
+        }
+    }
+
+    fn render_form_summary(&self, frame: &mut Frame, area: Rect, state: &FormState) {
+        if area.is_empty() {
+            return;
+        }
+
+        let styles = theme::semantic_styles();
+        let error_count = state.errors.len();
+        let (required_filled, required_total) = self.required_progress();
+        let (filled_fields, total_fields) = self.filled_progress();
+
+        let (status_label, status_style) = if state.submitted {
+            ("SUBMITTED", styles.intent.success.badge_style)
+        } else if state.cancelled {
+            ("CANCELLED", styles.intent.warning.badge_style)
+        } else if error_count > 0 {
+            ("NEEDS ATTN", styles.intent.error.badge_style)
+        } else if required_total > 0 && required_filled == required_total {
+            ("READY", styles.intent.success.badge_style)
+        } else {
+            ("DRAFT", styles.intent.info.badge_style)
+        };
+
+        let required_label = format!("REQ {required_filled}/{required_total}");
+        let error_label = format!("ERR {error_count}");
+        let filled_label = format!("FIELDS {filled_fields}/{total_fields}");
+
+        let required_style = if required_total == 0 {
+            styles.intent.info.badge_style
+        } else if required_filled == required_total {
+            styles.intent.success.badge_style
+        } else {
+            styles.intent.warning.badge_style
+        };
+        let error_style = if error_count == 0 {
+            styles.intent.success.badge_style
+        } else {
+            styles.intent.error.badge_style
+        };
+        let filled_style = if filled_fields == total_fields {
+            styles.intent.success.badge_style
+        } else {
+            styles.intent.info.badge_style
+        };
+
+        let badges = [
+            (status_label, status_style),
+            (required_label.as_str(), required_style),
+            (error_label.as_str(), error_style),
+            (filled_label.as_str(), filled_style),
+        ];
+
+        self.render_badge_row(frame, area, &badges);
     }
 
     fn snapshot(&self) -> FormsInputSnapshot {
@@ -625,12 +759,31 @@ impl FormsInput {
             return;
         }
 
-        let chunks = Flex::vertical()
-            .constraints([Constraint::Min(1), Constraint::Fixed(2)])
-            .split(inner);
-
         let mut state = self.form_state.borrow_mut();
-        StatefulWidget::render(&self.form, chunks[0], frame, &mut state);
+        let show_header = inner.height >= 4;
+        let show_footer = inner.height >= 6;
+
+        let mut constraints = Vec::new();
+        if show_header {
+            constraints.push(Constraint::Fixed(1));
+        }
+        constraints.push(Constraint::Min(1));
+        if show_footer {
+            constraints.push(Constraint::Fixed(2));
+        }
+
+        let chunks = Flex::vertical().constraints(constraints).split(inner);
+        let mut idx = 0usize;
+
+        if show_header {
+            self.render_form_summary(frame, chunks[idx], &state);
+            idx = idx.saturating_add(1);
+        }
+
+        if let Some(form_area) = chunks.get(idx) {
+            StatefulWidget::render(&self.form, *form_area, frame, &mut state);
+            idx = idx.saturating_add(1);
+        }
 
         let legend = "Legend: * required | red=error | green=valid | dim=disabled";
         let hint = if state.submitted {
@@ -647,9 +800,13 @@ impl FormsInput {
         } else {
             theme::muted()
         };
-        Paragraph::new(hint)
-            .style(hint_style)
-            .render(chunks[1], frame);
+        if show_footer {
+            if let Some(footer_area) = chunks.get(idx) {
+                Paragraph::new(hint)
+                    .style(hint_style)
+                    .render(*footer_area, frame);
+            }
+        }
     }
 
     fn render_input_panel(&self, frame: &mut Frame, area: Rect) {
@@ -676,14 +833,25 @@ impl FormsInput {
             .constraints([Constraint::Fixed(1), Constraint::Fixed(1)])
             .split(inner);
 
+        let styles = theme::semantic_styles();
+        let search_style = if self.focus == FocusPanel::SearchInput {
+            styles.intent.info.badge_style.bold()
+        } else {
+            styles.intent.info.badge_style
+        };
+        let password_style = if self.focus == FocusPanel::PasswordInput {
+            styles.intent.warning.badge_style.bold()
+        } else {
+            styles.intent.warning.badge_style
+        };
+
         // Search row
         if !rows[0].is_empty() {
             let cols = Flex::horizontal()
                 .constraints([Constraint::Fixed(10), Constraint::Min(1)])
                 .split(rows[0]);
-            Paragraph::new("Search:")
-                .style(Style::new().fg(theme::fg::SECONDARY))
-                .render(cols[0], frame);
+            let badge = Badge::new("Search").with_style(search_style);
+            badge.render(cols[0], frame);
             Widget::render(&self.search_input, cols[1], frame);
         }
 
@@ -692,9 +860,8 @@ impl FormsInput {
             let cols = Flex::horizontal()
                 .constraints([Constraint::Fixed(10), Constraint::Min(1)])
                 .split(rows[1]);
-            Paragraph::new("Password:")
-                .style(Style::new().fg(theme::fg::SECONDARY))
-                .render(cols[0], frame);
+            let badge = Badge::new("Password").with_style(password_style);
+            badge.render(cols[0], frame);
             Widget::render(&self.password_input, cols[1], frame);
         }
     }

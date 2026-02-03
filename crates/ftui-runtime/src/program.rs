@@ -667,7 +667,7 @@ impl<M: Model> Program<M, Stdout> {
 
     /// Create a new program with the specified configuration.
     pub fn with_config(model: M, config: ProgramConfig) -> io::Result<Self> {
-        let capabilities = TerminalCapabilities::detect();
+        let capabilities = TerminalCapabilities::with_overrides();
         let session = TerminalSession::new(SessionOptions {
             alternate_screen: matches!(config.screen_mode, ScreenMode::AltScreen),
             mouse_capture: config.mouse,

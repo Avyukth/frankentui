@@ -43,9 +43,12 @@ pub mod time_travel_inspector;
 #[cfg(feature = "pty-capture")]
 pub mod pty_capture;
 
+use std::ffi::OsString;
 use std::fmt::Write as FmtWrite;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
+use ftui_core::terminal_capabilities::TerminalProfile;
 use ftui_render::buffer::Buffer;
 use ftui_render::cell::{PackedRgba, StyleFlags};
 
@@ -281,12 +284,41 @@ pub fn diff_text(expected: &str, actual: &str) -> String {
 // Snapshot Assertion
 // ============================================================================
 
+/// Resolve the active test profile from the environment.
+///
+/// Returns `None` when unset or when explicitly set to `detected`.
+#[must_use]
+pub fn current_test_profile() -> Option<TerminalProfile> {
+    std::env::var("FTUI_TEST_PROFILE")
+        .ok()
+        .and_then(|value| value.parse::<TerminalProfile>().ok())
+        .and_then(|profile| {
+            if profile == TerminalProfile::Detected {
+                None
+            } else {
+                Some(profile)
+            }
+        })
+}
+
+fn snapshot_name_with_profile(name: &str) -> String {
+    if let Some(profile) = current_test_profile() {
+        let suffix = format!("__{}", profile.as_str());
+        if name.ends_with(&suffix) {
+            return name.to_string();
+        }
+        return format!("{name}{suffix}");
+    }
+    name.to_string()
+}
+
 /// Resolve the snapshot file path.
 fn snapshot_path(base_dir: &Path, name: &str) -> PathBuf {
+    let resolved_name = snapshot_name_with_profile(name);
     base_dir
         .join("tests")
         .join("snapshots")
-        .join(format!("{name}.snap"))
+        .join(format!("{resolved_name}.snap"))
 }
 
 /// Check if the `BLESS` environment variable is set.

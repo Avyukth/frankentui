@@ -1018,10 +1018,10 @@ impl WidgetGallery {
             .split(inner);
         let metrics = [("CPU", 0.72), ("Mem", 0.48), ("IO", 0.35)];
         let colors = MiniBarColors::new(
-            theme::accent::SUCCESS,
-            theme::accent::WARNING,
-            theme::accent::INFO,
-            theme::accent::ERROR,
+            theme::accent::SUCCESS.into(),
+            theme::accent::WARNING.into(),
+            theme::accent::INFO.into(),
+            theme::accent::ERROR.into(),
         );
 
         for (row, (label, ratio)) in rows.iter().zip(metrics.iter()) {
@@ -1038,7 +1038,7 @@ impl WidgetGallery {
                 1,
             );
 
-            Paragraph::new(format!("{label}"))
+            Paragraph::new(label.to_string())
                 .style(Style::new().fg(theme::fg::MUTED))
                 .render(label_area, frame);
 
@@ -1341,38 +1341,38 @@ impl WidgetGallery {
         let left_width = inner.width / 2;
         let right_width = inner.width.saturating_sub(left_width);
         let left_area = Rect::new(inner.x, mid_y, left_width, mid_height);
-        let right_area = Rect::new(inner.x.saturating_add(left_width), mid_y, right_width, mid_height);
+        let right_area = Rect::new(
+            inner.x.saturating_add(left_width),
+            mid_y,
+            right_width,
+            mid_height,
+        );
 
-        let record = LayoutRecord::new(
-            "Grid",
-            inner,
-            inner,
-            LayoutConstraints::new(0, 0, 0, 0),
-        )
-        .with_child(LayoutRecord::new(
-            "Header",
-            header_area,
-            header_area,
-            LayoutConstraints::new(8, 0, 1, 1),
-        ))
-        .with_child(LayoutRecord::new(
-            "Left",
-            left_area,
-            left_area,
-            LayoutConstraints::new(left_width.saturating_add(2), 0, 0, 0),
-        ))
-        .with_child(LayoutRecord::new(
-            "Right",
-            right_area,
-            right_area,
-            LayoutConstraints::new(0, right_width.saturating_sub(2), 0, 0),
-        ))
-        .with_child(LayoutRecord::new(
-            "Footer",
-            footer_area,
-            footer_area,
-            LayoutConstraints::new(12, 0, 1, 1),
-        ));
+        let record = LayoutRecord::new("Grid", inner, inner, LayoutConstraints::new(0, 0, 0, 0))
+            .with_child(LayoutRecord::new(
+                "Header",
+                header_area,
+                header_area,
+                LayoutConstraints::new(8, 0, 1, 1),
+            ))
+            .with_child(LayoutRecord::new(
+                "Left",
+                left_area,
+                left_area,
+                LayoutConstraints::new(left_width.saturating_add(2), 0, 0, 0),
+            ))
+            .with_child(LayoutRecord::new(
+                "Right",
+                right_area,
+                right_area,
+                LayoutConstraints::new(0, right_width.saturating_sub(2), 0, 0),
+            ))
+            .with_child(LayoutRecord::new(
+                "Footer",
+                footer_area,
+                footer_area,
+                LayoutConstraints::new(12, 0, 1, 1),
+            ));
         debugger.record(record);
 
         Group::new()

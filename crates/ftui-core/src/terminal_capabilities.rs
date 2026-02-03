@@ -50,6 +50,9 @@
 //! assert_eq!(profile.profile_name(), Some("xterm-256color"));
 //! ```
 //!
+//! Override detection in tests by setting `FTUI_TEST_PROFILE` to a known
+//! profile name (for example: `dumb`, `screen`, `tmux`, `windows-console`).
+//!
 //! # Detection Strategy
 //!
 //! We detect capabilities using:
@@ -111,6 +114,7 @@
 //! - Must be bounded with timeouts
 
 use std::env;
+use std::str::FromStr;
 
 #[derive(Debug, Clone)]
 struct DetectInputs {
@@ -830,6 +834,13 @@ impl TerminalCapabilities {
     /// for safety.
     #[must_use]
     pub fn detect() -> Self {
+        if let Ok(value) = env::var("FTUI_TEST_PROFILE") {
+            if let Ok(profile) = TerminalProfile::from_str(value.trim()) {
+                if profile != TerminalProfile::Detected {
+                    return Self::from_profile(profile);
+                }
+            }
+        }
         let env = DetectInputs::from_env();
         Self::detect_from_inputs(&env)
     }
@@ -1050,6 +1061,33 @@ impl TerminalCapabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn with_env_var(key: &str, value: &str, f: impl FnOnce()) {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        let prev = std::env::var_os(key);
+        std::env::set_var(key, value);
+        f();
+        match prev {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+    }
+
+    fn clear_env_var(key: &str, f: impl FnOnce()) {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        let prev = std::env::var_os(key);
+        std::env::remove_var(key);
+        f();
+        if let Some(v) = prev {
+            std::env::set_var(key, v);
+        }
+    }
 
     #[test]
     fn basic_is_minimal() {
@@ -1871,9 +1909,27 @@ mod tests {
 
     #[test]
     fn detected_profile_has_none_name() {
-        let caps = TerminalCapabilities::detect();
-        assert_eq!(caps.profile(), TerminalProfile::Detected);
-        assert_eq!(caps.profile_name(), None);
+        clear_env_var("FTUI_TEST_PROFILE", || {
+            let caps = TerminalCapabilities::detect();
+            assert_eq!(caps.profile(), TerminalProfile::Detected);
+            assert_eq!(caps.profile_name(), None);
+        });
+    }
+
+    #[test]
+    fn detect_respects_test_profile_env() {
+        with_env_var("FTUI_TEST_PROFILE", "dumb", || {
+            let caps = TerminalCapabilities::detect();
+            assert_eq!(caps.profile(), TerminalProfile::Dumb);
+        });
+    }
+
+    #[test]
+    fn detect_ignores_invalid_test_profile() {
+        with_env_var("FTUI_TEST_PROFILE", "not-a-real-profile", || {
+            let caps = TerminalCapabilities::detect();
+            assert_eq!(caps.profile(), TerminalProfile::Detected);
+        });
     }
 
     #[test]
