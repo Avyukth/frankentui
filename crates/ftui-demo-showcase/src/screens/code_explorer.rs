@@ -703,6 +703,12 @@ impl Screen for CodeExplorer {
                 (KeyCode::Char('m'), Modifiers::NONE) => {
                     self.mode = self.mode.next();
                 }
+                (KeyCode::Char('M'), Modifiers::SHIFT) => {
+                    self.mode = self.mode.prev();
+                }
+                (KeyCode::Char('m'), Modifiers::NONE) => {
+                    self.mode = self.mode.next();
+                }
                 (KeyCode::Char('M'), _) | (KeyCode::Char('m'), Modifiers::SHIFT) => {
                     self.mode = self.mode.prev();
                 }
@@ -834,6 +840,10 @@ impl Screen for CodeExplorer {
             HelpEntry {
                 key: "f",
                 action: "Cycle feature spotlight",
+            },
+            HelpEntry {
+                key: "m/M",
+                action: "Cycle mode",
             },
             HelpEntry {
                 key: "j/k",
@@ -1382,6 +1392,427 @@ impl CodeExplorer {
             self.render_hotspot_panel(frame, combo_rows[0]);
             self.render_match_radar(frame, combo_rows[1]);
             self.render_feature_spotlight(frame, combo_rows[2]);
+        }
+    }
+
+    fn render_sidebar_query_lab(&self, frame: &mut Frame, area: Rect) {
+        self.reset_sidebar_layouts();
+        let rows = Flex::vertical()
+            .constraints([
+                Constraint::Percentage(28.0),
+                Constraint::Percentage(32.0),
+                Constraint::Percentage(20.0),
+                Constraint::Percentage(20.0),
+            ])
+            .split(area);
+
+        self.layout_info.set(rows[0]);
+        chrome::register_pane_hit(frame, rows[0], ScreenId::CodeExplorer);
+        let query_block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("Query Studio")
+            .title_alignment(Alignment::Center)
+            .style(theme::panel_border_style(
+                self.focus == FocusPanel::Info,
+                theme::screen_accent::CODE_EXPLORER,
+            ));
+        let query_inner = query_block.inner(rows[0]);
+        query_block.render(rows[0], frame);
+        if !query_inner.is_empty() {
+            let query = vec![
+                "SELECT",
+                "  p.name, p.latency_ms, r.rows",
+                "FROM perf_events p",
+                "JOIN result_cache r ON r.key = p.key",
+                "WHERE p.latency_ms > 120",
+                "ORDER BY p.ts DESC",
+                "LIMIT 5;",
+            ];
+            let styled = StyledMultiLine::new(query)
+                .effect(TextEffect::Typewriter {
+                    progress: ((self.time * 0.6).sin() * 0.5 + 0.5).clamp(0.0, 1.0),
+                    cursor: true,
+                })
+                .base_color(theme::fg::PRIMARY.into())
+                .time(self.time);
+            styled.render(query_inner, frame);
+        }
+
+        self.layout_context.set(rows[1]);
+        chrome::register_pane_hit(frame, rows[1], ScreenId::CodeExplorer);
+        let result_block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("Result Preview")
+            .title_alignment(Alignment::Center)
+            .style(theme::panel_border_style(
+                self.focus == FocusPanel::Context,
+                theme::screen_accent::CODE_EXPLORER,
+            ));
+        let result_inner = result_block.inner(rows[1]);
+        result_block.render(rows[1], frame);
+        if !result_inner.is_empty() {
+            let lines = vec![
+                "name         latency rows",
+                "----------   ------- -----",
+                "pager_sync     214ms  128",
+                "btree_seek     173ms   94",
+                "vdb_exec       142ms   61",
+                "stmt_prepare   130ms   48",
+            ];
+            for (i, line) in lines.iter().enumerate() {
+                if i as u16 >= result_inner.height {
+                    break;
+                }
+                let row_area = Rect::new(
+                    result_inner.x,
+                    result_inner.y + i as u16,
+                    result_inner.width,
+                    1,
+                );
+                Paragraph::new(truncate_to_width(line, result_inner.width))
+                    .style(Style::new().fg(theme::fg::SECONDARY))
+                    .render(row_area, frame);
+            }
+        }
+
+        self.layout_hotspots.set(rows[2]);
+        chrome::register_pane_hit(frame, rows[2], ScreenId::CodeExplorer);
+        let metrics_block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("Query Telemetry")
+            .title_alignment(Alignment::Center)
+            .style(theme::panel_border_style(
+                self.focus == FocusPanel::Hotspots,
+                theme::screen_accent::CODE_EXPLORER,
+            ));
+        let metrics_inner = metrics_block.inner(rows[2]);
+        metrics_block.render(rows[2], frame);
+        if !metrics_inner.is_empty() {
+            let spark = if self.match_density.is_empty() {
+                vec![0.1, 0.3, 0.6, 0.4, 0.7, 0.5, 0.8, 0.6, 0.4, 0.2]
+            } else {
+                self.match_density.clone()
+            };
+            Sparkline::new(&spark)
+                .style(Style::new().fg(theme::accent::PRIMARY))
+                .gradient(
+                    theme::accent::PRIMARY.into(),
+                    theme::accent::ACCENT_8.into(),
+                )
+                .render(metrics_inner, frame);
+        }
+
+        self.layout_spotlight.set(rows[3]);
+        chrome::register_pane_hit(frame, rows[3], ScreenId::CodeExplorer);
+        let spotlight_block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("FrankenTUI Spotlight")
+            .title_alignment(Alignment::Center)
+            .style(theme::panel_border_style(
+                self.focus == FocusPanel::Spotlight,
+                theme::screen_accent::CODE_EXPLORER,
+            ));
+        let spotlight_inner = spotlight_block.inner(rows[3]);
+        spotlight_block.render(rows[3], frame);
+        self.render_feature_spotlight(frame, spotlight_inner);
+    }
+
+    fn render_sidebar_exec_plan(&self, frame: &mut Frame, area: Rect) {
+        self.reset_sidebar_layouts();
+        let rows = Flex::vertical()
+            .constraints([
+                Constraint::Percentage(35.0),
+                Constraint::Percentage(25.0),
+                Constraint::Percentage(20.0),
+                Constraint::Percentage(20.0),
+            ])
+            .split(area);
+
+        self.layout_info.set(rows[0]);
+        chrome::register_pane_hit(frame, rows[0], ScreenId::CodeExplorer);
+        let plan_block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("Execution Plan")
+            .title_alignment(Alignment::Center)
+            .style(theme::panel_border_style(
+                self.focus == FocusPanel::Info,
+                theme::screen_accent::CODE_EXPLORER,
+            ));
+        let plan_inner = plan_block.inner(rows[0]);
+        plan_block.render(rows[0], frame);
+        if !plan_inner.is_empty() {
+            let plan = vec![
+                "└─ SELECT (cost=187)",
+                "   ├─ SCAN perf_events",
+                "   ├─ INDEX result_cache",
+                "   └─ FILTER latency_ms>120",
+            ];
+            let styled = StyledMultiLine::new(plan)
+                .effect(TextEffect::Scanline {
+                    intensity: 0.25,
+                    line_gap: 2,
+                    scroll: true,
+                    scroll_speed: 0.6,
+                    flicker: 0.05,
+                })
+                .base_color(theme::fg::PRIMARY.into())
+                .time(self.time);
+            styled.render(plan_inner, frame);
+        }
+
+        self.layout_context.set(rows[1]);
+        chrome::register_pane_hit(frame, rows[1], ScreenId::CodeExplorer);
+        let io_block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("IO Telemetry")
+            .title_alignment(Alignment::Center)
+            .style(theme::panel_border_style(
+                self.focus == FocusPanel::Context,
+                theme::screen_accent::CODE_EXPLORER,
+            ));
+        let io_inner = io_block.inner(rows[1]);
+        io_block.render(rows[1], frame);
+        if !io_inner.is_empty() {
+            let width = io_inner.width.max(10);
+            let waveform: Vec<f64> = (0..width)
+                .map(|i| ((self.time * 0.6 + i as f64 * 0.3).sin() * 0.5 + 0.5))
+                .collect();
+            Sparkline::new(&waveform)
+                .style(Style::new().fg(theme::accent::WARNING))
+                .render(io_inner, frame);
+        }
+
+        self.layout_hotspots.set(rows[2]);
+        chrome::register_pane_hit(frame, rows[2], ScreenId::CodeExplorer);
+        self.render_hotspot_panel(frame, rows[2]);
+
+        self.layout_spotlight.set(rows[3]);
+        chrome::register_pane_hit(frame, rows[3], ScreenId::CodeExplorer);
+        let spotlight_block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("FrankenTUI Spotlight")
+            .title_alignment(Alignment::Center)
+            .style(theme::panel_border_style(
+                self.focus == FocusPanel::Spotlight,
+                theme::screen_accent::CODE_EXPLORER,
+            ));
+        let spotlight_inner = spotlight_block.inner(rows[3]);
+        spotlight_block.render(rows[3], frame);
+        self.render_feature_spotlight(frame, spotlight_inner);
+    }
+
+    fn render_sidebar_query_lab(&self, frame: &mut Frame, area: Rect) {
+        self.reset_sidebar_layouts();
+        let rows = Flex::vertical()
+            .constraints([
+                Constraint::Percentage(40.0),
+                Constraint::Percentage(30.0),
+                Constraint::Percentage(30.0),
+            ])
+            .split(area);
+
+        // Panel 1: SQL Studio
+        self.layout_info.set(rows[0]);
+        chrome::register_pane_hit(frame, rows[0], ScreenId::CodeExplorer);
+        let studio_block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("SQL Studio")
+            .title_alignment(Alignment::Center)
+            .style(theme::panel_border_style(
+                self.focus == FocusPanel::Info,
+                theme::screen_accent::CODE_EXPLORER,
+            ));
+        let studio_inner = studio_block.inner(rows[0]);
+        studio_block.render(rows[0], frame);
+        let query = QUERY_SNIPPETS[self.query_index()];
+        for (i, line) in query.lines().enumerate() {
+            let y = studio_inner.y + i as u16;
+            if y >= studio_inner.y + studio_inner.height {
+                break;
+            }
+            let area = Rect::new(studio_inner.x, y, studio_inner.width, 1);
+            let text = truncate_to_width(line, studio_inner.width);
+            let fx = StyledText::new(text)
+                .effect(TextEffect::AnimatedGradient {
+                    gradient: ColorGradient::matrix(),
+                    speed: 0.65,
+                })
+                .effect(TextEffect::Scanline {
+                    intensity: 0.2,
+                    line_gap: 2,
+                    scroll: true,
+                    scroll_speed: 0.7,
+                })
+                .time(self.time);
+            fx.render(area, frame);
+        }
+
+        // Panel 2: Live Preview
+        self.layout_context.set(rows[1]);
+        chrome::register_pane_hit(frame, rows[1], ScreenId::CodeExplorer);
+        let preview_block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("Live Preview")
+            .title_alignment(Alignment::Center)
+            .style(theme::panel_border_style(
+                self.focus == FocusPanel::Context,
+                theme::screen_accent::CODE_EXPLORER,
+            ));
+        let preview_inner = preview_block.inner(rows[1]);
+        preview_block.render(rows[1], frame);
+        let preview_idx = self
+            .query_index()
+            .min(RESULT_PREVIEWS.len().saturating_sub(1));
+        let preview = RESULT_PREVIEWS
+            .get(preview_idx)
+            .copied()
+            .unwrap_or("rows=0");
+        let preview_line = truncate_to_width(preview, preview_inner.width);
+        let preview_fx = StyledText::new(preview_line)
+            .effect(TextEffect::ColorWave {
+                color1: theme::accent::SUCCESS.into(),
+                color2: theme::accent::ACCENT_8.into(),
+                speed: 1.1,
+                wavelength: 12.0,
+            })
+            .time(self.time);
+        preview_fx.render(preview_inner, frame);
+
+        // Panel 3: Index Map
+        self.layout_hotspots.set(rows[2]);
+        chrome::register_pane_hit(frame, rows[2], ScreenId::CodeExplorer);
+        let map_block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("Index Map")
+            .title_alignment(Alignment::Center)
+            .style(theme::panel_border_style(
+                self.focus == FocusPanel::Hotspots,
+                theme::screen_accent::CODE_EXPLORER,
+            ));
+        let map_inner = map_block.inner(rows[2]);
+        map_block.render(rows[2], frame);
+        let map = if self.match_density.is_empty() {
+            vec![0.2, 0.4, 0.6, 0.8, 0.5, 0.3, 0.7, 0.9, 0.4, 0.2]
+        } else {
+            self.match_density.clone()
+        };
+        Sparkline::new(&map)
+            .style(Style::new().fg(theme::accent::PRIMARY))
+            .gradient(
+                theme::accent::PRIMARY.into(),
+                theme::accent::ACCENT_8.into(),
+            )
+            .render(map_inner, frame);
+    }
+
+    fn render_sidebar_exec_plan(&self, frame: &mut Frame, area: Rect) {
+        self.reset_sidebar_layouts();
+        let rows = Flex::vertical()
+            .constraints([
+                Constraint::Percentage(40.0),
+                Constraint::Percentage(30.0),
+                Constraint::Percentage(30.0),
+            ])
+            .split(area);
+
+        // Panel 1: Plan graph
+        self.layout_info.set(rows[0]);
+        chrome::register_pane_hit(frame, rows[0], ScreenId::CodeExplorer);
+        let plan_block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("Query Plan Graph")
+            .title_alignment(Alignment::Center)
+            .style(theme::panel_border_style(
+                self.focus == FocusPanel::Info,
+                theme::screen_accent::CODE_EXPLORER,
+            ));
+        let plan_inner = plan_block.inner(rows[0]);
+        plan_block.render(rows[0], frame);
+        for (i, line) in PLAN_GRAPH.iter().enumerate() {
+            let y = plan_inner.y + i as u16;
+            if y >= plan_inner.y + plan_inner.height {
+                break;
+            }
+            let area = Rect::new(plan_inner.x, y, plan_inner.width, 1);
+            let fx = StyledText::new(truncate_to_width(line, plan_inner.width))
+                .effect(TextEffect::AnimatedGradient {
+                    gradient: ColorGradient::ice(),
+                    speed: 0.4,
+                })
+                .time(self.time);
+            fx.render(area, frame);
+        }
+
+        // Panel 2: IO + Cache telemetry
+        self.layout_context.set(rows[1]);
+        chrome::register_pane_hit(frame, rows[1], ScreenId::CodeExplorer);
+        let io_block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("IO + Cache Telemetry")
+            .title_alignment(Alignment::Center)
+            .style(theme::panel_border_style(
+                self.focus == FocusPanel::Context,
+                theme::screen_accent::CODE_EXPLORER,
+            ));
+        let io_inner = io_block.inner(rows[1]);
+        io_block.render(rows[1], frame);
+        let io_lines = [
+            format!("reads: {:>4}/s", 320 + (self.time.sin() * 40.0) as i32),
+            format!("writes:{:>4}/s", 90 + (self.time.cos() * 20.0) as i32),
+        ];
+        for (i, line) in io_lines.iter().enumerate() {
+            let y = io_inner.y + i as u16;
+            if y >= io_inner.y + io_inner.height {
+                break;
+            }
+            Paragraph::new(truncate_to_width(line, io_inner.width))
+                .style(Style::new().fg(theme::fg::SECONDARY))
+                .render(Rect::new(io_inner.x, y, io_inner.width, 1), frame);
+        }
+
+        // Panel 3: Hot path
+        self.layout_hotspots.set(rows[2]);
+        chrome::register_pane_hit(frame, rows[2], ScreenId::CodeExplorer);
+        let hot_block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("Hot Path")
+            .title_alignment(Alignment::Center)
+            .style(theme::panel_border_style(
+                self.focus == FocusPanel::Hotspots,
+                theme::screen_accent::CODE_EXPLORER,
+            ));
+        let hot_inner = hot_block.inner(rows[2]);
+        hot_block.render(rows[2], frame);
+        let hot_lines = [
+            "pager.c: fetchPage()",
+            "btree.c: btreeNext()",
+            "vdbe.c: sqlite3VdbeExec()",
+        ];
+        for (i, line) in hot_lines.iter().enumerate() {
+            let y = hot_inner.y + i as u16;
+            if y >= hot_inner.y + hot_inner.height {
+                break;
+            }
+            let fx = StyledText::new(truncate_to_width(line, hot_inner.width))
+                .effect(TextEffect::PulsingGlow {
+                    color: theme::accent::WARNING.into(),
+                    speed: 1.6,
+                })
+                .time(self.time);
+            fx.render(Rect::new(hot_inner.x, y, hot_inner.width, 1), frame);
         }
     }
 
