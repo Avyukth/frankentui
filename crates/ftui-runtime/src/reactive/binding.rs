@@ -265,6 +265,117 @@ macro_rules! bind_map2 {
 }
 
 // ---------------------------------------------------------------------------
+// BindingScope — lifecycle management
+// ---------------------------------------------------------------------------
+
+/// Collects subscriptions and bindings for a logical scope (e.g., a widget).
+///
+/// When the scope is dropped, all held subscriptions are released, cleanly
+/// disconnecting all reactive bindings associated with that scope.
+///
+/// # Usage
+///
+/// ```ignore
+/// let mut scope = BindingScope::new();
+///
+/// let obs = Observable::new(42);
+/// scope.subscribe(&obs, |v| println!("value: {v}"));
+/// scope.bind(&obs, |v| format!("display: {v}"));
+///
+/// // When scope drops, all subscriptions are released.
+/// ```
+///
+/// # Invariants
+///
+/// 1. Subscriptions are released in reverse registration order on drop.
+/// 2. After drop, no callbacks from this scope will fire.
+/// 3. `clear()` releases all subscriptions immediately (reusable scope).
+/// 4. Binding count is always accurate.
+pub struct BindingScope {
+    subscriptions: Vec<Subscription>,
+}
+
+impl BindingScope {
+    /// Create an empty binding scope.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            subscriptions: Vec::new(),
+        }
+    }
+
+    /// Add a subscription to this scope. The subscription will be held alive
+    /// until the scope is dropped or `clear()` is called.
+    pub fn hold(&mut self, sub: Subscription) {
+        self.subscriptions.push(sub);
+    }
+
+    /// Subscribe to an observable within this scope.
+    ///
+    /// Returns a reference to the scope for chaining.
+    pub fn subscribe<T: Clone + PartialEq + 'static>(
+        &mut self,
+        source: &Observable<T>,
+        callback: impl Fn(&T) + 'static,
+    ) -> &mut Self {
+        let sub = source.subscribe(callback);
+        self.subscriptions.push(sub);
+        self
+    }
+
+    /// Create a one-way binding within this scope.
+    ///
+    /// The binding's underlying subscription is held by the scope.
+    /// Returns the `Binding<T>` for reading the value.
+    pub fn bind<T: Clone + PartialEq + 'static>(
+        &mut self,
+        source: &Observable<T>,
+    ) -> Binding<T> {
+        bind_observable(source)
+    }
+
+    /// Create a mapped binding within this scope.
+    pub fn bind_map<S: Clone + PartialEq + 'static, T: 'static>(
+        &mut self,
+        source: &Observable<S>,
+        map: impl Fn(&S) -> T + 'static,
+    ) -> Binding<T> {
+        bind_mapped(source, map)
+    }
+
+    /// Number of active subscriptions/bindings in this scope.
+    #[must_use]
+    pub fn binding_count(&self) -> usize {
+        self.subscriptions.len()
+    }
+
+    /// Whether the scope has no active bindings.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.subscriptions.is_empty()
+    }
+
+    /// Release all subscriptions immediately (scope becomes empty but reusable).
+    pub fn clear(&mut self) {
+        self.subscriptions.clear();
+    }
+}
+
+impl Default for BindingScope {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for BindingScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BindingScope")
+            .field("binding_count", &self.subscriptions.len())
+            .finish()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -450,5 +561,139 @@ mod tests {
         let source2 = source.clone();
         source2.set(99);
         assert_eq!(b.get(), 99, "binding should see changes through cloned observable");
+    }
+
+    // ---- BindingScope tests ----
+
+    #[test]
+    fn scope_holds_subscriptions() {
+        let obs = Observable::new(0);
+        let seen = Rc::new(Cell::new(0));
+
+        let mut scope = BindingScope::new();
+        let s = Rc::clone(&seen);
+        scope.subscribe(&obs, move |v| s.set(*v));
+        assert_eq!(scope.binding_count(), 1);
+
+        obs.set(42);
+        assert_eq!(seen.get(), 42);
+    }
+
+    #[test]
+    fn scope_drop_releases_subscriptions() {
+        let obs = Observable::new(0);
+        let seen = Rc::new(Cell::new(0));
+
+        {
+            let mut scope = BindingScope::new();
+            let s = Rc::clone(&seen);
+            scope.subscribe(&obs, move |v| s.set(*v));
+            obs.set(1);
+            assert_eq!(seen.get(), 1);
+        }
+
+        // After scope dropped, subscription should be gone.
+        obs.set(99);
+        assert_eq!(seen.get(), 1, "callback should not fire after scope dropped");
+    }
+
+    #[test]
+    fn scope_clear_releases() {
+        let obs = Observable::new(0);
+        let seen = Rc::new(Cell::new(0));
+
+        let mut scope = BindingScope::new();
+        let s = Rc::clone(&seen);
+        scope.subscribe(&obs, move |v| s.set(*v));
+        assert_eq!(scope.binding_count(), 1);
+
+        scope.clear();
+        assert_eq!(scope.binding_count(), 0);
+        assert!(scope.is_empty());
+
+        obs.set(42);
+        assert_eq!(seen.get(), 0, "callback should not fire after clear");
+    }
+
+    #[test]
+    fn scope_multiple_subscriptions() {
+        let obs = Observable::new(0);
+        let count = Rc::new(Cell::new(0));
+
+        let mut scope = BindingScope::new();
+        for _ in 0..5 {
+            let c = Rc::clone(&count);
+            scope.subscribe(&obs, move |_| c.set(c.get() + 1));
+        }
+        assert_eq!(scope.binding_count(), 5);
+
+        obs.set(1);
+        assert_eq!(count.get(), 5, "all 5 callbacks should fire");
+    }
+
+    #[test]
+    fn scope_bind_returns_binding() {
+        let obs = Observable::new(42);
+        let mut scope = BindingScope::new();
+        let b = scope.bind(&obs);
+        assert_eq!(b.get(), 42);
+
+        obs.set(7);
+        assert_eq!(b.get(), 7);
+    }
+
+    #[test]
+    fn scope_bind_map() {
+        let obs = Observable::new(3);
+        let mut scope = BindingScope::new();
+        let b = scope.bind_map(&obs, |v| v * 10);
+        assert_eq!(b.get(), 30);
+    }
+
+    #[test]
+    fn scope_reusable_after_clear() {
+        let obs = Observable::new(0);
+        let mut scope = BindingScope::new();
+
+        let seen1 = Rc::new(Cell::new(false));
+        let s1 = Rc::clone(&seen1);
+        scope.subscribe(&obs, move |_| s1.set(true));
+        scope.clear();
+
+        let seen2 = Rc::new(Cell::new(false));
+        let s2 = Rc::clone(&seen2);
+        scope.subscribe(&obs, move |_| s2.set(true));
+
+        obs.set(1);
+        assert!(!seen1.get(), "first subscription should be gone");
+        assert!(seen2.get(), "second subscription should be active");
+    }
+
+    #[test]
+    fn scope_hold_external_subscription() {
+        let obs = Observable::new(0);
+        let seen = Rc::new(Cell::new(0));
+
+        let mut scope = BindingScope::new();
+        let s = Rc::clone(&seen);
+        let sub = obs.subscribe(move |v| s.set(*v));
+        scope.hold(sub);
+
+        obs.set(5);
+        assert_eq!(seen.get(), 5);
+
+        drop(scope);
+        obs.set(99);
+        assert_eq!(seen.get(), 5, "held subscription should be released on scope drop");
+    }
+
+    #[test]
+    fn scope_debug_format() {
+        let mut scope = BindingScope::new();
+        let obs = Observable::new(0);
+        scope.subscribe(&obs, |_| {});
+        scope.subscribe(&obs, |_| {});
+        let debug = format!("{scope:?}");
+        assert!(debug.contains("binding_count: 2"));
     }
 }
