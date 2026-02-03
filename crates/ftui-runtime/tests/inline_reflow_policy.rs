@@ -33,7 +33,6 @@
 //! ```
 
 use std::collections::BTreeMap;
-use std::io::Write;
 
 use ftui_core::inline_mode::InlineStrategy;
 use ftui_core::terminal_capabilities::TerminalCapabilities;
@@ -863,21 +862,25 @@ fn inline_reflow_ghost1_buffer_shorter_than_ui_height() {
         let buf_full = make_buffer_with_pattern(10, 10, 'X');
         w.present_ui(&buf_full, None).unwrap();
 
-        let before = output.len();
-
         // Second present with short buffer (3 rows for a 10-row UI)
         let buf_short = make_buffer_with_pattern(10, 3, '.');
         w.present_ui(&buf_short, None).unwrap();
-
-        // Should clear the remaining 7 rows to prevent ghosting
-        let after_output = &output[before..];
-        let erase_count = count_occurrences(after_output, ERASE_LINE);
-        assert!(
-            erase_count >= 7,
-            "Short buffer (3) in 10-row UI should clear 7 stale rows, got {}",
-            erase_count
-        );
     }
+
+    // Use second cursor save as marker for the short-buffer present phase.
+    let second_save = find_nth(&output, CURSOR_SAVE, 2).expect("expected second cursor save");
+    let after_second_save = &output[second_save..];
+    let restore_idx = after_second_save
+        .windows(CURSOR_RESTORE.len())
+        .position(|w| w == CURSOR_RESTORE)
+        .expect("expected cursor restore after second save");
+    let short_segment = &after_second_save[..restore_idx];
+    let erase_count = count_occurrences(short_segment, ERASE_LINE);
+    assert!(
+        erase_count >= 7,
+        "Short buffer (3) in 10-row UI should clear 7 stale rows, got {}",
+        erase_count
+    );
     log_jsonl("pass", &[("test", "ghost1_short_buffer")]);
 }
 
@@ -1074,10 +1077,12 @@ fn inline_reflow_idem1_same_buffer_twice() {
 #[test]
 fn inline_reflow_idem1_diff_minimal_on_repeat() {
     log_jsonl("start", &[("test", "idem1_diff_minimal")]);
-    let mut output = Vec::new();
+
+    // Run once: measure output for initial present
+    let mut output_single = Vec::new();
     {
         let mut w = TerminalWriter::new(
-            &mut output,
+            &mut output_single,
             ScreenMode::Inline { ui_height: 5 },
             UiAnchor::Bottom,
             basic_caps(),
@@ -1085,22 +1090,33 @@ fn inline_reflow_idem1_diff_minimal_on_repeat() {
         w.set_size(10, 10);
         let buf = make_buffer_with_pattern(10, 5, 'A');
         w.present_ui(&buf, None).unwrap();
-
-        let first_len = output.len();
-
-        // Present identical buffer again — diff should be empty, output minimal
-        w.present_ui(&buf, None).unwrap();
-
-        let second_len = output.len() - first_len;
-
-        // Second present should be significantly smaller (just cursor + sync overhead)
-        assert!(
-            second_len < first_len,
-            "Repeat present ({} bytes) should be smaller than initial ({} bytes)",
-            second_len,
-            first_len
-        );
     }
+
+    // Run twice: measure combined output for two presents
+    let mut output_double = Vec::new();
+    {
+        let mut w = TerminalWriter::new(
+            &mut output_double,
+            ScreenMode::Inline { ui_height: 5 },
+            UiAnchor::Bottom,
+            basic_caps(),
+        );
+        w.set_size(10, 10);
+        let buf = make_buffer_with_pattern(10, 5, 'A');
+        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None).unwrap();
+    }
+
+    // The second present (diff) should add less than the first present
+    let first_len = output_single.len();
+    let second_len = output_double.len().saturating_sub(first_len);
+
+    assert!(
+        second_len < first_len,
+        "Repeat present ({} bytes) should be smaller than initial ({} bytes)",
+        second_len,
+        first_len
+    );
     log_jsonl("pass", &[("test", "idem1_diff_minimal")]);
 }
 
@@ -1462,7 +1478,7 @@ fn inline_reflow_golden_strategies_differ() {
                 &mut output,
                 ScreenMode::Inline { ui_height: 5 },
                 UiAnchor::Bottom,
-                caps.clone(),
+                *caps,
             );
             w.set_size(80, 24);
             let buf = make_buffer_with_pattern(80, 5, 'S');
@@ -1474,7 +1490,6 @@ fn inline_reflow_golden_strategies_differ() {
     }
 
     // Different strategies should produce different output (different ANSI preambles)
-    let values: Vec<&String> = checksums.values().collect();
     // At minimum, overlay vs scroll_region should differ
     assert_ne!(
         checksums["overlay"], checksums["scroll_region"],
@@ -1499,10 +1514,15 @@ fn inline_reflow_edge_zero_height_ui() {
             basic_caps(),
         );
         w.set_size(10, 10);
-        let buf = Buffer::new(10, 0);
-        // Should not crash
+        // Buffer requires height > 0, so present with height 1
+        // (the writer's visible_height clamps to 0 for ui_height=0)
+        let buf = Buffer::new(10, 1);
+        // Should not crash — zero ui_height means nothing visible
         w.present_ui(&buf, None).unwrap();
     }
+
+    // With ui_height=0, no full screen clear should occur
+    assert!(!contains(&output, FULL_CLEAR));
     log_jsonl("pass", &[("test", "edge_zero_height")]);
 }
 
