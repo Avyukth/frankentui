@@ -44,6 +44,8 @@ default = ["caps-probe"]
 
 [dev-dependencies]
 ftui-harness = { path = "../ftui-harness" }
+ftui-pty = { path = "../ftui-pty" }
+portable-pty = "0.8.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["registry"] }
 criterion = { version = "0.5", features = ["html_reports"] }

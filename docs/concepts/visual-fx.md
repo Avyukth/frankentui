@@ -2,6 +2,8 @@
 
 FrankenTUI visual FX are **cell-background backdrops**: deterministic effects that render *behind* normal widgets by writing `PackedRgba` background colors into a caller-owned buffer.
 
+Core APIs live in `ftui_extras::visual_fx`.
+
 This is intentionally scoped:
 - Backdrops do **not** emit glyphs.
 - Backdrops must be **tiny-area safe** (0x0 sizes must not panic).
@@ -15,6 +17,7 @@ All visual FX APIs are opt-in via `ftui-extras` Cargo features:
 - `visual-fx`: Core types + Backdrop widget + CPU helpers.
 - `visual-fx-metaballs`: Metaballs effect (depends on `visual-fx`).
 - `visual-fx-plasma`: Plasma effect (depends on `visual-fx`).
+- `canvas`: Canvas adapters for sub-cell rendering (Braille/blocks) where available.
 - `fx-gpu`: Optional GPU acceleration (strictly opt-in; no GPU deps unless enabled).
 
 ### GPU Runtime Flags
@@ -26,7 +29,7 @@ All visual FX APIs are opt-in via `ftui-extras` Cargo features:
 
 Core types live in `ftui_extras::visual_fx`:
 
-- `FxQuality`: Quality levels (`Full`, `Reduced`, `Minimal`, `Off`) mapped from render budget.
+- `FxQuality`: Quality levels (`Off`, `Minimal`, `Reduced`, `Full`) mapped from render budget.
 - `ThemeInputs`: Resolved theme colors needed by FX (data-only boundary).
 - `FxContext`: Call-site provided render context (dims/time/quality/theme).
 - `BackdropFx`: Trait for background-only effects writing into `&mut [PackedRgba]`.
@@ -34,6 +37,12 @@ Core types live in `ftui_extras::visual_fx`:
 Row-major layout:
 
 `out[(y * width + x)]` for 0 <= x < width, 0 <= y < height.
+
+`BackdropFx` renders via:
+
+```rust
+fn render(&mut self, ctx: FxContext<'_>, out: &mut [PackedRgba]);
+```
 
 See: `crates/ftui-extras/src/visual_fx.rs`.
 
@@ -71,6 +80,25 @@ let backdrop = Backdrop::new(Box::new(fx), theme)
 backdrop.over(&child).render(area, frame);
 ```
 
+### Opacity Stack Integration
+
+Backdrop respects `frame.buffer.current_opacity()` when writing backgrounds. If a parent sets partial opacity, the backdrop is alpha-blended with the existing `cell.bg` instead of overwriting it.
+
+### Multi-Layer Composition
+
+For stacked effects, use `StackedFx` and `FxLayer`:
+
+```rust
+use ftui_extras::visual_fx::{FxLayer, StackedFx};
+
+let mut stack = StackedFx::new();
+stack.push(FxLayer::new(Box::new(PlasmaFx::default())));
+stack.push(FxLayer::with_opacity(Box::new(MetaballsFx::default_theme()), 0.35));
+
+let backdrop = Backdrop::new(Box::new(stack), theme).subtle();
+backdrop.over(&child).render(area, frame);
+```
+
 ### Presets
 
 For common use cases, presets provide sensible defaults:
@@ -88,7 +116,7 @@ Backdrop::new(Box::new(fx), theme).vibrant().over(&child);
 Backdrops must not compromise readability. The rendering pipeline enforces this through layering:
 
 ```
-final_bg = scrim.over(effect.over(base_fill))
+final_bg = scrim.over(effect.with_opacity(opacity).over(base_fill))
 ```
 
 ### Base Fill
@@ -123,6 +151,12 @@ Scrim::vignette(0.5)
 
 // Vertical fade (top to bottom)
 Scrim::vertical_fade(0.0, 0.5)  // (top_opacity, bottom_opacity)
+```
+
+For text-heavy panels, prefer:
+
+```rust
+Scrim::text_panel_default()
 ```
 
 **Accessibility note**: For text-heavy content, prefer `subtle()` preset or explicit low opacity + scrim to maintain WCAG contrast ratios.
@@ -163,8 +197,8 @@ Large render areas automatically clamp quality even at `Full` degradation:
 
 ```rust
 // Area thresholds (cells)
-FX_AREA_THRESHOLD_FULL_TO_REDUCED = 4800   // ~80x60
-FX_AREA_THRESHOLD_REDUCED_TO_MINIMAL = 9600 // ~120x80
+FX_AREA_THRESHOLD_FULL_TO_REDUCED = 16000   // ~200x80
+FX_AREA_THRESHOLD_REDUCED_TO_MINIMAL = 64000 // ~400x160
 ```
 
 This prevents expensive per-cell computations from blocking the render loop.
@@ -186,25 +220,29 @@ backdrop.set_quality_override(None);
 ```rust
 use ftui_core::geometry::Rect;
 use ftui_extras::visual_fx::{
-    Backdrop, MetaballsFx, Scrim, ThemeInputs,
+    Backdrop, MetaballsFx, MetaballsParams, Scrim, ThemeInputs,
 };
+use ftui_extras::markdown::{MarkdownRenderer, MarkdownTheme};
 use ftui_render::frame::Frame;
 use ftui_widgets::Widget;
+use ftui_widgets::paragraph::Paragraph;
 
 struct MarkdownOverlay {
     backdrop: Backdrop,
-    markdown: MyMarkdownWidget,
+    markdown: String,
+    renderer: MarkdownRenderer,
 }
 
 impl MarkdownOverlay {
     pub fn new(theme: ThemeInputs) -> Self {
-        let fx = MetaballsFx::new(5, 0.15); // 5 balls, 0.15 speed
+        let fx = MetaballsFx::new(MetaballsParams::default());
         let backdrop = Backdrop::new(Box::new(fx), theme)
             .subtle(); // 15% opacity, no scrim
 
         Self {
             backdrop,
-            markdown: MyMarkdownWidget::new(),
+            markdown: "# Hello FX\n\nA **markdown** overlay.".to_string(),
+            renderer: MarkdownRenderer::new(MarkdownTheme::default()),
         }
     }
 
@@ -216,7 +254,9 @@ impl MarkdownOverlay {
 impl Widget for MarkdownOverlay {
     fn render(&self, area: Rect, frame: &mut Frame) {
         // Quality is automatically derived from frame.buffer.degradation
-        self.backdrop.render_with(area, frame, &self.markdown);
+        let text = self.renderer.render(&self.markdown);
+        let paragraph = Paragraph::new(text);
+        self.backdrop.render_with(area, frame, &paragraph);
     }
 }
 ```

@@ -885,6 +885,10 @@ impl Screen for ActionTimeline {
                 key: "PgUp/PgDn",
                 action: "Page navigation",
             },
+            HelpEntry {
+                key: "Home/End",
+                action: "Jump to first/last event",
+            },
         ]
     }
 

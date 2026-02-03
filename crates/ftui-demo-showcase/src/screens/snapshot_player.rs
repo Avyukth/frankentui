@@ -1069,11 +1069,11 @@ impl Screen for SnapshotPlayer {
                 action: "Play/Pause",
             },
             HelpEntry {
-                key: "←/→",
+                key: "←/→ or h/l",
                 action: "Step frame",
             },
             HelpEntry {
-                key: "Home/End",
+                key: "Home/End or g/G",
                 action: "First/Last",
             },
             HelpEntry {

@@ -1275,6 +1275,453 @@ mod tests {
         assert_eq!(rects[0].height, 25, "25% of 100 should be 25");
         assert_eq!(rects[1].height, 75, "75% of 100 should be 75");
     }
+
+    // ==========================================================================
+    // Render Determinism + Event-Driven Tests (bd-32my.3 completion)
+    // ==========================================================================
+
+    use ftui_render::grapheme_pool::GraphemePool;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    fn checksum_frame(frame: &Frame) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        let width = frame.buffer.width();
+        let height = frame.buffer.height();
+        for y in 0..height {
+            for x in 0..width {
+                if let Some(cell) = frame.buffer.get(x, y) {
+                    cell.content.hash(&mut hasher);
+                    cell.fg.hash(&mut hasher);
+                    cell.bg.hash(&mut hasher);
+                    cell.attrs.hash(&mut hasher);
+                }
+            }
+        }
+        hasher.finish()
+    }
+
+    fn log_jsonl(test: &str, fields: &[(&str, String)]) {
+        let mut parts = Vec::with_capacity(fields.len() + 1);
+        parts.push(format!("\"test\":\"{}\"", test));
+        parts.extend(fields.iter().map(|(k, v)| format!("\"{}\":\"{}\"", k, v)));
+        eprintln!("{{{}}}", parts.join(","));
+    }
+
+    fn press(code: KeyCode) -> Event {
+        Event::Key(ftui_core::event::KeyEvent {
+            code,
+            modifiers: Modifiers::NONE,
+            kind: KeyEventKind::Press,
+        })
+    }
+
+    fn shift_press(code: KeyCode) -> Event {
+        Event::Key(ftui_core::event::KeyEvent {
+            code,
+            modifiers: Modifiers::SHIFT,
+            kind: KeyEventKind::Press,
+        })
+    }
+
+    #[test]
+    fn render_deterministic_all_presets() {
+        for preset in 0..PRESET_COUNT {
+            let mut lab = LayoutLab::new();
+            lab.current_preset = preset;
+
+            let checksum_a = {
+                let mut pool = GraphemePool::new();
+                let mut frame = Frame::new(120, 40, &mut pool);
+                lab.view(&mut frame, Rect::new(0, 0, 120, 40));
+                checksum_frame(&frame)
+            };
+
+            let checksum_b = {
+                let mut pool = GraphemePool::new();
+                let mut frame = Frame::new(120, 40, &mut pool);
+                lab.view(&mut frame, Rect::new(0, 0, 120, 40));
+                checksum_frame(&frame)
+            };
+
+            log_jsonl(
+                "render_deterministic_all_presets",
+                &[
+                    ("preset", preset.to_string()),
+                    ("checksum", format!("{checksum_a:016x}")),
+                ],
+            );
+
+            assert_eq!(
+                checksum_a, checksum_b,
+                "Render should be deterministic for preset {}",
+                preset
+            );
+            assert_ne!(
+                checksum_a, 0,
+                "Checksum should be non-zero for preset {}",
+                preset
+            );
+        }
+    }
+
+    #[test]
+    fn render_deterministic_with_state_variations() {
+        let mut lab = LayoutLab::new();
+        lab.current_preset = 1;
+        lab.direction = Direction::Horizontal;
+        lab.alignment_idx = 3;
+        lab.gap = 3;
+        lab.margin = 2;
+        lab.padding_amount = 2;
+        lab.align_pos = 7;
+        lab.show_debug = true;
+
+        let checksum_a = {
+            let mut pool = GraphemePool::new();
+            let mut frame = Frame::new(120, 40, &mut pool);
+            lab.view(&mut frame, Rect::new(0, 0, 120, 40));
+            checksum_frame(&frame)
+        };
+
+        let checksum_b = {
+            let mut pool = GraphemePool::new();
+            let mut frame = Frame::new(120, 40, &mut pool);
+            lab.view(&mut frame, Rect::new(0, 0, 120, 40));
+            checksum_frame(&frame)
+        };
+
+        log_jsonl(
+            "render_deterministic_with_state_variations",
+            &[("checksum", format!("{checksum_a:016x}"))],
+        );
+
+        assert_eq!(
+            checksum_a, checksum_b,
+            "Render should be deterministic with complex state"
+        );
+    }
+
+    #[test]
+    fn all_presets_render_at_standard_sizes() {
+        let sizes: [(u16, u16); 3] = [(80, 24), (120, 40), (200, 60)];
+
+        for preset in 0..PRESET_COUNT {
+            for (w, h) in &sizes {
+                let mut lab = LayoutLab::new();
+                lab.current_preset = preset;
+
+                let mut pool = GraphemePool::new();
+                let mut frame = Frame::new(*w, *h, &mut pool);
+                lab.view(&mut frame, Rect::new(0, 0, *w, *h));
+
+                let checksum = checksum_frame(&frame);
+                log_jsonl(
+                    "all_presets_render",
+                    &[
+                        ("preset", preset.to_string()),
+                        ("size", format!("{w}x{h}")),
+                        ("checksum", format!("{checksum:016x}")),
+                    ],
+                );
+                assert_ne!(
+                    checksum, 0,
+                    "Preset {} at {}x{} should produce non-empty output",
+                    preset, w, h
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tiny_terminal_shows_message() {
+        let lab = LayoutLab::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(30, 5, &mut pool);
+        lab.view(&mut frame, Rect::new(0, 0, 30, 5));
+
+        // Should not panic and should produce some output
+        let checksum = checksum_frame(&frame);
+        assert_ne!(checksum, 0, "Tiny terminal should still produce output");
+    }
+
+    #[test]
+    fn update_preset_via_events() {
+        let mut lab = LayoutLab::new();
+        assert_eq!(lab.current_preset, 0);
+
+        lab.update(&press(KeyCode::Char('3')));
+        assert_eq!(lab.current_preset, 2, "Pressing '3' should select preset 2");
+
+        lab.update(&press(KeyCode::Char('5')));
+        assert_eq!(lab.current_preset, 4, "Pressing '5' should select preset 4");
+
+        lab.update(&press(KeyCode::Char('1')));
+        assert_eq!(lab.current_preset, 0, "Pressing '1' should select preset 0");
+
+        log_jsonl(
+            "update_preset_via_events",
+            &[("passed", "true".to_string())],
+        );
+    }
+
+    #[test]
+    fn update_direction_via_event() {
+        let mut lab = LayoutLab::new();
+        assert_eq!(lab.direction, Direction::Vertical);
+
+        lab.update(&press(KeyCode::Char('d')));
+        assert_eq!(lab.direction, Direction::Horizontal);
+
+        lab.update(&press(KeyCode::Char('d')));
+        assert_eq!(lab.direction, Direction::Vertical);
+
+        log_jsonl(
+            "update_direction_via_event",
+            &[("passed", "true".to_string())],
+        );
+    }
+
+    #[test]
+    fn update_alignment_via_event() {
+        let mut lab = LayoutLab::new();
+        assert_eq!(lab.alignment_idx, 0);
+
+        for expected in 1..=5 {
+            lab.update(&press(KeyCode::Char('a')));
+            assert_eq!(
+                lab.alignment_idx,
+                expected % ALIGNMENTS.len(),
+                "After {} presses",
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn update_gap_via_events() {
+        let mut lab = LayoutLab::new();
+        assert_eq!(lab.gap, 0);
+
+        // Increase gap to max (5)
+        for _ in 0..10 {
+            lab.update(&press(KeyCode::Char('+')));
+        }
+        assert_eq!(lab.gap, 5, "Gap should saturate at 5");
+
+        // Decrease gap to 0
+        for _ in 0..10 {
+            lab.update(&press(KeyCode::Char('-')));
+        }
+        assert_eq!(lab.gap, 0, "Gap should saturate at 0");
+
+        log_jsonl("update_gap_via_events", &[("passed", "true".to_string())]);
+    }
+
+    #[test]
+    fn update_margin_via_events() {
+        let mut lab = LayoutLab::new();
+        assert_eq!(lab.margin, 0);
+
+        // Increase margin to max (4)
+        for _ in 0..10 {
+            lab.update(&press(KeyCode::Char('m')));
+        }
+        assert_eq!(lab.margin, 4, "Margin should saturate at 4");
+
+        // Decrease margin to 0 (Char('M') with NONE modifier)
+        for _ in 0..10 {
+            lab.update(&press(KeyCode::Char('M')));
+        }
+        assert_eq!(lab.margin, 0, "Margin should saturate at 0");
+
+        log_jsonl(
+            "update_margin_via_events",
+            &[("passed", "true".to_string())],
+        );
+    }
+
+    #[test]
+    fn update_padding_via_events() {
+        let mut lab = LayoutLab::new();
+        assert_eq!(
+            lab.padding_amount,
+            theme::spacing::XS,
+            "Default padding is theme::spacing::XS"
+        );
+
+        // Increase padding to max (4)
+        for _ in 0..10 {
+            lab.update(&press(KeyCode::Char('p')));
+        }
+        assert_eq!(lab.padding_amount, 4, "Padding should saturate at 4");
+
+        // Decrease padding to 0 (Char('P') with NONE modifier)
+        for _ in 0..10 {
+            lab.update(&press(KeyCode::Char('P')));
+        }
+        assert_eq!(lab.padding_amount, 0, "Padding should saturate at 0");
+
+        log_jsonl(
+            "update_padding_via_events",
+            &[("passed", "true".to_string())],
+        );
+    }
+
+    #[test]
+    fn update_debug_toggle_via_event() {
+        let mut lab = LayoutLab::new();
+        assert!(!lab.show_debug);
+
+        // Char('D') with NONE modifier (how terminals typically send uppercase)
+        lab.update(&press(KeyCode::Char('D')));
+        assert!(lab.show_debug, "D should enable debug");
+
+        lab.update(&press(KeyCode::Char('D')));
+        assert!(!lab.show_debug, "D again should disable debug");
+
+        log_jsonl("update_debug_toggle", &[("passed", "true".to_string())]);
+    }
+
+    #[test]
+    fn update_align_position_via_event() {
+        let mut lab = LayoutLab::new();
+        assert_eq!(lab.align_pos, 4); // Center
+
+        lab.update(&press(KeyCode::Char('l')));
+        assert_eq!(lab.align_pos, 5); // MidRight
+
+        // Cycle all 9 positions
+        for _ in 0..8 {
+            lab.update(&press(KeyCode::Char('l')));
+        }
+        assert_eq!(
+            lab.align_pos, 4,
+            "Full 9-position cycle should return to start+1"
+        );
+
+        log_jsonl("update_align_position", &[("passed", "true".to_string())]);
+    }
+
+    #[test]
+    fn update_tab_cycles_constraints() {
+        let mut lab = LayoutLab::new();
+        lab.current_preset = 0; // 5 constraints
+        assert_eq!(lab.selected_constraint, 0);
+
+        let count = lab.preset_constraints().len();
+        for expected in 1..=count {
+            lab.update(&press(KeyCode::Tab));
+            assert_eq!(lab.selected_constraint, expected % count);
+        }
+    }
+
+    #[test]
+    fn non_press_events_ignored() {
+        let mut lab = LayoutLab::new();
+        let initial_preset = lab.current_preset;
+        let initial_direction = lab.direction;
+
+        // Release and Repeat events should be ignored
+        let release = Event::Key(ftui_core::event::KeyEvent {
+            code: KeyCode::Char('d'),
+            modifiers: Modifiers::NONE,
+            kind: KeyEventKind::Release,
+        });
+        lab.update(&release);
+        assert_eq!(
+            lab.direction, initial_direction,
+            "Release events should be ignored"
+        );
+
+        let repeat = Event::Key(ftui_core::event::KeyEvent {
+            code: KeyCode::Char('3'),
+            modifiers: Modifiers::NONE,
+            kind: KeyEventKind::Repeat,
+        });
+        lab.update(&repeat);
+        assert_eq!(
+            lab.current_preset, initial_preset,
+            "Repeat events should be ignored"
+        );
+    }
+
+    #[test]
+    fn debug_overlay_renders_without_panic() {
+        let mut lab = LayoutLab::new();
+        lab.show_debug = true;
+
+        for preset in 0..PRESET_COUNT {
+            lab.current_preset = preset;
+            let mut pool = GraphemePool::new();
+            let mut frame = Frame::new(120, 40, &mut pool);
+            lab.view(&mut frame, Rect::new(0, 0, 120, 40));
+
+            let checksum = checksum_frame(&frame);
+            assert_ne!(
+                checksum, 0,
+                "Debug overlay on preset {} should render",
+                preset
+            );
+        }
+    }
+
+    #[test]
+    fn presets_produce_distinct_renders() {
+        let mut checksums = Vec::with_capacity(PRESET_COUNT);
+
+        for preset in 0..PRESET_COUNT {
+            let mut lab = LayoutLab::new();
+            lab.current_preset = preset;
+            let mut pool = GraphemePool::new();
+            let mut frame = Frame::new(120, 40, &mut pool);
+            lab.view(&mut frame, Rect::new(0, 0, 120, 40));
+            checksums.push(checksum_frame(&frame));
+        }
+
+        // Each preset should produce a distinct render
+        for i in 0..checksums.len() {
+            for j in (i + 1)..checksums.len() {
+                assert_ne!(
+                    checksums[i], checksums[j],
+                    "Presets {} and {} should produce distinct renders",
+                    i, j
+                );
+            }
+        }
+
+        log_jsonl(
+            "presets_produce_distinct_renders",
+            &[("count", checksums.len().to_string())],
+        );
+    }
+
+    #[test]
+    fn direction_produces_distinct_render() {
+        let mut lab = LayoutLab::new();
+        lab.current_preset = 0;
+
+        let checksum_vertical = {
+            lab.direction = Direction::Vertical;
+            let mut pool = GraphemePool::new();
+            let mut frame = Frame::new(120, 40, &mut pool);
+            lab.view(&mut frame, Rect::new(0, 0, 120, 40));
+            checksum_frame(&frame)
+        };
+
+        let checksum_horizontal = {
+            lab.direction = Direction::Horizontal;
+            let mut pool = GraphemePool::new();
+            let mut frame = Frame::new(120, 40, &mut pool);
+            lab.view(&mut frame, Rect::new(0, 0, 120, 40));
+            checksum_frame(&frame)
+        };
+
+        assert_ne!(
+            checksum_vertical, checksum_horizontal,
+            "Vertical and horizontal should produce distinct renders"
+        );
+    }
 }
 
 // ==========================================================================
@@ -1455,6 +1902,78 @@ mod proptests {
             lab.margin = initial;
             lab.margin = lab.margin.saturating_add(delta).min(4);
             prop_assert!(lab.margin <= 4);
+        }
+
+        /// Property: Padding adjustment is bounded at max=4.
+        #[test]
+        fn prop_padding_bounded(initial in 0u16..10, delta in 0u16..10) {
+            let mut lab = LayoutLab::new();
+            lab.padding_amount = initial;
+            lab.padding_amount = lab.padding_amount.saturating_add(delta).min(4);
+            prop_assert!(lab.padding_amount <= 4);
+        }
+
+        /// Property: Render is deterministic for any valid state.
+        #[test]
+        fn prop_render_deterministic(
+            preset in 0usize..5,
+            dir in prop_oneof![Just(Direction::Vertical), Just(Direction::Horizontal)],
+            align in 0usize..5,
+            gap in 0u16..6,
+            margin in 0u16..5,
+            padding in 0u16..5,
+            debug in proptest::bool::ANY,
+        ) {
+            use ftui_render::grapheme_pool::GraphemePool;
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+
+            let mut lab = LayoutLab::new();
+            lab.current_preset = preset;
+            lab.direction = dir;
+            lab.alignment_idx = align;
+            lab.gap = gap;
+            lab.margin = margin;
+            lab.padding_amount = padding;
+            lab.show_debug = debug;
+
+            let checksum_a = {
+                let mut pool = GraphemePool::new();
+                let mut frame = Frame::new(120, 40, &mut pool);
+                lab.view(&mut frame, Rect::new(0, 0, 120, 40));
+                let mut hasher = DefaultHasher::new();
+                for y in 0..40u16 {
+                    for x in 0..120u16 {
+                        if let Some(cell) = frame.buffer.get(x, y) {
+                            cell.content.hash(&mut hasher);
+                            cell.fg.hash(&mut hasher);
+                            cell.bg.hash(&mut hasher);
+                            cell.attrs.hash(&mut hasher);
+                        }
+                    }
+                }
+                hasher.finish()
+            };
+
+            let checksum_b = {
+                let mut pool = GraphemePool::new();
+                let mut frame = Frame::new(120, 40, &mut pool);
+                lab.view(&mut frame, Rect::new(0, 0, 120, 40));
+                let mut hasher = DefaultHasher::new();
+                for y in 0..40u16 {
+                    for x in 0..120u16 {
+                        if let Some(cell) = frame.buffer.get(x, y) {
+                            cell.content.hash(&mut hasher);
+                            cell.fg.hash(&mut hasher);
+                            cell.bg.hash(&mut hasher);
+                            cell.attrs.hash(&mut hasher);
+                        }
+                    }
+                }
+                hasher.finish()
+            };
+
+            prop_assert_eq!(checksum_a, checksum_b, "Render should be deterministic");
         }
     }
 }

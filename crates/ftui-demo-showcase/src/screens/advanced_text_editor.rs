@@ -734,6 +734,16 @@ and proper Unicode handling throughout.
         &mut self.diagnostic_log
     }
 
+    /// Get the current focus panel name (for testing).
+    pub fn focus_panel(&self) -> &'static str {
+        self.focus.as_str()
+    }
+
+    /// Whether the search panel is currently visible (for testing).
+    pub fn is_search_visible(&self) -> bool {
+        self.search_visible
+    }
+
     /// Log a diagnostic event if diagnostics are enabled.
     fn log_event(&mut self, entry: DiagnosticEntry) {
         if diagnostics_enabled() {
@@ -1244,6 +1254,37 @@ impl Screen for AdvancedTextEditor {
             return Cmd::None;
         }
 
+        // Tab / Shift+Tab focus cycling when search panel is visible
+        if let Event::Key(KeyEvent {
+            code: KeyCode::Tab,
+            modifiers,
+            kind: KeyEventKind::Press,
+            ..
+        }) = event
+            && self.search_visible
+        {
+            let old_focus = self.focus;
+            if modifiers.contains(Modifiers::SHIFT) {
+                self.focus = self.focus.prev();
+            } else {
+                self.focus = self.focus.next();
+            }
+            self.update_focus_states();
+
+            // Log focus change
+            let direction = if modifiers.contains(Modifiers::SHIFT) {
+                "Shift+Tab"
+            } else {
+                "Tab"
+            };
+            let entry = DiagnosticEntry::new(DiagnosticEventKind::FocusChanged)
+                .with_focus(self.focus.as_str())
+                .with_context(format!("from {} via {direction}", old_focus.as_str()));
+            self.log_event(entry);
+
+            return Cmd::None;
+        }
+
         // Global shortcuts
         if let Event::Key(KeyEvent {
             code,
@@ -1479,20 +1520,24 @@ impl Screen for AdvancedTextEditor {
                 action: "Next match",
             },
             HelpEntry {
-                key: "Shift+F3",
+                key: "Ctrl+Shift+G / Shift+F3",
                 action: "Previous match",
+            },
+            HelpEntry {
+                key: "Enter (search)",
+                action: "Find next",
+            },
+            HelpEntry {
+                key: "Shift+Enter (search)",
+                action: "Find previous",
             },
             HelpEntry {
                 key: "Ctrl+Z",
                 action: "Undo",
             },
             HelpEntry {
-                key: "Ctrl+Y",
+                key: "Ctrl+Y / Ctrl+Shift+Z",
                 action: "Redo",
-            },
-            HelpEntry {
-                key: "Ctrl+Shift+Z",
-                action: "Redo (alt)",
             },
             HelpEntry {
                 key: "Ctrl+U",
@@ -1507,8 +1552,16 @@ impl Screen for AdvancedTextEditor {
                 action: "Select all / Replace all",
             },
             HelpEntry {
-                key: "Ctrl+R",
+                key: "Ctrl+R / Enter (replace)",
                 action: "Replace current",
+            },
+            HelpEntry {
+                key: "Tab / Shift+Tab",
+                action: "Cycle focus (search open)",
+            },
+            HelpEntry {
+                key: "Ctrl+Left/Right",
+                action: "Cycle focus (search open)",
             },
             HelpEntry {
                 key: "Esc",

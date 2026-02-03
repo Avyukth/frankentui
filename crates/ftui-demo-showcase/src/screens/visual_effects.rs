@@ -13,6 +13,7 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::env;
 use std::f64::consts::TAU;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -2581,9 +2582,10 @@ impl Default for VisualEffectsScreen {
     fn default() -> Self {
         let plasma_palette = PlasmaPalette::Sunset;
         let markdown_panel = render_markdown(MARKDOWN_OVERLAY);
+        let effect = initial_effect_from_env().unwrap_or(EffectType::Metaballs);
 
         Self {
-            effect: EffectType::Metaballs,
+            effect,
             frame: 0,
             time: 0.0,
             metaballs_adapter: RefCell::new(MetaballsCanvasAdapter::new()),
@@ -2618,6 +2620,17 @@ impl Default for VisualEffectsScreen {
             text_effects: TextEffectsDemo::default(),
             markdown_panel,
         }
+    }
+}
+
+fn initial_effect_from_env() -> Option<EffectType> {
+    let raw = env::var("FTUI_DEMO_VFX_EFFECT")
+        .or_else(|_| env::var("FTUI_VFX_EFFECT"))
+        .ok()?;
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "metaballs" => Some(EffectType::Metaballs),
+        "plasma" => Some(EffectType::Plasma),
+        _ => None,
     }
 }
 

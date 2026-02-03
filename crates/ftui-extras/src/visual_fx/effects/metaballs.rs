@@ -4,6 +4,7 @@
 //!
 //! Deterministic, no-allocation (steady state), and theme-aware.
 
+use super::sampling::fill_normalized_coords;
 #[cfg(feature = "fx-gpu")]
 use crate::visual_fx::gpu;
 use crate::visual_fx::{BackdropFx, FxContext, FxQuality, ThemeInputs};
@@ -285,21 +286,11 @@ impl MetaballsFx {
         let h = height as usize;
         if w != self.x_coords.len() {
             self.x_coords.resize(w, 0.0);
-            if width > 0 {
-                let denom = width as f64;
-                for (i, slot) in self.x_coords.iter_mut().enumerate() {
-                    *slot = i as f64 / denom;
-                }
-            }
+            fill_normalized_coords(width, &mut self.x_coords);
         }
         if h != self.y_coords.len() {
             self.y_coords.resize(h, 0.0);
-            if height > 0 {
-                let denom = height as f64;
-                for (i, slot) in self.y_coords.iter_mut().enumerate() {
-                    *slot = i as f64 / denom;
-                }
-            }
+            fill_normalized_coords(height, &mut self.y_coords);
         }
     }
 
