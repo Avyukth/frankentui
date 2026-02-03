@@ -20,6 +20,7 @@ pub mod asciicast;
 pub mod eprocess_throttle;
 pub mod flake_detector;
 pub mod input_macro;
+pub mod locale;
 pub mod log_sink;
 pub mod program;
 #[cfg(feature = "render-thread")]
@@ -44,6 +45,9 @@ pub use asciicast::{AsciicastRecorder, AsciicastWriter};
 pub use input_macro::{
     EventRecorder, FilteredEventRecorder, InputMacro, MacroPlayback, MacroPlayer, MacroRecorder,
     RecordingFilter, RecordingState, TimedEvent,
+};
+pub use locale::{
+    Locale, LocaleContext, LocaleOverride, current_locale, detect_system_locale, set_locale,
 };
 pub use log_sink::LogSink;
 pub use program::{

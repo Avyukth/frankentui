@@ -53,6 +53,7 @@
 
 use crate::StorageResult;
 use crate::input_macro::{EventRecorder, InputMacro};
+use crate::locale::LocaleContext;
 use crate::state_persistence::StateRegistry;
 use crate::subscription::SubscriptionManager;
 use crate::terminal_writer::{ScreenMode, TerminalWriter, UiAnchor};
@@ -368,6 +369,8 @@ pub struct ProgramConfig {
     pub ui_anchor: UiAnchor,
     /// Frame budget configuration.
     pub budget: FrameBudgetConfig,
+    /// Locale context used for rendering.
+    pub locale_context: LocaleContext,
     /// Input poll timeout.
     pub poll_timeout: Duration,
     /// Debounce duration for resize events.
@@ -392,6 +395,7 @@ impl Default for ProgramConfig {
             screen_mode: ScreenMode::Inline { ui_height: 4 },
             ui_anchor: UiAnchor::Bottom,
             budget: FrameBudgetConfig::default(),
+            locale_context: LocaleContext::global(),
             poll_timeout: Duration::from_millis(100),
             resize_debounce: Duration::from_millis(100),
             resize_behavior: ResizeBehavior::Placeholder,
@@ -441,6 +445,18 @@ impl ProgramConfig {
     /// Set the budget configuration.
     pub fn with_budget(mut self, budget: FrameBudgetConfig) -> Self {
         self.budget = budget;
+        self
+    }
+
+    /// Set the locale context used for rendering.
+    pub fn with_locale_context(mut self, locale_context: LocaleContext) -> Self {
+        self.locale_context = locale_context;
+        self
+    }
+
+    /// Set the base locale used for rendering.
+    pub fn with_locale(mut self, locale: impl Into<crate::locale::Locale>) -> Self {
+        self.locale_context = LocaleContext::new(locale);
         self
     }
 
@@ -584,6 +600,10 @@ pub struct Program<M: Model, W: Write + Send = Stdout> {
     poll_timeout: Duration,
     /// Frame budget configuration.
     budget: RenderBudget,
+    /// Locale context used for rendering.
+    locale_context: LocaleContext,
+    /// Last observed locale version.
+    locale_version: u64,
     /// Resize debouncer for rapid resize events.
     resize_debouncer: ResizeDebouncer,
     /// Resize handling behavior.
@@ -637,6 +657,8 @@ impl<M: Model> Program<M, Stdout> {
         writer.set_size(width, height);
 
         let budget = RenderBudget::from_config(&config.budget);
+        let locale_context = config.locale_context.clone();
+        let locale_version = locale_context.version();
         let resize_debouncer = ResizeDebouncer::new(config.resize_debounce, (width, height));
         let subscriptions = SubscriptionManager::new();
         let (task_sender, task_receiver) = std::sync::mpsc::channel();
@@ -653,6 +675,8 @@ impl<M: Model> Program<M, Stdout> {
             height,
             poll_timeout: config.poll_timeout,
             budget,
+            locale_context,
+            locale_version,
             resize_debouncer,
             resize_behavior: config.resize_behavior,
             resizing: false,
@@ -736,6 +760,9 @@ impl<M: Model, W: Write + Send> Program<M, W> {
 
             // Check for periodic checkpoint save
             self.check_checkpoint_save();
+
+            // Detect locale changes outside the event loop.
+            self.check_locale_change();
 
             // Render if dirty
             if self.dirty {
@@ -1220,6 +1247,14 @@ impl<M: Model, W: Write + Send> Program<M, W> {
         self.dirty = true;
     }
 
+    fn check_locale_change(&mut self) {
+        let version = self.locale_context.version();
+        if version != self.locale_version {
+            self.locale_version = version;
+            self.mark_dirty();
+        }
+    }
+
     /// Mark the UI as needing redraw.
     pub fn request_redraw(&mut self) {
         self.mark_dirty();
@@ -1337,6 +1372,18 @@ impl<M: Model> AppBuilder<M> {
     /// Set the frame budget configuration.
     pub fn with_budget(mut self, budget: FrameBudgetConfig) -> Self {
         self.config.budget = budget;
+        self
+    }
+
+    /// Set the locale context used for rendering.
+    pub fn with_locale_context(mut self, locale_context: LocaleContext) -> Self {
+        self.config.locale_context = locale_context;
+        self
+    }
+
+    /// Set the base locale used for rendering.
+    pub fn with_locale(mut self, locale: impl Into<crate::locale::Locale>) -> Self {
+        self.config.locale_context = LocaleContext::new(locale);
         self
     }
 

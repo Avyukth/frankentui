@@ -32,6 +32,7 @@ telemetry = [
 [dependencies]
 ftui-core = { path = "../ftui-core" }
 ftui-layout = { path = "../ftui-layout" }
+ftui-i18n = { path = "../ftui-i18n" }
 ftui-render = { path = "../ftui-render" }
 ftui-style = { path = "../ftui-style" }
 ftui-text = { path = "../ftui-text" }
