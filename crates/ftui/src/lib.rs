@@ -38,8 +38,9 @@ pub use ftui_style::{
 // --- Runtime re-exports ----------------------------------------------------
 
 pub use ftui_runtime::{
-    App, Cmd, Locale, LocaleContext, LocaleOverride, Model, Program, ProgramConfig, ResizeBehavior,
-    ScreenMode, TerminalWriter, UiAnchor, current_locale, detect_system_locale, set_locale,
+    App, Cmd, InlineAutoRemeasureConfig, Locale, LocaleContext, LocaleOverride, Model, Program,
+    ProgramConfig, ResizeBehavior, ScreenMode, TerminalWriter, UiAnchor, current_locale,
+    detect_system_locale, set_locale,
 };
 
 // --- Errors ---------------------------------------------------------------

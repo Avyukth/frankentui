@@ -310,17 +310,21 @@ impl BufferDiff {
         // Changes are already sorted by (y, x) from row-major scan
         // so we don't need to sort again.
         let sorted = &self.changes;
+        let len = sorted.len();
 
-        let mut runs = Vec::new();
+        // Worst case: every change is isolated, so runs == changes.
+        // Pre-alloc to avoid repeated growth in hot paths.
+        let mut runs = Vec::with_capacity(len);
+
         let mut i = 0;
 
-        while i < sorted.len() {
+        while i < len {
             let (x0, y) = sorted[i];
             let mut x1 = x0;
             i += 1;
 
             // Coalesce consecutive x positions on the same row
-            while i < sorted.len() {
+            while i < len {
                 let (x, yy) = sorted[i];
                 if yy != y || x != x1.saturating_add(1) {
                     break;
