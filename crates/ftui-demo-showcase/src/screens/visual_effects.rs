@@ -443,7 +443,7 @@ impl TextEffectsDemo {
                 amplitude: 1.5,
                 wavelength: 8.0,
                 speed: 2.0,
-                direction: Direction::Vertical,
+                direction: Direction::Down,
             },
             1 => TextEffect::Bounce {
                 height: 2.0,
@@ -495,7 +495,7 @@ impl TextEffectsDemo {
             },
             1 => TextEffect::ChromaticAberration {
                 offset: 2,
-                direction: Direction::Horizontal,
+                direction: Direction::Right,
                 animated: true,
                 speed: 0.5,
             },
@@ -517,9 +517,9 @@ impl TextEffectsDemo {
             },
             1 => TextEffect::HorizontalGradient {
                 gradient: ColorGradient::new(vec![
-                    PackedRgba::rgb(0, 180, 0),
-                    PackedRgba::rgb(0, 255, 0),
-                    PackedRgba::rgb(100, 255, 100),
+                    (0.0, PackedRgba::rgb(0, 180, 0)),
+                    (0.5, PackedRgba::rgb(0, 255, 0)),
+                    (1.0, PackedRgba::rgb(100, 255, 100)),
                 ]),
             },
             _ => TextEffect::Pulse {
@@ -539,7 +539,7 @@ impl TextEffectsDemo {
                 amplitude: 1.0,
                 wavelength: 10.0,
                 speed: 1.5,
-                direction: Direction::Vertical,
+                direction: Direction::Down,
             }
         } else if self.combo_enabled[2] {
             TextEffect::Glow {
@@ -2791,9 +2791,9 @@ impl VisualEffectsScreen {
                 // Matrix style - green on black
                 let matrix_effect = TextEffect::HorizontalGradient {
                     gradient: ColorGradient::new(vec![
-                        PackedRgba::rgb(0, 100, 0),
-                        PackedRgba::rgb(0, 255, 0),
-                        PackedRgba::rgb(100, 255, 100),
+                        (0.0, PackedRgba::rgb(0, 100, 0)),
+                        (0.5, PackedRgba::rgb(0, 255, 0)),
+                        (1.0, PackedRgba::rgb(100, 255, 100)),
                     ]),
                 };
                 let styled = StyledText::new(text)
