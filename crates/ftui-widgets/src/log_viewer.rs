@@ -69,12 +69,36 @@ impl From<LogWrapMode> for WrapMode {
 #[derive(Debug, Clone)]
 struct SearchState {
     /// The search query string (retained for re-search after eviction).
-    #[allow(dead_code)]
     query: String,
     /// Indices of matching lines.
     matches: Vec<usize>,
     /// Current match index within the matches vector.
     current: usize,
+}
+
+/// Statistics tracking incremental vs full-rescan filter/search operations.
+///
+/// Useful for monitoring the efficiency of the streaming update path.
+/// Reset with [`FilterStats::reset`].
+#[derive(Debug, Clone, Default)]
+pub struct FilterStats {
+    /// Lines checked incrementally (O(1) per push).
+    pub incremental_checks: u64,
+    /// Lines that matched during incremental checks.
+    pub incremental_matches: u64,
+    /// Full rescans triggered (e.g., by `set_filter` or `search`).
+    pub full_rescans: u64,
+    /// Total lines scanned during full rescans.
+    pub full_rescan_lines: u64,
+    /// Search matches added incrementally on push.
+    pub incremental_search_matches: u64,
+}
+
+impl FilterStats {
+    /// Reset all counters to zero.
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
 }
 
 /// A scrolling log viewer optimized for streaming append-only content.
@@ -109,6 +133,8 @@ pub struct LogViewer {
     filtered_scroll_offset: usize,
     /// Active search state.
     search: Option<SearchState>,
+    /// Incremental filter/search statistics.
+    filter_stats: FilterStats,
 }
 
 /// Separate state for StatefulWidget pattern.
@@ -140,6 +166,7 @@ impl LogViewer {
             filtered_indices: None,
             filtered_scroll_offset: 0,
             search: None,
+            filter_stats: FilterStats::default(),
         }
     }
 
@@ -181,14 +208,34 @@ impl LogViewer {
         // Split multi-line text into individual items for smooth scrolling
         for line in text.into_iter() {
             let item = Text::from_line(line);
+            let plain = item.to_plain_text();
 
-            // Update filter index if active
-            if let Some(filter) = self.filter.as_ref()
-                && item.to_plain_text().contains(filter.as_str())
-                && let Some(indices) = self.filtered_indices.as_mut()
-            {
-                let idx = self.virt.len();
-                indices.push(idx);
+            // Incremental filter check: test new line against active filter.
+            let filter_matched = if let Some(filter) = self.filter.as_ref() {
+                self.filter_stats.incremental_checks += 1;
+                let matched = plain.contains(filter.as_str());
+                if matched {
+                    if let Some(indices) = self.filtered_indices.as_mut() {
+                        let idx = self.virt.len();
+                        indices.push(idx);
+                    }
+                    self.filter_stats.incremental_matches += 1;
+                }
+                matched
+            } else {
+                false
+            };
+
+            // Incremental search check: test new line against active search query.
+            // Only add to search matches if (a) there is no filter or (b) the
+            // line passed the filter, because search results respect the filter.
+            if let Some(ref mut search) = self.search {
+                let should_check = self.filter.is_none() || filter_matched;
+                if should_check && plain.contains(search.query.as_str()) {
+                    let idx = self.virt.len();
+                    search.matches.push(idx);
+                    self.filter_stats.incremental_search_matches += 1;
+                }
             }
 
             self.virt.push(item);
@@ -380,6 +427,21 @@ impl LogViewer {
         self.filtered_indices = self.filter.as_ref().map(|_| Vec::new());
         self.filtered_scroll_offset = 0;
         self.search = None;
+        self.filter_stats.reset();
+    }
+
+    /// Get a reference to the incremental filter/search statistics.
+    ///
+    /// Use this to monitor how often the streaming incremental path is used
+    /// versus full rescans.
+    #[must_use]
+    pub fn filter_stats(&self) -> &FilterStats {
+        &self.filter_stats
+    }
+
+    /// Get a mutable reference to the filter statistics (for resetting).
+    pub fn filter_stats_mut(&mut self) -> &mut FilterStats {
+        &mut self.filter_stats
     }
 
     /// Set a filter pattern (plain substring match).
@@ -388,7 +450,9 @@ impl LogViewer {
     pub fn set_filter(&mut self, pattern: Option<&str>) {
         match pattern {
             Some(pat) if !pat.is_empty() => {
-                // Rebuild filtered indices
+                // Full rescan: rebuild filtered indices from all lines.
+                self.filter_stats.full_rescans += 1;
+                self.filter_stats.full_rescan_lines += self.virt.len() as u64;
                 let mut indices = Vec::new();
                 for idx in 0..self.virt.len() {
                     if let Some(item) = self.virt.get(idx)
@@ -432,8 +496,11 @@ impl LogViewer {
             return 0;
         }
 
+        // Full rescan for search matches.
+        self.filter_stats.full_rescans += 1;
         let mut matches = Vec::new();
         if let Some(indices) = self.filtered_indices.as_ref() {
+            self.filter_stats.full_rescan_lines += indices.len() as u64;
             for &idx in indices {
                 if let Some(item) = self.virt.get(idx)
                     && item.to_plain_text().contains(query)
@@ -442,6 +509,7 @@ impl LogViewer {
                 }
             }
         } else {
+            self.filter_stats.full_rescan_lines += self.virt.len() as u64;
             for idx in 0..self.virt.len() {
                 if let Some(item) = self.virt.get(idx)
                     && item.to_plain_text().contains(query)
@@ -1095,5 +1163,189 @@ mod tests {
         log.scroll_down(1);
 
         assert_eq!(log.filtered_scroll_offset, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Incremental filter/search tests (bd-1b5h.11)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_incremental_filter_on_push_tracks_stats() {
+        let mut log = LogViewer::new(100);
+        log.set_filter(Some("ERROR"));
+        // set_filter triggers one full rescan (on empty log).
+        assert_eq!(log.filter_stats().full_rescans, 1);
+
+        log.push("INFO: ok");
+        log.push("ERROR: bad");
+        log.push("INFO: fine");
+        log.push("ERROR: worse");
+
+        // 4 lines pushed with filter active → 4 incremental checks.
+        assert_eq!(log.filter_stats().incremental_checks, 4);
+        // 2 matched.
+        assert_eq!(log.filter_stats().incremental_matches, 2);
+        // No additional full rescans.
+        assert_eq!(log.filter_stats().full_rescans, 1);
+    }
+
+    #[test]
+    fn test_incremental_search_on_push() {
+        let mut log = LogViewer::new(100);
+        log.push("hello world");
+        log.push("goodbye world");
+
+        // Full search scan.
+        let count = log.search("hello");
+        assert_eq!(count, 1);
+        assert_eq!(log.filter_stats().full_rescans, 1);
+
+        // Push new lines while search is active → incremental search update.
+        log.push("hello again");
+        log.push("nothing here");
+
+        // Search matches should include the new "hello again" line.
+        assert_eq!(log.search_info(), Some((1, 2)));
+        assert_eq!(log.filter_stats().incremental_search_matches, 1);
+    }
+
+    #[test]
+    fn test_incremental_search_respects_active_filter() {
+        let mut log = LogViewer::new(100);
+        log.push("ERROR: hello");
+        log.push("INFO: hello");
+
+        log.set_filter(Some("ERROR"));
+        let count = log.search("hello");
+        assert_eq!(count, 1); // Only ERROR line passes filter.
+
+        // Push new lines: only those passing filter should be search-matched.
+        log.push("ERROR: hello again");
+        log.push("INFO: hello again"); // Doesn't pass filter.
+
+        assert_eq!(log.search_info(), Some((1, 2))); // Original + new ERROR.
+        assert_eq!(log.filter_stats().incremental_search_matches, 1);
+    }
+
+    #[test]
+    fn test_incremental_search_without_filter() {
+        let mut log = LogViewer::new(100);
+        log.push("first");
+        log.search("match");
+        assert_eq!(log.search_info(), None); // No matches.
+
+        // Push matching line without any filter active.
+        log.push("match found");
+        assert_eq!(log.search_info(), Some((1, 1)));
+        assert_eq!(log.filter_stats().incremental_search_matches, 1);
+    }
+
+    #[test]
+    fn test_filter_stats_reset_on_clear() {
+        let mut log = LogViewer::new(100);
+        log.set_filter(Some("x"));
+        log.push("x1");
+        log.push("y2");
+
+        assert!(log.filter_stats().incremental_checks > 0);
+        log.clear();
+        assert_eq!(log.filter_stats().incremental_checks, 0);
+        assert_eq!(log.filter_stats().full_rescans, 0);
+    }
+
+    #[test]
+    fn test_filter_stats_full_rescan_on_filter_change() {
+        let mut log = LogViewer::new(100);
+        for i in 0..100 {
+            log.push(format!("line {}", i));
+        }
+
+        log.set_filter(Some("line 5"));
+        assert_eq!(log.filter_stats().full_rescans, 1);
+        assert_eq!(log.filter_stats().full_rescan_lines, 100);
+
+        log.set_filter(Some("line 9"));
+        assert_eq!(log.filter_stats().full_rescans, 2);
+        assert_eq!(log.filter_stats().full_rescan_lines, 200);
+    }
+
+    #[test]
+    fn test_filter_stats_manual_reset() {
+        let mut log = LogViewer::new(100);
+        log.set_filter(Some("x"));
+        log.push("x1");
+        assert!(log.filter_stats().incremental_checks > 0);
+
+        log.filter_stats_mut().reset();
+        assert_eq!(log.filter_stats().incremental_checks, 0);
+
+        // Subsequent pushes still tracked after reset.
+        log.push("x2");
+        assert_eq!(log.filter_stats().incremental_checks, 1);
+    }
+
+    #[test]
+    fn test_incremental_eviction_adjusts_search_matches() {
+        let mut log = LogViewer::new(3);
+        log.push("match A");
+        log.push("no");
+        log.push("match B");
+        log.search("match");
+        assert_eq!(log.search_info(), Some((1, 2)));
+
+        // Push beyond capacity: evicts "match A".
+        log.push("match C"); // Incremental search match.
+
+        // "match A" evicted. "match B" index adjusted. "match C" added.
+        let search = log.search.as_ref().unwrap();
+        assert_eq!(search.matches.len(), 2);
+        // All search match indices should be valid (< log.line_count()).
+        for &idx in &search.matches {
+            assert!(idx < log.line_count(), "Search index {} out of range", idx);
+        }
+    }
+
+    #[test]
+    fn test_no_stats_when_no_filter_or_search() {
+        let mut log = LogViewer::new(100);
+        log.push("line 1");
+        log.push("line 2");
+
+        assert_eq!(log.filter_stats().incremental_checks, 0);
+        assert_eq!(log.filter_stats().full_rescans, 0);
+        assert_eq!(log.filter_stats().incremental_search_matches, 0);
+    }
+
+    #[test]
+    fn test_search_full_rescan_counts_lines() {
+        let mut log = LogViewer::new(100);
+        for i in 0..50 {
+            log.push(format!("line {}", i));
+        }
+
+        log.search("line 1");
+        assert_eq!(log.filter_stats().full_rescans, 1);
+        assert_eq!(log.filter_stats().full_rescan_lines, 50);
+    }
+
+    #[test]
+    fn test_search_full_rescan_on_filtered_counts_filtered_lines() {
+        let mut log = LogViewer::new(100);
+        for i in 0..50 {
+            if i % 2 == 0 {
+                log.push(format!("even {}", i));
+            } else {
+                log.push(format!("odd {}", i));
+            }
+        }
+
+        log.set_filter(Some("even"));
+        let initial_rescans = log.filter_stats().full_rescans;
+        let initial_lines = log.filter_stats().full_rescan_lines;
+
+        log.search("even 4");
+        assert_eq!(log.filter_stats().full_rescans, initial_rescans + 1);
+        // Search scanned only filtered lines (25 even lines).
+        assert_eq!(log.filter_stats().full_rescan_lines, initial_lines + 25);
     }
 }
