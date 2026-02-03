@@ -162,6 +162,17 @@ impl<T> Virtualized<T> {
         self
     }
 
+    /// Set variable heights with O(log n) Fenwick tree tracking.
+    ///
+    /// This is more efficient than `Variable(HeightCache)` for large lists
+    /// as scroll-to-index mapping is O(log n) instead of O(visible).
+    #[must_use]
+    pub fn with_variable_heights_fenwick(mut self, default_height: u16, capacity: usize) -> Self {
+        self.item_height =
+            ItemHeight::VariableFenwick(VariableHeightsFenwick::new(default_height, capacity));
+        self
+    }
+
     /// Set overscan amount.
     #[must_use]
     pub fn with_overscan(mut self, overscan: usize) -> Self {
@@ -220,7 +231,7 @@ impl<T> Virtualized<T> {
             ItemHeight::Fixed(h) if *h > 0 => (viewport_height / h) as usize,
             ItemHeight::Fixed(_) => viewport_height as usize,
             ItemHeight::Variable(cache) => {
-                // Sum heights until the next item would exceed viewport
+                // Sum heights until the next item would exceed viewport (O(visible))
                 let mut count = 0;
                 let mut total_height = 0u16;
                 let start = self.scroll_offset;
@@ -234,6 +245,10 @@ impl<T> Virtualized<T> {
                     count += 1;
                 }
                 count
+            }
+            ItemHeight::VariableFenwick(tracker) => {
+                // O(log n) using Fenwick tree
+                tracker.visible_count(self.scroll_offset, viewport_height)
             }
         };
 
@@ -627,22 +642,38 @@ impl VariableHeightsFenwick {
 
     /// Find the item index at a given scroll offset. O(log n).
     ///
-    /// Returns the index of the first item that is at least partially visible
-    /// at the given offset. If offset is beyond all items, returns `self.len`.
+    /// Returns the index of the item that occupies the given offset.
+    /// If offset is beyond all items, returns `self.len`.
+    ///
+    /// Item i occupies offsets [offset_of_item(i), offset_of_item(i+1)).
     #[must_use]
     pub fn find_item_at_offset(&self, offset: u32) -> usize {
-        if self.len == 0 || offset == 0 {
+        if self.len == 0 {
             return 0;
         }
-        // find_prefix returns largest i where prefix(i) <= target
-        // We want the first item where prefix(i-1) < offset (item starts before offset ends)
-        match self.tree.find_prefix(offset.saturating_sub(1)) {
+        if offset == 0 {
+            return 0;
+        }
+        // find_prefix returns largest i where prefix(i) <= offset
+        // prefix(i) = sum of heights [0..=i] = y-coordinate just past item i
+        // If prefix(i) <= offset, then offset is at or past the end of item i,
+        // so offset is in item i+1.
+        //
+        // We use offset - 1 to check: if prefix(i) <= offset - 1, then offset > prefix(i),
+        // meaning we're strictly past item i.
+        // But we also need to handle the case where offset == prefix(i) exactly
+        // (offset is first row of item i+1).
+        match self.tree.find_prefix(offset) {
             Some(i) => {
-                // i is the last item whose cumulative height <= offset-1
-                // So item i+1 is the first item that starts at or after offset
+                // prefix(i) <= offset
+                // Item i spans [prefix(i-1), prefix(i)), so offset >= prefix(i)
+                // means offset is in item i+1 or beyond
                 (i + 1).min(self.len)
             }
-            None => 0, // offset is within first item
+            None => {
+                // offset < prefix(0), so offset is within item 0
+                0
+            }
         }
     }
 
@@ -1759,5 +1790,223 @@ mod tests {
         // Page up again
         state.page_up(50);
         assert_eq!(state.scroll_offset(), 0);
+    }
+
+    // ========================================================================
+    // VariableHeightsFenwick tests (bd-2zbk.7)
+    // ========================================================================
+
+    #[test]
+    fn test_variable_heights_fenwick_new() {
+        let tracker = VariableHeightsFenwick::new(2, 10);
+        assert_eq!(tracker.len(), 10);
+        assert!(!tracker.is_empty());
+        assert_eq!(tracker.default_height(), 2);
+    }
+
+    #[test]
+    fn test_variable_heights_fenwick_empty() {
+        let tracker = VariableHeightsFenwick::new(1, 0);
+        assert!(tracker.is_empty());
+        assert_eq!(tracker.total_height(), 0);
+    }
+
+    #[test]
+    fn test_variable_heights_fenwick_from_heights() {
+        let heights = vec![3, 2, 5, 1, 4];
+        let tracker = VariableHeightsFenwick::from_heights(&heights, 1);
+
+        assert_eq!(tracker.len(), 5);
+        assert_eq!(tracker.get(0), 3);
+        assert_eq!(tracker.get(1), 2);
+        assert_eq!(tracker.get(2), 5);
+        assert_eq!(tracker.get(3), 1);
+        assert_eq!(tracker.get(4), 4);
+        assert_eq!(tracker.total_height(), 15);
+    }
+
+    #[test]
+    fn test_variable_heights_fenwick_offset_of_item() {
+        // Heights: [3, 2, 5, 1, 4] -> offsets: [0, 3, 5, 10, 11]
+        let heights = vec![3, 2, 5, 1, 4];
+        let tracker = VariableHeightsFenwick::from_heights(&heights, 1);
+
+        assert_eq!(tracker.offset_of_item(0), 0);
+        assert_eq!(tracker.offset_of_item(1), 3);
+        assert_eq!(tracker.offset_of_item(2), 5);
+        assert_eq!(tracker.offset_of_item(3), 10);
+        assert_eq!(tracker.offset_of_item(4), 11);
+        assert_eq!(tracker.offset_of_item(5), 15); // beyond end
+    }
+
+    #[test]
+    fn test_variable_heights_fenwick_find_item_at_offset() {
+        // Heights: [3, 2, 5, 1, 4] -> cumulative: [3, 5, 10, 11, 15]
+        let heights = vec![3, 2, 5, 1, 4];
+        let tracker = VariableHeightsFenwick::from_heights(&heights, 1);
+
+        // Offset 0 should be item 0
+        assert_eq!(tracker.find_item_at_offset(0), 0);
+        // Offset 1 should be item 0 (within first item)
+        assert_eq!(tracker.find_item_at_offset(1), 0);
+        // Offset 3 should be item 1 (starts at offset 3)
+        assert_eq!(tracker.find_item_at_offset(3), 1);
+        // Offset 5 should be item 2
+        assert_eq!(tracker.find_item_at_offset(5), 2);
+        // Offset 10 should be item 3
+        assert_eq!(tracker.find_item_at_offset(10), 3);
+        // Offset 11 should be item 4
+        assert_eq!(tracker.find_item_at_offset(11), 4);
+        // Offset 15 should be end (beyond all items)
+        assert_eq!(tracker.find_item_at_offset(15), 5);
+    }
+
+    #[test]
+    fn test_variable_heights_fenwick_visible_count() {
+        // Heights: [3, 2, 5, 1, 4]
+        let heights = vec![3, 2, 5, 1, 4];
+        let tracker = VariableHeightsFenwick::from_heights(&heights, 1);
+
+        // Viewport 5: items 0 (h=3) + 1 (h=2) = 5 exactly
+        assert_eq!(tracker.visible_count(0, 5), 2);
+
+        // Viewport 4: item 0 (h=3) fits, item 1 (h=2) doesn't fit fully
+        assert_eq!(tracker.visible_count(0, 4), 1);
+
+        // Viewport 10: items 0+1+2 = 10 exactly
+        assert_eq!(tracker.visible_count(0, 10), 3);
+
+        // From item 2, viewport 6: item 2 (h=5) + item 3 (h=1) = 6
+        assert_eq!(tracker.visible_count(2, 6), 2);
+    }
+
+    #[test]
+    fn test_variable_heights_fenwick_set() {
+        let mut tracker = VariableHeightsFenwick::new(1, 5);
+
+        // All items should start with default height
+        assert_eq!(tracker.get(0), 1);
+        assert_eq!(tracker.total_height(), 5);
+
+        // Set item 2 to height 10
+        tracker.set(2, 10);
+        assert_eq!(tracker.get(2), 10);
+        assert_eq!(tracker.total_height(), 14); // 1+1+10+1+1
+    }
+
+    #[test]
+    fn test_variable_heights_fenwick_resize() {
+        let mut tracker = VariableHeightsFenwick::new(2, 3);
+        assert_eq!(tracker.len(), 3);
+        assert_eq!(tracker.total_height(), 6);
+
+        // Grow
+        tracker.resize(5);
+        assert_eq!(tracker.len(), 5);
+        assert_eq!(tracker.total_height(), 10);
+        assert_eq!(tracker.get(4), 2);
+
+        // Shrink
+        tracker.resize(2);
+        assert_eq!(tracker.len(), 2);
+        assert_eq!(tracker.total_height(), 4);
+    }
+
+    #[test]
+    fn test_virtualized_with_variable_heights_fenwick() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100).with_variable_heights_fenwick(2, 10);
+
+        for i in 0..10 {
+            virt.push(i);
+        }
+
+        // All items height 2, viewport 6 -> 3 items visible
+        let range = virt.visible_range(6);
+        assert_eq!(range.end - range.start, 3);
+    }
+
+    #[test]
+    fn test_variable_heights_fenwick_performance() {
+        use std::time::Instant;
+
+        // Create large tracker
+        let n = 100_000;
+        let heights: Vec<u16> = (0..n).map(|i| (i % 10 + 1) as u16).collect();
+        let tracker = VariableHeightsFenwick::from_heights(&heights, 1);
+
+        // Warm up
+        let _ = tracker.find_item_at_offset(500_000);
+        let _ = tracker.offset_of_item(50_000);
+
+        // Benchmark find_item_at_offset (O(log n))
+        let start = Instant::now();
+        let mut _sink = 0usize;
+        for i in 0..10_000 {
+            _sink = _sink.wrapping_add(tracker.find_item_at_offset((i * 50) as u32));
+        }
+        let find_time = start.elapsed();
+
+        // Benchmark offset_of_item (O(log n))
+        let start = Instant::now();
+        let mut _sink2 = 0u32;
+        for i in 0..10_000 {
+            _sink2 = _sink2.wrapping_add(tracker.offset_of_item((i * 10) % n));
+        }
+        let offset_time = start.elapsed();
+
+        eprintln!("=== VariableHeightsFenwick Performance (n={n}) ===");
+        eprintln!("10k find_item_at_offset: {:?}", find_time);
+        eprintln!("10k offset_of_item:      {:?}", offset_time);
+
+        // Both should be under 50ms for 10k operations
+        assert!(
+            find_time < std::time::Duration::from_millis(50),
+            "find_item_at_offset too slow: {:?}",
+            find_time
+        );
+        assert!(
+            offset_time < std::time::Duration::from_millis(50),
+            "offset_of_item too slow: {:?}",
+            offset_time
+        );
+    }
+
+    #[test]
+    fn test_variable_heights_fenwick_scales_logarithmically() {
+        use std::time::Instant;
+
+        // Small dataset
+        let small_n = 1_000;
+        let small_heights: Vec<u16> = (0..small_n).map(|i| (i % 5 + 1) as u16).collect();
+        let small_tracker = VariableHeightsFenwick::from_heights(&small_heights, 1);
+
+        // Large dataset
+        let large_n = 100_000;
+        let large_heights: Vec<u16> = (0..large_n).map(|i| (i % 5 + 1) as u16).collect();
+        let large_tracker = VariableHeightsFenwick::from_heights(&large_heights, 1);
+
+        let iterations = 5_000;
+
+        // Time small
+        let start = Instant::now();
+        for i in 0..iterations {
+            let _ = small_tracker.find_item_at_offset((i * 2) as u32);
+        }
+        let small_time = start.elapsed();
+
+        // Time large
+        let start = Instant::now();
+        for i in 0..iterations {
+            let _ = large_tracker.find_item_at_offset((i * 200) as u32);
+        }
+        let large_time = start.elapsed();
+
+        // Large should be within 5x of small (O(log n) vs O(n) would be 100x)
+        assert!(
+            large_time < small_time * 5,
+            "Not O(log n): small={:?}, large={:?}",
+            small_time,
+            large_time
+        );
     }
 }
