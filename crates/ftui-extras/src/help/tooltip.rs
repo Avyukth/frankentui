@@ -357,11 +357,7 @@ impl Widget for Tooltip {
 }
 
 /// Apply a style to all cells in a rectangular area.
-fn apply_style_to_area(
-    buf: &mut ftui_render::buffer::Buffer,
-    area: Rect,
-    style: &Style,
-) {
+fn apply_style_to_area(buf: &mut ftui_render::buffer::Buffer, area: Rect, style: &Style) {
     if style.is_empty() {
         return;
     }
@@ -471,10 +467,7 @@ mod tests {
         let (_, y) = tooltip.calculate_position(screen);
 
         // Should be above target
-        assert!(
-            y < 20,
-            "Should position above target when no space below"
-        );
+        assert!(y < 20, "Should position above target when no space below");
     }
 
     #[test]

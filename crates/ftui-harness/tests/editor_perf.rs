@@ -94,7 +94,11 @@ fn log_perf(case: &str, lines: usize, op: &str, duration_us: u128, result: &str)
 /// Assert operation completes within time budget.
 fn assert_within_budget(duration: Duration, budget_us: u128, case: &str, lines: usize, op: &str) {
     let duration_us = duration.as_micros();
-    let result = if duration_us <= budget_us { "pass" } else { "fail" };
+    let result = if duration_us <= budget_us {
+        "pass"
+    } else {
+        "fail"
+    };
     log_perf(case, lines, op, duration_us, result);
 
     assert!(
@@ -130,7 +134,13 @@ fn large_buffer_10k_delete_char() {
     editor.delete_backward();
     let duration = start.elapsed();
 
-    assert_within_budget(duration, 1000, "delete_char_10k", LINES_10K, "delete_backward");
+    assert_within_budget(
+        duration,
+        1000,
+        "delete_char_10k",
+        LINES_10K,
+        "delete_backward",
+    );
 }
 
 #[test]
@@ -216,7 +226,13 @@ fn large_buffer_100k_insert_char() {
     editor.insert_char('X');
     let duration = start.elapsed();
 
-    assert_within_budget(duration, 5000, "insert_char_100k", LINES_100K, "insert_char");
+    assert_within_budget(
+        duration,
+        5000,
+        "insert_char_100k",
+        LINES_100K,
+        "insert_char",
+    );
 }
 
 #[test]
@@ -227,7 +243,13 @@ fn large_buffer_100k_delete_char() {
     editor.delete_backward();
     let duration = start.elapsed();
 
-    assert_within_budget(duration, 5000, "delete_char_100k", LINES_100K, "delete_backward");
+    assert_within_budget(
+        duration,
+        5000,
+        "delete_char_100k",
+        LINES_100K,
+        "delete_backward",
+    );
 }
 
 #[test]
@@ -260,7 +282,13 @@ fn large_buffer_100k_move_to_start() {
     editor.move_to_document_start();
     let duration = start.elapsed();
 
-    assert_within_budget(duration, 2000, "move_start_100k", LINES_100K, "move_to_start");
+    assert_within_budget(
+        duration,
+        2000,
+        "move_start_100k",
+        LINES_100K,
+        "move_to_start",
+    );
 }
 
 // ============================================================================
@@ -275,19 +303,35 @@ fn invariant_line_count_consistency() {
 
     // Insert char (should not change line count)
     editor.insert_char('X');
-    assert_eq!(editor.line_count(), initial_lines, "insert_char changed line count");
+    assert_eq!(
+        editor.line_count(),
+        initial_lines,
+        "insert_char changed line count"
+    );
 
     // Delete char (should not change line count)
     editor.delete_backward();
-    assert_eq!(editor.line_count(), initial_lines, "delete_backward changed line count");
+    assert_eq!(
+        editor.line_count(),
+        initial_lines,
+        "delete_backward changed line count"
+    );
 
     // Insert newline (should increase by 1)
     editor.insert_newline();
-    assert_eq!(editor.line_count(), initial_lines + 1, "insert_newline didn't increase");
+    assert_eq!(
+        editor.line_count(),
+        initial_lines + 1,
+        "insert_newline didn't increase"
+    );
 
     // Undo (should restore)
     editor.undo();
-    assert_eq!(editor.line_count(), initial_lines, "undo didn't restore line count");
+    assert_eq!(
+        editor.line_count(),
+        initial_lines,
+        "undo didn't restore line count"
+    );
 }
 
 /// Test that cursor is always valid after operations.
@@ -319,7 +363,7 @@ fn invariant_cursor_always_valid() {
 fn invariant_undo_reversibility() {
     let mut editor = create_large_buffer(1000);
     let original_text = editor.text();
-    let original_cursor = editor.cursor();
+    let _original_cursor = editor.cursor();
 
     // Perform operations
     editor.insert_text("INSERTED");
@@ -372,7 +416,13 @@ fn stress_many_insertions() {
     let duration = start.elapsed();
 
     assert_eq!(editor.line_count(), 1001); // 1000 lines + empty at end
-    log_perf("stress_insertions", 1000, "1000_inserts", duration.as_micros(), "pass");
+    log_perf(
+        "stress_insertions",
+        1000,
+        "1000_inserts",
+        duration.as_micros(),
+        "pass",
+    );
 
     // Should complete in reasonable time
     assert!(
@@ -396,7 +446,13 @@ fn stress_cursor_movements() {
     }
     let duration = start.elapsed();
 
-    log_perf("stress_movements", 10_000, "4000_moves", duration.as_micros(), "pass");
+    log_perf(
+        "stress_movements",
+        10_000,
+        "4000_moves",
+        duration.as_micros(),
+        "pass",
+    );
 
     assert!(
         duration < Duration::from_secs(2),
@@ -426,7 +482,13 @@ fn stress_undo_redo() {
     }
     let duration = start.elapsed();
 
-    log_perf("stress_undo_redo", 100, "200_undo_redo", duration.as_micros(), "pass");
+    log_perf(
+        "stress_undo_redo",
+        100,
+        "200_undo_redo",
+        duration.as_micros(),
+        "pass",
+    );
 
     assert!(
         duration < Duration::from_secs(1),
@@ -495,7 +557,11 @@ fn property_cursor_reachable() {
     // Should be able to get text at cursor line
     if cursor.line > 0 || cursor.grapheme > 0 {
         let line_text = editor.line_text(cursor.line as usize);
-        assert!(line_text.is_some(), "cursor line {} not accessible", cursor.line);
+        assert!(
+            line_text.is_some(),
+            "cursor line {} not accessible",
+            cursor.line
+        );
     }
 }
 
@@ -514,7 +580,13 @@ fn regression_insert_at_start_large() {
     let duration = start.elapsed();
 
     assert!(editor.text().starts_with("START: "));
-    assert_within_budget(duration, 5000, "insert_at_start", LINES_10K, "insert_at_start");
+    assert_within_budget(
+        duration,
+        5000,
+        "insert_at_start",
+        LINES_10K,
+        "insert_at_start",
+    );
 }
 
 /// Regression: deleting at document start in large buffer.
@@ -528,7 +600,13 @@ fn regression_delete_at_start_large() {
     editor.delete_backward();
     let duration = start.elapsed();
 
-    assert_within_budget(duration, 5000, "delete_at_start", LINES_10K, "delete_at_start");
+    assert_within_budget(
+        duration,
+        5000,
+        "delete_at_start",
+        LINES_10K,
+        "delete_at_start",
+    );
 }
 
 /// Regression: word movement in large buffer.
@@ -543,5 +621,11 @@ fn regression_word_movement_large() {
     }
     let duration = start.elapsed();
 
-    assert_within_budget(duration, 10_000, "word_movement", LINES_10K, "100_word_moves");
+    assert_within_budget(
+        duration,
+        10_000,
+        "word_movement",
+        LINES_10K,
+        "100_word_moves",
+    );
 }

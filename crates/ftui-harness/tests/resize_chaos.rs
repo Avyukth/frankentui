@@ -35,11 +35,9 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::io::{BufWriter, Write};
-use std::path::Path;
 use std::time::{Duration, Instant};
 
-use ftui_runtime::resize_coalescer::{CoalesceAction, CoalescerConfig, ResizeCoalescer, Regime};
+use ftui_runtime::resize_coalescer::{CoalesceAction, CoalescerConfig, ResizeCoalescer};
 
 // ============================================================================
 // Seeded Random Number Generator
@@ -53,15 +51,21 @@ struct SeededRng {
 
 impl SeededRng {
     fn new(seed: u64) -> Self {
-        Self { state: seed.wrapping_add(1) }
+        Self {
+            state: seed.wrapping_add(1),
+        }
     }
 
     fn next_u64(&mut self) -> u64 {
         // LCG parameters from Numerical Recipes
-        self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.state = self
+            .state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         self.state
     }
 
+    #[allow(dead_code)]
     fn next_u32(&mut self) -> u32 {
         (self.next_u64() >> 32) as u32
     }
@@ -131,13 +135,22 @@ fn generate_steady_stream(rng: &mut SeededRng, count: usize) -> Vec<ResizeEvent>
 
         // Gradual size changes
         if rng.chance(0.5) {
-            width = width.saturating_add_signed(rng.next_range(0, 10) as i16 - 5).clamp(20, 300);
+            width = width
+                .saturating_add_signed(rng.next_range(0, 10) as i16 - 5)
+                .clamp(20, 300);
         }
         if rng.chance(0.5) {
-            height = height.saturating_add_signed(rng.next_range(0, 10) as i16 - 5).clamp(5, 100);
+            height = height
+                .saturating_add_signed(rng.next_range(0, 10) as i16 - 5)
+                .clamp(5, 100);
         }
 
-        events.push(ResizeEvent { width, height, delay_ms: delay, jitter_ms: jitter });
+        events.push(ResizeEvent {
+            width,
+            height,
+            delay_ms: delay,
+            jitter_ms: jitter,
+        });
     }
     events
 }
@@ -154,10 +167,19 @@ fn generate_burst_stream(rng: &mut SeededRng, count: usize) -> Vec<ResizeEvent> 
         let jitter = (rng.next_range(0, 10) as i64) - 5;
 
         // Rapid size changes
-        width = width.saturating_add_signed(rng.next_range(0, 20) as i16 - 10).clamp(20, 300);
-        height = height.saturating_add_signed(rng.next_range(0, 10) as i16 - 5).clamp(5, 100);
+        width = width
+            .saturating_add_signed(rng.next_range(0, 20) as i16 - 10)
+            .clamp(20, 300);
+        height = height
+            .saturating_add_signed(rng.next_range(0, 10) as i16 - 5)
+            .clamp(5, 100);
 
-        events.push(ResizeEvent { width, height, delay_ms: delay, jitter_ms: jitter });
+        events.push(ResizeEvent {
+            width,
+            height,
+            delay_ms: delay,
+            jitter_ms: jitter,
+        });
     }
     events
 }
@@ -172,7 +194,12 @@ fn generate_oscillating_stream(rng: &mut SeededRng, count: usize) -> Vec<ResizeE
         let delay = rng.next_range(20, 80);
         let jitter = (rng.next_range(0, 10) as i64) - 5;
 
-        events.push(ResizeEvent { width, height, delay_ms: delay, jitter_ms: jitter });
+        events.push(ResizeEvent {
+            width,
+            height,
+            delay_ms: delay,
+            jitter_ms: jitter,
+        });
     }
     events
 }
@@ -184,16 +211,26 @@ fn generate_pathological_stream(rng: &mut SeededRng, count: usize) -> Vec<Resize
     for i in 0..count {
         let pattern = i % 6;
         let (width, height, delay, jitter) = match pattern {
-            0 => (1, 1, 0, 0),                           // Minimum size, zero delay
-            1 => (300, 100, 0, 0),                       // Maximum size, zero delay
-            2 => (80, 24, 1000, 0),                      // Normal size, long delay
-            3 => (rng.next_range(1, 300) as u16, rng.next_range(1, 100) as u16, 1, 0), // Random, instant
-            4 => (80, 24, rng.next_range(0, 200), -50),  // Negative jitter
-            5 => (120, 40, rng.next_range(0, 50), 100),  // Large positive jitter
+            0 => (1, 1, 0, 0),      // Minimum size, zero delay
+            1 => (300, 100, 0, 0),  // Maximum size, zero delay
+            2 => (80, 24, 1000, 0), // Normal size, long delay
+            3 => (
+                rng.next_range(1, 300) as u16,
+                rng.next_range(1, 100) as u16,
+                1,
+                0,
+            ), // Random, instant
+            4 => (80, 24, rng.next_range(0, 200), -50), // Negative jitter
+            5 => (120, 40, rng.next_range(0, 50), 100), // Large positive jitter
             _ => unreachable!(),
         };
 
-        events.push(ResizeEvent { width, height, delay_ms: delay, jitter_ms: jitter });
+        events.push(ResizeEvent {
+            width,
+            height,
+            delay_ms: delay,
+            jitter_ms: jitter,
+        });
     }
     events
 }
@@ -248,7 +285,13 @@ impl ChaosLogger {
         ));
     }
 
-    fn log_decision(&mut self, idx: usize, action: &str, regime: &str, pending: Option<(u16, u16)>) {
+    fn log_decision(
+        &mut self,
+        idx: usize,
+        action: &str,
+        regime: &str,
+        pending: Option<(u16, u16)>,
+    ) {
         let pending_str = pending
             .map(|(w, h)| format!("\"{}x{}\"", w, h))
             .unwrap_or_else(|| "null".to_string());
@@ -258,7 +301,14 @@ impl ChaosLogger {
         ));
     }
 
-    fn log_apply(&mut self, idx: usize, width: u16, height: u16, coalesce_time_ms: u64, forced: bool) {
+    fn log_apply(
+        &mut self,
+        idx: usize,
+        width: u16,
+        height: u16,
+        coalesce_time_ms: u64,
+        forced: bool,
+    ) {
         self.lines.push(format!(
             r#"{{"event":"chaos_apply","idx":{},"width":{},"height":{},"coalesce_time_ms":{},"forced":{}}}"#,
             idx, width, height, coalesce_time_ms, forced
@@ -268,11 +318,19 @@ impl ChaosLogger {
     fn log_invariant_check(&mut self, invariant: &str, passed: bool, details: &str) {
         self.lines.push(format!(
             r#"{{"event":"chaos_invariant","invariant":"{}","passed":{},"details":"{}"}}"#,
-            invariant, passed, escape_json(details)
+            invariant,
+            passed,
+            escape_json(details)
         ));
     }
 
-    fn log_complete(&mut self, outcome: &str, total_resizes: usize, total_applies: usize, checksum: &str) {
+    fn log_complete(
+        &mut self,
+        outcome: &str,
+        total_resizes: usize,
+        total_applies: usize,
+        checksum: &str,
+    ) {
         self.lines.push(format!(
             r#"{{"event":"chaos_complete","outcome":"{}","total_resizes":{},"total_applies":{},"checksum":"{}"}}"#,
             outcome, total_resizes, total_applies, checksum
@@ -285,7 +343,10 @@ impl ChaosLogger {
 
     fn compute_checksum(&self) -> String {
         let mut hasher = DefaultHasher::new();
-        for line in &self.lines {
+        // Skip the first line (start event) since it contains non-deterministic
+        // elements like timestamp and case name. We only want to checksum the
+        // resize/apply/invariant events for deterministic replay verification.
+        for line in self.lines.iter().skip(1) {
             line.hash(&mut hasher);
         }
         format!("{:016x}", hasher.finish())
@@ -298,10 +359,7 @@ fn capture_env() -> String {
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(0);
-    format!(
-        r#"{{"term":"{}","seed":{}}}"#,
-        escape_json(&term), seed
-    )
+    format!(r#"{{"term":"{}","seed":{}}}"#, escape_json(&term), seed)
 }
 
 fn escape_json(s: &str) -> String {
@@ -320,9 +378,11 @@ fn escape_json(s: &str) -> String {
 #[derive(Debug)]
 struct ChaosResult {
     passed: bool,
+    #[allow(dead_code)]
     total_resizes: usize,
     total_applies: usize,
     invariant_failures: Vec<String>,
+    #[allow(dead_code)]
     jsonl: String,
     checksum: String,
 }
@@ -353,7 +413,13 @@ fn run_chaos_test(
         let effective_delay = (event.delay_ms as i64 + event.jitter_ms).max(0) as u64;
         current_time += Duration::from_millis(effective_delay);
 
-        logger.log_resize(idx, event.width, event.height, event.delay_ms, event.jitter_ms);
+        logger.log_resize(
+            idx,
+            event.width,
+            event.height,
+            event.delay_ms,
+            event.jitter_ms,
+        );
 
         // Handle resize event
         let action = coalescer.handle_resize_at(event.width, event.height, current_time);
@@ -372,15 +438,39 @@ fn run_chaos_test(
         };
         logger.log_decision(idx, action_str, regime_str, pending);
 
-        if let CoalesceAction::ApplyResize { width, height, coalesce_time, forced_by_deadline } = action {
-            logger.log_apply(idx, width, height, coalesce_time.as_millis() as u64, forced_by_deadline);
+        if let CoalesceAction::ApplyResize {
+            width,
+            height,
+            coalesce_time,
+            forced_by_deadline,
+        } = action
+        {
+            logger.log_apply(
+                idx,
+                width,
+                height,
+                coalesce_time.as_millis() as u64,
+                forced_by_deadline,
+            );
             total_applies += 1;
         }
 
         // Also tick to process any pending applies
         let tick_action = coalescer.tick_at(current_time + Duration::from_millis(1));
-        if let CoalesceAction::ApplyResize { width, height, coalesce_time, forced_by_deadline } = tick_action {
-            logger.log_apply(idx, width, height, coalesce_time.as_millis() as u64, forced_by_deadline);
+        if let CoalesceAction::ApplyResize {
+            width,
+            height,
+            coalesce_time,
+            forced_by_deadline,
+        } = tick_action
+        {
+            logger.log_apply(
+                idx,
+                width,
+                height,
+                coalesce_time.as_millis() as u64,
+                forced_by_deadline,
+            );
             total_applies += 1;
         }
     }
@@ -390,8 +480,20 @@ fn run_chaos_test(
     for tick in 0..200 {
         drain_time += Duration::from_millis(10);
         let action = coalescer.tick_at(drain_time);
-        if let CoalesceAction::ApplyResize { width, height, coalesce_time, forced_by_deadline } = action {
-            logger.log_apply(total_resizes + tick, width, height, coalesce_time.as_millis() as u64, forced_by_deadline);
+        if let CoalesceAction::ApplyResize {
+            width,
+            height,
+            coalesce_time,
+            forced_by_deadline,
+        } = action
+        {
+            logger.log_apply(
+                total_resizes + tick,
+                width,
+                height,
+                coalesce_time.as_millis() as u64,
+                forced_by_deadline,
+            );
             total_applies += 1;
             break;
         }
@@ -408,7 +510,10 @@ fn run_chaos_test(
         logger.log_invariant_check(
             "latest_wins",
             passed,
-            &format!("expected {}x{}, got {}x{}", expected_w, expected_h, actual_w, actual_h),
+            &format!(
+                "expected {}x{}, got {}x{}",
+                expected_w, expected_h, actual_w, actual_h
+            ),
         );
         if !passed {
             invariant_failures.push(format!(
@@ -430,7 +535,11 @@ fn run_chaos_test(
     }
 
     let checksum = logger.compute_checksum();
-    let outcome = if invariant_failures.is_empty() { "pass" } else { "fail" };
+    let outcome = if invariant_failures.is_empty() {
+        "pass"
+    } else {
+        "fail"
+    };
     logger.log_complete(outcome, total_resizes, total_applies, &checksum);
 
     ChaosResult {
@@ -475,8 +584,7 @@ fn chaos_steady_stream() {
     assert!(
         result.passed,
         "Steady stream failed:\n{}\nFailures: {:?}",
-        result.jsonl,
-        result.invariant_failures
+        result.jsonl, result.invariant_failures
     );
 }
 
@@ -492,8 +600,7 @@ fn chaos_burst_storm() {
     assert!(
         result.passed,
         "Burst storm failed:\n{}\nFailures: {:?}",
-        result.jsonl,
-        result.invariant_failures
+        result.jsonl, result.invariant_failures
     );
 }
 
@@ -504,13 +611,18 @@ fn chaos_oscillating() {
     let events = generate_oscillating_stream(&mut rng, 60);
     let config = CoalescerConfig::default().with_logging(true);
 
-    let result = run_chaos_test("oscillating", PatternType::Oscillating, events, config, seed);
+    let result = run_chaos_test(
+        "oscillating",
+        PatternType::Oscillating,
+        events,
+        config,
+        seed,
+    );
 
     assert!(
         result.passed,
         "Oscillating pattern failed:\n{}\nFailures: {:?}",
-        result.jsonl,
-        result.invariant_failures
+        result.jsonl, result.invariant_failures
     );
 }
 
@@ -521,13 +633,18 @@ fn chaos_pathological() {
     let events = generate_pathological_stream(&mut rng, 50);
     let config = CoalescerConfig::default().with_logging(true);
 
-    let result = run_chaos_test("pathological", PatternType::Pathological, events, config, seed);
+    let result = run_chaos_test(
+        "pathological",
+        PatternType::Pathological,
+        events,
+        config,
+        seed,
+    );
 
     assert!(
         result.passed,
         "Pathological pattern failed:\n{}\nFailures: {:?}",
-        result.jsonl,
-        result.invariant_failures
+        result.jsonl, result.invariant_failures
     );
 }
 
@@ -543,8 +660,7 @@ fn chaos_mixed() {
     assert!(
         result.passed,
         "Mixed pattern failed:\n{}\nFailures: {:?}",
-        result.jsonl,
-        result.invariant_failures
+        result.jsonl, result.invariant_failures
     );
 }
 
@@ -558,12 +674,24 @@ fn chaos_determinism() {
         .map(|_| {
             let mut rng = SeededRng::new(seed);
             let events = generate_mixed_stream(&mut rng, 100);
-            run_chaos_test("determinism", PatternType::Mixed, events, config.clone(), seed)
+            run_chaos_test(
+                "determinism",
+                PatternType::Mixed,
+                events,
+                config.clone(),
+                seed,
+            )
         })
         .collect();
 
-    assert_eq!(results[0].checksum, results[1].checksum, "Checksums should match (runs 0 and 1)");
-    assert_eq!(results[1].checksum, results[2].checksum, "Checksums should match (runs 1 and 2)");
+    assert_eq!(
+        results[0].checksum, results[1].checksum,
+        "Checksums should match (runs 0 and 1)"
+    );
+    assert_eq!(
+        results[1].checksum, results[2].checksum,
+        "Checksums should match (runs 1 and 2)"
+    );
 }
 
 #[test]
@@ -587,8 +715,7 @@ fn chaos_extreme_burst() {
     assert!(
         result.passed,
         "Extreme burst failed:\n{}\nFailures: {:?}",
-        result.jsonl,
-        result.invariant_failures
+        result.jsonl, result.invariant_failures
     );
 }
 
@@ -597,21 +724,51 @@ fn chaos_size_extremes() {
     // Test edge case sizes
     let seed = get_seed();
     let events = vec![
-        ResizeEvent { width: 1, height: 1, delay_ms: 10, jitter_ms: 0 },
-        ResizeEvent { width: u16::MAX, height: 1, delay_ms: 10, jitter_ms: 0 },
-        ResizeEvent { width: 1, height: u16::MAX, delay_ms: 10, jitter_ms: 0 },
-        ResizeEvent { width: u16::MAX, height: u16::MAX, delay_ms: 10, jitter_ms: 0 },
-        ResizeEvent { width: 80, height: 24, delay_ms: 10, jitter_ms: 0 },
+        ResizeEvent {
+            width: 1,
+            height: 1,
+            delay_ms: 10,
+            jitter_ms: 0,
+        },
+        ResizeEvent {
+            width: u16::MAX,
+            height: 1,
+            delay_ms: 10,
+            jitter_ms: 0,
+        },
+        ResizeEvent {
+            width: 1,
+            height: u16::MAX,
+            delay_ms: 10,
+            jitter_ms: 0,
+        },
+        ResizeEvent {
+            width: u16::MAX,
+            height: u16::MAX,
+            delay_ms: 10,
+            jitter_ms: 0,
+        },
+        ResizeEvent {
+            width: 80,
+            height: 24,
+            delay_ms: 10,
+            jitter_ms: 0,
+        },
     ];
 
     let config = CoalescerConfig::default().with_logging(true);
-    let result = run_chaos_test("size_extremes", PatternType::Pathological, events, config, seed);
+    let result = run_chaos_test(
+        "size_extremes",
+        PatternType::Pathological,
+        events,
+        config,
+        seed,
+    );
 
     assert!(
         result.passed,
         "Size extremes failed:\n{}\nFailures: {:?}",
-        result.jsonl,
-        result.invariant_failures
+        result.jsonl, result.invariant_failures
     );
 }
 
@@ -629,13 +786,18 @@ fn chaos_zero_delays() {
         .collect();
 
     let config = CoalescerConfig::default().with_logging(true);
-    let result = run_chaos_test("zero_delays", PatternType::Pathological, events, config, seed);
+    let result = run_chaos_test(
+        "zero_delays",
+        PatternType::Pathological,
+        events,
+        config,
+        seed,
+    );
 
     assert!(
         result.passed,
         "Zero delays failed:\n{}\nFailures: {:?}",
-        result.jsonl,
-        result.invariant_failures
+        result.jsonl, result.invariant_failures
     );
 }
 
@@ -658,8 +820,7 @@ fn chaos_long_gaps() {
     assert!(
         result.passed,
         "Long gaps failed:\n{}\nFailures: {:?}",
-        result.jsonl,
-        result.invariant_failures
+        result.jsonl, result.invariant_failures
     );
 }
 
@@ -667,7 +828,12 @@ fn chaos_long_gaps() {
 fn chaos_single_resize() {
     // Edge case: single resize only
     let seed = get_seed();
-    let events = vec![ResizeEvent { width: 100, height: 40, delay_ms: 50, jitter_ms: 0 }];
+    let events = vec![ResizeEvent {
+        width: 100,
+        height: 40,
+        delay_ms: 50,
+        jitter_ms: 0,
+    }];
 
     let config = CoalescerConfig::default().with_logging(true);
     let result = run_chaos_test("single_resize", PatternType::Steady, events, config, seed);
@@ -675,8 +841,7 @@ fn chaos_single_resize() {
     assert!(
         result.passed,
         "Single resize failed:\n{}\nFailures: {:?}",
-        result.jsonl,
-        result.invariant_failures
+        result.jsonl, result.invariant_failures
     );
 }
 
@@ -688,7 +853,13 @@ fn chaos_replay_consistency() {
 
     let mut rng1 = SeededRng::new(seed);
     let events1 = generate_burst_stream(&mut rng1, 50);
-    let result1 = run_chaos_test("replay_1", PatternType::Burst, events1, config.clone(), seed);
+    let result1 = run_chaos_test(
+        "replay_1",
+        PatternType::Burst,
+        events1,
+        config.clone(),
+        seed,
+    );
 
     let mut rng2 = SeededRng::new(seed);
     let events2 = generate_burst_stream(&mut rng2, 50);
@@ -718,13 +889,24 @@ fn invariant_latest_wins_always() {
         let final_size = events.last().map(|e| (e.width, e.height));
 
         let config = CoalescerConfig::default();
-        let result = run_chaos_test(&format!("latest_wins_{}", seed_offset), PatternType::Mixed, events, config, seed);
+        let result = run_chaos_test(
+            &format!("latest_wins_{}", seed_offset),
+            PatternType::Mixed,
+            events,
+            config,
+            seed,
+        );
 
         if let Some((expected_w, expected_h)) = final_size {
             assert!(
-                !result.invariant_failures.iter().any(|f| f.contains("latest_wins")),
+                !result
+                    .invariant_failures
+                    .iter()
+                    .any(|f| f.contains("latest_wins")),
                 "latest_wins failed for seed {}: expected {}x{}",
-                seed, expected_w, expected_h
+                seed,
+                expected_w,
+                expected_h
             );
         }
     }
@@ -739,10 +921,19 @@ fn invariant_bounded_latency_always() {
         let events = generate_burst_stream(&mut rng, 100);
 
         let config = CoalescerConfig::default();
-        let result = run_chaos_test(&format!("bounded_latency_{}", seed_offset), PatternType::Burst, events, config, seed);
+        let result = run_chaos_test(
+            &format!("bounded_latency_{}", seed_offset),
+            PatternType::Burst,
+            events,
+            config,
+            seed,
+        );
 
         assert!(
-            !result.invariant_failures.iter().any(|f| f.contains("bounded_latency")),
+            !result
+                .invariant_failures
+                .iter()
+                .any(|f| f.contains("bounded_latency")),
             "bounded_latency failed for seed {}",
             seed
         );
