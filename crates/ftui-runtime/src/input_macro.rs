@@ -369,8 +369,8 @@ impl<'a> MacroPlayer<'a> {
 /// - If total duration is zero and looping is enabled, looping is ignored to
 ///   avoid infinite emission within a single `advance` call.
 #[derive(Debug, Clone)]
-pub struct MacroPlayback<'a> {
-    input_macro: &'a InputMacro,
+pub struct MacroPlayback {
+    input_macro: InputMacro,
     position: usize,
     elapsed: Duration,
     next_due: Duration,
@@ -378,9 +378,9 @@ pub struct MacroPlayback<'a> {
     looping: bool,
 }
 
-impl<'a> MacroPlayback<'a> {
+impl MacroPlayback {
     /// Create a new playback scheduler for the given macro.
-    pub fn new(input_macro: &'a InputMacro) -> Self {
+    pub fn new(input_macro: InputMacro) -> Self {
         let next_due = input_macro
             .events()
             .first()
@@ -1172,7 +1172,7 @@ mod tests {
             },
         );
 
-        let mut playback = MacroPlayback::new(&m);
+        let mut playback = MacroPlayback::new(m.clone());
         assert!(playback.advance(Duration::from_millis(5)).is_empty());
         let first = playback.advance(Duration::from_millis(5));
         assert_eq!(first.len(), 1);
@@ -1193,7 +1193,7 @@ mod tests {
             },
         );
 
-        let mut playback = MacroPlayback::new(&m).with_speed(2.0);
+        let mut playback = MacroPlayback::new(m.clone()).with_speed(2.0);
         let events = playback.advance(Duration::from_millis(5));
         assert_eq!(events.len(), 1);
     }
@@ -1213,7 +1213,7 @@ mod tests {
             },
         );
 
-        let mut playback = MacroPlayback::new(&m).with_looping(true);
+        let mut playback = MacroPlayback::new(m.clone()).with_looping(true);
         let events = playback.advance(Duration::from_millis(50));
         assert_eq!(events.len(), 5);
     }
@@ -1221,7 +1221,7 @@ mod tests {
     #[test]
     fn playback_zero_duration_does_not_loop_forever() {
         let m = InputMacro::from_events("zero", vec![key_event('+'), key_event('+')]);
-        let mut playback = MacroPlayback::new(&m).with_looping(true);
+        let mut playback = MacroPlayback::new(m.clone()).with_looping(true);
 
         let events = playback.advance(Duration::ZERO);
         assert_eq!(events.len(), 2);

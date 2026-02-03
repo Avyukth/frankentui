@@ -75,6 +75,12 @@ const SYNC_END: &[u8] = b"\x1b[?2026l";
 /// Erase entire line (CSI 2 K).
 const ERASE_LINE: &[u8] = b"\x1b[2K";
 
+fn sanitize_auto_bounds(min_height: u16, max_height: u16) -> (u16, u16) {
+    let min = min_height.max(1);
+    let max = max_height.max(min);
+    (min, max)
+}
+
 /// Screen mode determines whether we use alternate screen or inline mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ScreenMode {
@@ -82,6 +88,15 @@ pub enum ScreenMode {
     Inline {
         /// Height of the UI region in rows.
         ui_height: u16,
+    },
+    /// Inline mode with automatic UI height based on rendered content.
+    ///
+    /// The measured height is clamped between `min_height` and `max_height`.
+    InlineAuto {
+        /// Minimum UI height in rows.
+        min_height: u16,
+        /// Maximum UI height in rows.
+        max_height: u16,
     },
     /// Alternate screen mode for full-screen applications.
     #[default]
@@ -107,6 +122,8 @@ pub struct TerminalWriter<W: Write> {
     writer: Option<BufWriter<W>>,
     /// Current screen mode.
     screen_mode: ScreenMode,
+    /// Last computed auto UI height (inline auto mode only).
+    auto_ui_height: Option<u16>,
     /// Where UI is anchored in inline mode.
     ui_anchor: UiAnchor,
     /// Previous buffer for diffing.
@@ -147,9 +164,11 @@ impl<W: Write> TerminalWriter<W> {
         capabilities: TerminalCapabilities,
     ) -> Self {
         let inline_strategy = InlineStrategy::select(&capabilities);
+        let auto_ui_height = None;
         Self {
             writer: Some(BufWriter::with_capacity(BUFFER_CAPACITY, writer)),
             screen_mode,
+            auto_ui_height,
             ui_anchor,
             prev_buffer: None,
             pool: GraphemePool::new(),
@@ -180,6 +199,9 @@ impl<W: Write> TerminalWriter<W> {
     pub fn set_size(&mut self, width: u16, height: u16) {
         self.term_width = width;
         self.term_height = height;
+        if matches!(self.screen_mode, ScreenMode::InlineAuto { .. }) {
+            self.auto_ui_height = None;
+        }
         // Clear prev_buffer to force full redraw after resize
         self.prev_buffer = None;
         // Reset scroll region on resize; it will be re-established on next present
@@ -198,25 +220,124 @@ impl<W: Write> TerminalWriter<W> {
         self.term_height
     }
 
-    /// Get the UI height for the current mode.
-    pub fn ui_height(&self) -> u16 {
+    /// Get the current screen mode.
+    pub fn screen_mode(&self) -> ScreenMode {
+        self.screen_mode
+    }
+
+    /// Height to use for rendering a frame.
+    ///
+    /// In inline auto mode, this returns the configured maximum (clamped to
+    /// terminal height) so measurement can determine actual UI height.
+    pub fn render_height_hint(&self) -> u16 {
         match self.screen_mode {
             ScreenMode::Inline { ui_height } => ui_height,
+            ScreenMode::InlineAuto {
+                min_height,
+                max_height,
+            } => {
+                let (min, max) = sanitize_auto_bounds(min_height, max_height);
+                let max = max.min(self.term_height);
+                let min = min.min(max);
+                if let Some(current) = self.auto_ui_height {
+                    current.clamp(min, max).min(self.term_height).max(min)
+                } else {
+                    max.max(min)
+                }
+            }
             ScreenMode::AltScreen => self.term_height,
         }
     }
 
+    /// Get sanitized min/max bounds for inline auto mode (clamped to terminal height).
+    pub fn inline_auto_bounds(&self) -> Option<(u16, u16)> {
+        match self.screen_mode {
+            ScreenMode::InlineAuto {
+                min_height,
+                max_height,
+            } => {
+                let (min, max) = sanitize_auto_bounds(min_height, max_height);
+                Some((min.min(self.term_height), max.min(self.term_height)))
+            }
+            _ => None,
+        }
+    }
+
+    /// Get the cached auto UI height (inline auto mode only).
+    pub fn auto_ui_height(&self) -> Option<u16> {
+        match self.screen_mode {
+            ScreenMode::InlineAuto { .. } => self.auto_ui_height,
+            _ => None,
+        }
+    }
+
+    /// Update the computed height for inline auto mode.
+    pub fn set_auto_ui_height(&mut self, height: u16) {
+        if let ScreenMode::InlineAuto {
+            min_height,
+            max_height,
+        } = self.screen_mode
+        {
+            let (min, max) = sanitize_auto_bounds(min_height, max_height);
+            let max = max.min(self.term_height);
+            let min = min.min(max);
+            let clamped = height.clamp(min, max);
+            let previous_effective = self.auto_ui_height.unwrap_or(min);
+            if self.auto_ui_height != Some(clamped) {
+                self.auto_ui_height = Some(clamped);
+                if clamped != previous_effective {
+                    self.prev_buffer = None;
+                    if self.scroll_region_active {
+                        let _ = self.deactivate_scroll_region();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Clear the cached auto UI height (inline auto mode only).
+    pub fn clear_auto_ui_height(&mut self) {
+        if matches!(self.screen_mode, ScreenMode::InlineAuto { .. })
+            && self.auto_ui_height.is_some()
+        {
+            self.auto_ui_height = None;
+            self.prev_buffer = None;
+            if self.scroll_region_active {
+                let _ = self.deactivate_scroll_region();
+            }
+        }
+    }
+
+    fn effective_ui_height(&self) -> u16 {
+        match self.screen_mode {
+            ScreenMode::Inline { ui_height } => ui_height,
+            ScreenMode::InlineAuto {
+                min_height,
+                max_height,
+            } => {
+                let (min, max) = sanitize_auto_bounds(min_height, max_height);
+                let current = self.auto_ui_height.unwrap_or(min);
+                current.clamp(min, max).min(self.term_height)
+            }
+            ScreenMode::AltScreen => self.term_height,
+        }
+    }
+
+    /// Get the UI height for the current mode.
+    pub fn ui_height(&self) -> u16 {
+        self.effective_ui_height()
+    }
+
     /// Calculate the row where the UI starts (0-indexed).
     fn ui_start_row(&self) -> u16 {
-        let ui_height = match self.screen_mode {
-            ScreenMode::Inline { ui_height } => ui_height.min(self.term_height),
-            ScreenMode::AltScreen => self.term_height,
-        };
+        let ui_height = self.effective_ui_height().min(self.term_height);
         match (self.screen_mode, self.ui_anchor) {
-            (ScreenMode::Inline { .. }, UiAnchor::Bottom) => {
+            (ScreenMode::Inline { .. }, UiAnchor::Bottom)
+            | (ScreenMode::InlineAuto { .. }, UiAnchor::Bottom) => {
                 self.term_height.saturating_sub(ui_height)
             }
-            (ScreenMode::Inline { .. }, UiAnchor::Top) => 0,
+            (ScreenMode::Inline { .. }, UiAnchor::Top)
+            | (ScreenMode::InlineAuto { .. }, UiAnchor::Top) => 0,
             (ScreenMode::AltScreen, _) => 0,
         }
     }
@@ -297,6 +418,7 @@ impl<W: Write> TerminalWriter<W> {
     pub fn present_ui(&mut self, buffer: &Buffer) -> io::Result<()> {
         let mode_str = match self.screen_mode {
             ScreenMode::Inline { .. } => "inline",
+            ScreenMode::InlineAuto { .. } => "inline_auto",
             ScreenMode::AltScreen => "altscreen",
         };
         let _span = info_span!(
@@ -309,6 +431,10 @@ impl<W: Write> TerminalWriter<W> {
 
         match self.screen_mode {
             ScreenMode::Inline { ui_height } => self.present_inline(buffer, ui_height),
+            ScreenMode::InlineAuto { .. } => {
+                let ui_height = self.effective_ui_height();
+                self.present_inline(buffer, ui_height)
+            }
             ScreenMode::AltScreen => self.present_altscreen(buffer),
         }
     }
@@ -636,6 +762,13 @@ impl<W: Write> TerminalWriter<W> {
             ScreenMode::Inline { ui_height } => {
                 // Position cursor in the log region before writing.
                 // This ensures log output never corrupts the UI region.
+                self.position_cursor_for_log(ui_height)?;
+                self.writer().write_all(text.as_bytes())?;
+                self.writer().flush()
+            }
+            ScreenMode::InlineAuto { .. } => {
+                // InlineAuto: use effective_ui_height for positioning.
+                let ui_height = self.effective_ui_height();
                 self.position_cursor_for_log(ui_height)?;
                 self.writer().write_all(text.as_bytes())?;
                 self.writer().flush()
@@ -1120,6 +1253,52 @@ mod tests {
         // After resize to smaller 80x15, UI at row 5 (15 - 10)
         writer.set_size(80, 15);
         assert_eq!(writer.ui_start_row(), 5);
+    }
+
+    #[test]
+    fn inline_auto_height_clamps_and_uses_max_for_render() {
+        let output = Vec::new();
+        let mut writer = TerminalWriter::new(
+            output,
+            ScreenMode::InlineAuto {
+                min_height: 3,
+                max_height: 8,
+            },
+            UiAnchor::Bottom,
+            basic_caps(),
+        );
+        writer.set_size(80, 24);
+
+        // Default to min height until measured.
+        assert_eq!(writer.ui_height(), 3);
+        assert_eq!(writer.auto_ui_height(), None);
+
+        // render_height_hint uses max to allow measurement when cache is empty.
+        assert_eq!(writer.render_height_hint(), 8);
+
+        // Cache hit: render_height_hint uses cached height.
+        writer.set_auto_ui_height(6);
+        assert_eq!(writer.render_height_hint(), 6);
+
+        // Cache miss: clearing restores max hint.
+        writer.clear_auto_ui_height();
+        assert_eq!(writer.render_height_hint(), 8);
+
+        // Cache should still set when clamped to min.
+        writer.set_auto_ui_height(3);
+        assert_eq!(writer.auto_ui_height(), Some(3));
+        assert_eq!(writer.ui_height(), 3);
+
+        writer.clear_auto_ui_height();
+        assert_eq!(writer.render_height_hint(), 8);
+
+        // Clamp to max.
+        writer.set_auto_ui_height(10);
+        assert_eq!(writer.ui_height(), 8);
+
+        // Clamp to min.
+        writer.set_auto_ui_height(1);
+        assert_eq!(writer.ui_height(), 3);
     }
 
     #[test]

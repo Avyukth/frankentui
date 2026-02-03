@@ -58,6 +58,7 @@ use ftui_core::event::Event;
 use ftui_core::terminal_capabilities::TerminalCapabilities;
 use ftui_core::terminal_session::{SessionOptions, TerminalSession};
 use ftui_render::budget::{FrameBudgetConfig, RenderBudget};
+use ftui_render::buffer::Buffer;
 use ftui_render::cell::Cell;
 use ftui_render::frame::Frame;
 use ftui_render::sanitize::sanitize;
@@ -223,6 +224,30 @@ impl<M> Cmd<M> {
     }
 }
 
+/// Resize handling behavior for the runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResizeBehavior {
+    /// Apply resize immediately (no debounce, no placeholder).
+    Immediate,
+    /// Debounce resize events but keep rendering the previous frame.
+    Throttled,
+    /// Debounce resize events and show a resize placeholder.
+    Placeholder,
+}
+
+impl ResizeBehavior {
+    const fn uses_debounce(self) -> bool {
+        matches!(
+            self,
+            ResizeBehavior::Throttled | ResizeBehavior::Placeholder
+        )
+    }
+
+    const fn shows_placeholder(self) -> bool {
+        matches!(self, ResizeBehavior::Placeholder)
+    }
+}
+
 /// Configuration for the program runtime.
 #[derive(Debug, Clone)]
 pub struct ProgramConfig {
@@ -236,6 +261,8 @@ pub struct ProgramConfig {
     pub poll_timeout: Duration,
     /// Debounce duration for resize events.
     pub resize_debounce: Duration,
+    /// Resize handling behavior (immediate/throttled/placeholder).
+    pub resize_behavior: ResizeBehavior,
     /// Enable mouse support.
     pub mouse: bool,
     /// Enable bracketed paste.
@@ -254,6 +281,7 @@ impl Default for ProgramConfig {
             budget: FrameBudgetConfig::default(),
             poll_timeout: Duration::from_millis(100),
             resize_debounce: Duration::from_millis(100),
+            resize_behavior: ResizeBehavior::Placeholder,
             mouse: false,
             bracketed_paste: true,
             focus_reporting: false,
@@ -279,6 +307,17 @@ impl ProgramConfig {
         }
     }
 
+    /// Create config for inline mode with automatic UI height.
+    pub fn inline_auto(min_height: u16, max_height: u16) -> Self {
+        Self {
+            screen_mode: ScreenMode::InlineAuto {
+                min_height,
+                max_height,
+            },
+            ..Default::default()
+        }
+    }
+
     /// Enable mouse support.
     pub fn with_mouse(mut self) -> Self {
         self.mouse = true;
@@ -294,6 +333,20 @@ impl ProgramConfig {
     /// Set the resize debounce duration.
     pub fn with_resize_debounce(mut self, debounce: Duration) -> Self {
         self.resize_debounce = debounce;
+        self
+    }
+
+    /// Set the resize handling behavior.
+    pub fn with_resize_behavior(mut self, behavior: ResizeBehavior) -> Self {
+        self.resize_behavior = behavior;
+        self
+    }
+
+    /// Toggle legacy immediate-resize behavior for migration.
+    pub fn with_legacy_resize(mut self, enabled: bool) -> Self {
+        if enabled {
+            self.resize_behavior = ResizeBehavior::Immediate;
+        }
         self
     }
 }
@@ -329,6 +382,12 @@ impl ResizeDebouncer {
 
     fn handle_resize(&mut self, width: u16, height: u16) -> ResizeAction {
         self.handle_resize_at(width, height, Instant::now())
+    }
+
+    fn apply_immediate(&mut self, width: u16, height: u16) {
+        self.pending_size = None;
+        self.last_resize = None;
+        self.last_applied = (width, height);
     }
 
     fn handle_resize_at(&mut self, width: u16, height: u16, now: Instant) -> ResizeAction {
@@ -401,6 +460,8 @@ pub struct Program<M: Model, W: Write + Send = Stdout> {
     budget: RenderBudget,
     /// Resize debouncer for rapid resize events.
     resize_debouncer: ResizeDebouncer,
+    /// Resize handling behavior.
+    resize_behavior: ResizeBehavior,
     /// Whether the resize placeholder should be shown.
     resizing: bool,
     /// Optional event recorder for macro capture.
@@ -461,6 +522,7 @@ impl<M: Model> Program<M, Stdout> {
             poll_timeout: config.poll_timeout,
             budget,
             resize_debouncer,
+            resize_behavior: config.resize_behavior,
             resizing: false,
             event_recorder: None,
             subscriptions,
@@ -527,7 +589,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
             if self.should_tick() {
                 let msg = M::Message::from(Event::Tick);
                 let cmd = self.model.update(msg);
-                self.dirty = true;
+                self.mark_dirty();
                 self.execute_cmd(cmd)?;
                 self.reconcile_subscriptions();
             }
@@ -553,30 +615,50 @@ impl<M: Model, W: Write + Send> Program<M, W> {
 
         let event = match event {
             Event::Resize { width, height } => {
-                debug!(width, height, "Resize event received, debouncing");
-                let action = self.resize_debouncer.handle_resize(width, height);
-                if matches!(action, ResizeAction::ShowPlaceholder) {
-                    let was_resizing = self.resizing;
-                    self.resizing = true;
-                    if !was_resizing {
-                        debug!("Showing resize placeholder");
+                debug!(
+                    width,
+                    height,
+                    behavior = ?self.resize_behavior,
+                    "Resize event received"
+                );
+                match self.resize_behavior {
+                    ResizeBehavior::Immediate => {
+                        // Clamp to minimum 1 to prevent Buffer::new panic on zero dimensions
+                        let width = width.max(1);
+                        let height = height.max(1);
+                        self.resize_debouncer.apply_immediate(width, height);
+                        return self.apply_resize(width, height, Duration::ZERO);
                     }
-                    // Clamp to minimum 1 to prevent Buffer::new panic on zero dimensions
-                    let width = width.max(1);
-                    let height = height.max(1);
-                    self.width = width;
-                    self.height = height;
-                    self.writer.set_size(width, height);
-                    self.dirty = true;
+                    ResizeBehavior::Throttled | ResizeBehavior::Placeholder => {
+                        let action = self.resize_debouncer.handle_resize(width, height);
+                        if self.resize_behavior.shows_placeholder()
+                            && matches!(action, ResizeAction::ShowPlaceholder)
+                        {
+                            let was_resizing = self.resizing;
+                            self.resizing = true;
+                            if !was_resizing {
+                                debug!("Showing resize placeholder");
+                            }
+                            // Clamp to minimum 1 to prevent Buffer::new panic on zero dimensions
+                            let width = width.max(1);
+                            let height = height.max(1);
+                            self.width = width;
+                            self.height = height;
+                            self.writer.set_size(width, height);
+                            self.mark_dirty();
+                        } else if !self.resize_behavior.shows_placeholder() {
+                            self.resizing = false;
+                        }
+                        return Ok(());
+                    }
                 }
-                return Ok(());
             }
             other => other,
         };
 
         let msg = M::Message::from(event);
         let cmd = self.model.update(msg);
-        self.dirty = true;
+        self.mark_dirty();
         self.execute_cmd(cmd)?;
         self.reconcile_subscriptions();
         Ok(())
@@ -593,7 +675,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
         let messages = self.subscriptions.drain_messages();
         for msg in messages {
             let cmd = self.model.update(msg);
-            self.dirty = true;
+            self.mark_dirty();
             self.execute_cmd(cmd)?;
         }
         if self.dirty {
@@ -606,7 +688,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
     fn process_task_results(&mut self) -> io::Result<()> {
         while let Ok(msg) = self.task_receiver.try_recv() {
             let cmd = self.model.update(msg);
-            self.dirty = true;
+            self.mark_dirty();
             self.execute_cmd(cmd)?;
         }
         if self.dirty {
@@ -622,7 +704,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
             Cmd::Quit => self.running = false,
             Cmd::Msg(m) => {
                 let cmd = self.model.update(m);
-                self.dirty = true;
+                self.mark_dirty();
                 self.execute_cmd(cmd)?;
             }
             Cmd::Batch(cmds) => {
@@ -684,12 +766,6 @@ impl<M: Model, W: Write + Send> Program<M, W> {
 
     /// Render a frame with budget tracking.
     fn render_frame(&mut self) -> io::Result<()> {
-        // Use ui_height() to get the effective visible height in inline mode.
-        // In alt-screen mode this returns the full terminal height.
-        let frame_height = self.writer.ui_height();
-        let _frame_span =
-            info_span!("render_frame", width = self.width, height = frame_height).entered();
-
         // Reset budget for new frame, potentially upgrading quality
         self.budget.next_frame();
 
@@ -709,21 +785,23 @@ impl<M: Model, W: Write + Send> Program<M, W> {
             return Ok(());
         }
 
+        let auto_bounds = self.writer.inline_auto_bounds();
+        let needs_measure = auto_bounds.is_some() && self.writer.auto_ui_height().is_none();
+
         // --- Render phase ---
         let render_start = Instant::now();
-        let buffer = {
-            // Note: Frame borrows the pool and links from writer.
-            // We scope it so it drops before we call present_ui (which needs exclusive writer access).
-            let (pool, links) = self.writer.pool_and_links_mut();
-            let mut frame = Frame::new(self.width, frame_height, pool);
-            frame.set_degradation(self.budget.degradation());
-            frame.set_links(links);
+        if let (Some((min_height, max_height)), true) = (auto_bounds, needs_measure) {
+            let hint_height = self.writer.render_height_hint().max(1);
+            let measure_buffer = self.render_measure_buffer(hint_height);
+            let measured_height = measure_buffer.content_height();
+            let clamped = measured_height.clamp(min_height, max_height);
+            self.writer.set_auto_ui_height(clamped);
+        }
 
-            let _view_span = debug_span!("model_view").entered();
-            self.model.view(&mut frame);
-
-            frame.buffer
-        };
+        let frame_height = self.writer.render_height_hint().max(1);
+        let _frame_span =
+            info_span!("render_frame", width = self.width, height = frame_height).entered();
+        let buffer = self.render_buffer(frame_height);
         let render_elapsed = render_start.elapsed();
 
         // Check if render phase overspent its budget
@@ -770,18 +848,47 @@ impl<M: Model, W: Write + Send> Program<M, W> {
         Ok(())
     }
 
+    fn render_buffer(&mut self, frame_height: u16) -> Buffer {
+        // Note: Frame borrows the pool and links from writer.
+        // We scope it so it drops before we call present_ui (which needs exclusive writer access).
+        let (pool, links) = self.writer.pool_and_links_mut();
+        let mut frame = Frame::new(self.width, frame_height, pool);
+        frame.set_degradation(self.budget.degradation());
+        frame.set_links(links);
+
+        let _view_span = debug_span!("model_view").entered();
+        self.model.view(&mut frame);
+
+        frame.buffer
+    }
+
+    fn render_measure_buffer(&mut self, frame_height: u16) -> Buffer {
+        let pool = self.writer.pool_mut();
+        let mut frame = Frame::new(self.width, frame_height, pool);
+        frame.set_degradation(self.budget.degradation());
+
+        let _view_span = debug_span!("model_view").entered();
+        self.model.view(&mut frame);
+
+        frame.buffer
+    }
+
     /// Calculate the effective poll timeout.
     fn effective_timeout(&self) -> Duration {
         if let Some(tick_rate) = self.tick_rate {
             let elapsed = self.last_tick.elapsed();
             let mut timeout = tick_rate.saturating_sub(elapsed);
-            if let Some(resize_timeout) = self.resize_debouncer.time_until_apply(Instant::now()) {
+            if self.resize_behavior.uses_debounce()
+                && let Some(resize_timeout) = self.resize_debouncer.time_until_apply(Instant::now())
+            {
                 timeout = timeout.min(resize_timeout);
             }
             timeout
         } else {
             let mut timeout = self.poll_timeout;
-            if let Some(resize_timeout) = self.resize_debouncer.time_until_apply(Instant::now()) {
+            if self.resize_behavior.uses_debounce()
+                && let Some(resize_timeout) = self.resize_debouncer.time_until_apply(Instant::now())
+            {
                 timeout = timeout.min(resize_timeout);
             }
             timeout
@@ -800,6 +907,9 @@ impl<M: Model, W: Write + Send> Program<M, W> {
     }
 
     fn process_resize_debounce(&mut self) -> io::Result<()> {
+        if !self.resize_behavior.uses_debounce() {
+            return Ok(());
+        }
         match self.resize_debouncer.tick() {
             ResizeAction::ApplyResize {
                 width,
@@ -827,7 +937,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
 
         let msg = M::Message::from(Event::Resize { width, height });
         let cmd = self.model.update(msg);
-        self.dirty = true;
+        self.mark_dirty();
         self.execute_cmd(cmd)
     }
 
@@ -875,9 +985,21 @@ impl<M: Model, W: Write + Send> Program<M, W> {
         self.running = false;
     }
 
+    fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
     /// Mark the UI as needing redraw.
     pub fn request_redraw(&mut self) {
-        self.dirty = true;
+        self.mark_dirty();
+    }
+
+    /// Request a re-measure of inline auto UI height on next render.
+    pub fn request_ui_height_remeasure(&mut self) {
+        if self.writer.inline_auto_bounds().is_some() {
+            self.writer.clear_auto_ui_height();
+            self.mark_dirty();
+        }
     }
 
     /// Start recording events into a macro.
@@ -934,6 +1056,14 @@ impl App {
         }
     }
 
+    /// Create an inline app with automatic UI height.
+    pub fn inline_auto<M: Model>(model: M, min_height: u16, max_height: u16) -> AppBuilder<M> {
+        AppBuilder {
+            model,
+            config: ProgramConfig::inline_auto(min_height, max_height),
+        }
+    }
+
     /// Create a fullscreen app from a [`StringModel`](crate::string_model::StringModel).
     ///
     /// This wraps the string model in a [`StringModelAdapter`](crate::string_model::StringModelAdapter)
@@ -985,10 +1115,210 @@ impl<M: Model> AppBuilder<M> {
         self
     }
 
+    /// Set the resize handling behavior.
+    pub fn resize_behavior(mut self, behavior: ResizeBehavior) -> Self {
+        self.config.resize_behavior = behavior;
+        self
+    }
+
+    /// Toggle legacy immediate-resize behavior for migration.
+    pub fn legacy_resize(mut self, enabled: bool) -> Self {
+        if enabled {
+            self.config.resize_behavior = ResizeBehavior::Immediate;
+        }
+        self
+    }
+
     /// Run the application.
     pub fn run(self) -> io::Result<()> {
         let mut program = Program::with_config(self.model, self.config)?;
         program.run()
+    }
+}
+
+// =============================================================================
+// Adaptive Batch Window: Queueing Model (bd-4kq0.8.1)
+// =============================================================================
+//
+// # M/G/1 Queueing Model for Event Batching
+//
+// ## Problem
+//
+// The event loop must balance two objectives:
+// 1. **Low latency**: Process events quickly (small batch window τ).
+// 2. **Efficiency**: Batch multiple events to amortize render cost (large τ).
+//
+// ## Model
+//
+// We model the event loop as an M/G/1 queue:
+// - Events arrive at rate λ (Poisson process, reasonable for human input).
+// - Service time S has mean E[S] and variance Var[S] (render + present).
+// - Utilization ρ = λ·E[S] must be < 1 for stability.
+//
+// ## Pollaczek–Khinchine Mean Waiting Time
+//
+// For M/G/1: E[W] = (λ·E[S²]) / (2·(1 − ρ))
+// where E[S²] = Var[S] + E[S]².
+//
+// ## Optimal Batch Window τ
+//
+// With batching window τ, we collect ~(λ·τ) events per batch, amortizing
+// the per-frame render cost. The effective per-event latency is:
+//
+//   L(τ) = τ/2 + E[S]
+//         (waiting in batch)  (service)
+//
+// The batch reduces arrival rate to λ_eff = 1/τ (one batch per window),
+// giving utilization ρ_eff = E[S]/τ.
+//
+// Minimizing L(τ) subject to ρ_eff < 1:
+//   L(τ) = τ/2 + E[S]
+//   dL/dτ = 1/2  (always positive, so smaller τ is always better for latency)
+//
+// But we need ρ_eff < 1, so τ > E[S].
+//
+// The practical rule: τ = max(E[S] · headroom_factor, τ_min)
+// where headroom_factor provides margin (typically 1.5–2.0).
+//
+// For high arrival rates: τ = max(E[S] · headroom, 1/λ_target)
+// where λ_target is the max frame rate we want to sustain.
+//
+// ## Failure Modes
+//
+// 1. **Overload (ρ ≥ 1)**: Queue grows unbounded. Mitigation: increase τ
+//    (degrade to lower frame rate), or drop stale events.
+// 2. **Bursty arrivals**: Real input is bursty (typing, mouse drag). The
+//    exponential moving average of λ smooths this; high burst periods
+//    temporarily increase τ.
+// 3. **Variable service time**: Render complexity varies per frame. Using
+//    EMA of E[S] tracks this adaptively.
+//
+// ## Observable Telemetry
+//
+// - λ_est: Exponential moving average of inter-arrival times.
+// - es_est: Exponential moving average of service (render) times.
+// - ρ_est: λ_est × es_est (estimated utilization).
+
+/// Adaptive batch window controller based on M/G/1 queueing model.
+///
+/// Estimates arrival rate λ and service time E[S] from observations,
+/// then computes the optimal batch window τ to maintain stability
+/// (ρ < 1) while minimizing latency.
+#[derive(Debug, Clone)]
+pub struct BatchController {
+    /// Exponential moving average of inter-arrival time (seconds).
+    ema_inter_arrival_s: f64,
+    /// Exponential moving average of service time (seconds).
+    ema_service_s: f64,
+    /// EMA smoothing factor (0..1). Higher = more responsive.
+    alpha: f64,
+    /// Minimum batch window (floor).
+    tau_min_s: f64,
+    /// Maximum batch window (cap for responsiveness).
+    tau_max_s: f64,
+    /// Headroom factor: τ >= E[S] × headroom to keep ρ < 1.
+    headroom: f64,
+    /// Last event arrival timestamp.
+    last_arrival: Option<std::time::Instant>,
+    /// Number of observations.
+    observations: u64,
+}
+
+impl BatchController {
+    /// Create a new controller with sensible defaults.
+    ///
+    /// - `alpha`: EMA smoothing (default 0.2)
+    /// - `tau_min`: minimum batch window (default 1ms)
+    /// - `tau_max`: maximum batch window (default 50ms)
+    /// - `headroom`: stability margin (default 2.0, keeps ρ ≤ 0.5)
+    pub fn new() -> Self {
+        Self {
+            ema_inter_arrival_s: 0.1, // assume 10 events/sec initially
+            ema_service_s: 0.002,     // assume 2ms render initially
+            alpha: 0.2,
+            tau_min_s: 0.001, // 1ms floor
+            tau_max_s: 0.050, // 50ms cap
+            headroom: 2.0,
+            last_arrival: None,
+            observations: 0,
+        }
+    }
+
+    /// Record an event arrival, updating the inter-arrival estimate.
+    pub fn observe_arrival(&mut self, now: std::time::Instant) {
+        if let Some(last) = self.last_arrival {
+            let dt = now.duration_since(last).as_secs_f64();
+            if dt > 0.0 && dt < 10.0 {
+                // Guard against stale gaps (e.g., app was suspended)
+                self.ema_inter_arrival_s =
+                    self.alpha * dt + (1.0 - self.alpha) * self.ema_inter_arrival_s;
+                self.observations += 1;
+            }
+        }
+        self.last_arrival = Some(now);
+    }
+
+    /// Record a service (render) time observation.
+    pub fn observe_service(&mut self, duration: std::time::Duration) {
+        let dt = duration.as_secs_f64();
+        if (0.0..10.0).contains(&dt) {
+            self.ema_service_s = self.alpha * dt + (1.0 - self.alpha) * self.ema_service_s;
+        }
+    }
+
+    /// Estimated arrival rate λ (events/second).
+    #[inline]
+    pub fn lambda_est(&self) -> f64 {
+        if self.ema_inter_arrival_s > 0.0 {
+            1.0 / self.ema_inter_arrival_s
+        } else {
+            0.0
+        }
+    }
+
+    /// Estimated service time E[S] (seconds).
+    #[inline]
+    pub fn service_est_s(&self) -> f64 {
+        self.ema_service_s
+    }
+
+    /// Estimated utilization ρ = λ × E[S].
+    #[inline]
+    pub fn rho_est(&self) -> f64 {
+        self.lambda_est() * self.ema_service_s
+    }
+
+    /// Compute the optimal batch window τ (seconds).
+    ///
+    /// τ = clamp(E[S] × headroom, τ_min, τ_max)
+    ///
+    /// When ρ approaches 1, τ increases to maintain stability.
+    pub fn tau_s(&self) -> f64 {
+        let base = self.ema_service_s * self.headroom;
+        base.clamp(self.tau_min_s, self.tau_max_s)
+    }
+
+    /// Compute the optimal batch window as a Duration.
+    pub fn tau(&self) -> std::time::Duration {
+        std::time::Duration::from_secs_f64(self.tau_s())
+    }
+
+    /// Check if the system is stable (ρ < 1).
+    #[inline]
+    pub fn is_stable(&self) -> bool {
+        self.rho_est() < 1.0
+    }
+
+    /// Number of observations recorded.
+    #[inline]
+    pub fn observations(&self) -> u64 {
+        self.observations
+    }
+}
+
+impl Default for BatchController {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1111,6 +1441,7 @@ mod tests {
         assert!(!config.mouse);
         assert!(config.bracketed_paste);
         assert_eq!(config.resize_debounce, Duration::from_millis(100));
+        assert_eq!(config.resize_behavior, ResizeBehavior::Placeholder);
     }
 
     #[test]
@@ -1125,6 +1456,18 @@ mod tests {
         assert!(matches!(
             config.screen_mode,
             ScreenMode::Inline { ui_height: 10 }
+        ));
+    }
+
+    #[test]
+    fn program_config_inline_auto() {
+        let config = ProgramConfig::inline_auto(3, 9);
+        assert!(matches!(
+            config.screen_mode,
+            ScreenMode::InlineAuto {
+                min_height: 3,
+                max_height: 9
+            }
         ));
     }
 
@@ -1606,6 +1949,12 @@ mod tests {
     fn program_config_with_resize_debounce() {
         let config = ProgramConfig::default().with_resize_debounce(Duration::from_millis(200));
         assert_eq!(config.resize_debounce, Duration::from_millis(200));
+    }
+
+    #[test]
+    fn program_config_with_resize_behavior() {
+        let config = ProgramConfig::default().with_resize_behavior(ResizeBehavior::Immediate);
+        assert_eq!(config.resize_behavior, ResizeBehavior::Immediate);
     }
 
     #[test]
@@ -2283,5 +2632,177 @@ mod tests {
 
         assert_eq!(sim.model().ticks, 3);
         assert_eq!(sim.model().keys, 2);
+    }
+
+    // =========================================================================
+    // BatchController Tests (bd-4kq0.8.1)
+    // =========================================================================
+
+    #[test]
+    fn unit_tau_monotone() {
+        // τ should decrease (or stay constant) as service time decreases,
+        // since τ = E[S] × headroom.
+        let mut bc = BatchController::new();
+
+        // High service time → high τ
+        bc.observe_service(Duration::from_millis(20));
+        bc.observe_service(Duration::from_millis(20));
+        bc.observe_service(Duration::from_millis(20));
+        let tau_high = bc.tau_s();
+
+        // Low service time → lower τ
+        for _ in 0..20 {
+            bc.observe_service(Duration::from_millis(1));
+        }
+        let tau_low = bc.tau_s();
+
+        assert!(
+            tau_low <= tau_high,
+            "τ should decrease with lower service time: tau_low={tau_low:.6}, tau_high={tau_high:.6}"
+        );
+    }
+
+    #[test]
+    fn unit_tau_monotone_lambda() {
+        // As arrival rate λ decreases (longer inter-arrival times),
+        // τ should not increase (it's based on service time, not λ).
+        // But ρ should decrease.
+        let mut bc = BatchController::new();
+        let base = Instant::now();
+
+        // Fast arrivals (λ high)
+        for i in 0..10 {
+            bc.observe_arrival(base + Duration::from_millis(i * 10));
+        }
+        let rho_fast = bc.rho_est();
+
+        // Slow arrivals (λ low)
+        for i in 10..20 {
+            bc.observe_arrival(base + Duration::from_millis(100 + i * 100));
+        }
+        let rho_slow = bc.rho_est();
+
+        assert!(
+            rho_slow < rho_fast,
+            "ρ should decrease with slower arrivals: rho_slow={rho_slow:.4}, rho_fast={rho_fast:.4}"
+        );
+    }
+
+    #[test]
+    fn unit_stability() {
+        // With reasonable service times, the controller should keep ρ < 1.
+        let mut bc = BatchController::new();
+        let base = Instant::now();
+
+        // Moderate arrival rate: 30 events/sec
+        for i in 0..30 {
+            bc.observe_arrival(base + Duration::from_millis(i * 33));
+            bc.observe_service(Duration::from_millis(5)); // 5ms render
+        }
+
+        assert!(
+            bc.is_stable(),
+            "should be stable at 30 events/sec with 5ms service: ρ={:.4}",
+            bc.rho_est()
+        );
+        assert!(
+            bc.rho_est() < 1.0,
+            "utilization should be < 1: ρ={:.4}",
+            bc.rho_est()
+        );
+
+        // τ must be > E[S] (stability requirement)
+        assert!(
+            bc.tau_s() > bc.service_est_s(),
+            "τ ({:.6}) must exceed E[S] ({:.6}) for stability",
+            bc.tau_s(),
+            bc.service_est_s()
+        );
+    }
+
+    #[test]
+    fn unit_stability_high_load() {
+        // Even under high load, τ keeps the system stable.
+        let mut bc = BatchController::new();
+        let base = Instant::now();
+
+        // 100 events/sec with 8ms render
+        for i in 0..50 {
+            bc.observe_arrival(base + Duration::from_millis(i * 10));
+            bc.observe_service(Duration::from_millis(8));
+        }
+
+        // τ × ρ_eff = E[S]/τ should be < 1
+        let tau = bc.tau_s();
+        let rho_eff = bc.service_est_s() / tau;
+        assert!(
+            rho_eff < 1.0,
+            "effective utilization should be < 1: ρ_eff={rho_eff:.4}, τ={tau:.6}, E[S]={:.6}",
+            bc.service_est_s()
+        );
+    }
+
+    #[test]
+    fn batch_controller_defaults() {
+        let bc = BatchController::new();
+        assert!(bc.tau_s() >= bc.tau_min_s);
+        assert!(bc.tau_s() <= bc.tau_max_s);
+        assert_eq!(bc.observations(), 0);
+        assert!(bc.is_stable());
+    }
+
+    #[test]
+    fn batch_controller_tau_clamped() {
+        let mut bc = BatchController::new();
+
+        // Very fast service → τ clamped to tau_min
+        for _ in 0..20 {
+            bc.observe_service(Duration::from_micros(10));
+        }
+        assert!(
+            bc.tau_s() >= bc.tau_min_s,
+            "τ should be >= tau_min: τ={:.6}, min={:.6}",
+            bc.tau_s(),
+            bc.tau_min_s
+        );
+
+        // Very slow service → τ clamped to tau_max
+        for _ in 0..20 {
+            bc.observe_service(Duration::from_millis(100));
+        }
+        assert!(
+            bc.tau_s() <= bc.tau_max_s,
+            "τ should be <= tau_max: τ={:.6}, max={:.6}",
+            bc.tau_s(),
+            bc.tau_max_s
+        );
+    }
+
+    #[test]
+    fn batch_controller_duration_conversion() {
+        let bc = BatchController::new();
+        let tau = bc.tau();
+        let tau_s = bc.tau_s();
+        // Duration should match f64 representation
+        let diff = (tau.as_secs_f64() - tau_s).abs();
+        assert!(diff < 1e-9, "Duration conversion mismatch: {diff}");
+    }
+
+    #[test]
+    fn batch_controller_lambda_estimation() {
+        let mut bc = BatchController::new();
+        let base = Instant::now();
+
+        // 50 events/sec (20ms apart)
+        for i in 0..20 {
+            bc.observe_arrival(base + Duration::from_millis(i * 20));
+        }
+
+        // λ should converge near 50
+        let lambda = bc.lambda_est();
+        assert!(
+            lambda > 20.0 && lambda < 100.0,
+            "λ should be near 50: got {lambda:.1}"
+        );
     }
 }

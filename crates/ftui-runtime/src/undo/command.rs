@@ -288,6 +288,15 @@ impl CommandBatch {
         self.commands.push(cmd);
     }
 
+    /// Add a pre-executed command to the batch.
+    ///
+    /// Use this for commands that have already been executed externally.
+    /// The command will be properly undone when the batch is undone.
+    pub fn push_executed(&mut self, cmd: Box<dyn UndoableCmd>) {
+        self.commands.push(cmd);
+        self.executed_to = self.commands.len();
+    }
+
     /// Number of commands in the batch.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -365,8 +374,7 @@ pub type TextApplyFn = Box<dyn Fn(WidgetId, usize, &str) -> CommandResult + Send
 /// Callback type for removing text.
 pub type TextRemoveFn = Box<dyn Fn(WidgetId, usize, usize) -> CommandResult + Send + Sync>;
 /// Callback type for replacing text.
-pub type TextReplaceFn =
-    Box<dyn Fn(WidgetId, usize, usize, &str) -> CommandResult + Send + Sync>;
+pub type TextReplaceFn = Box<dyn Fn(WidgetId, usize, usize, &str) -> CommandResult + Send + Sync>;
 
 /// Command to insert text at a position.
 pub struct TextInsertCmd {
@@ -475,7 +483,10 @@ impl UndoableCmd for TextInsertCmd {
         }
 
         // Check time constraint
-        let elapsed = other.metadata.timestamp.duration_since(self.metadata.timestamp);
+        let elapsed = other
+            .metadata
+            .timestamp
+            .duration_since(self.metadata.timestamp);
         if elapsed.as_millis() > config.max_delay_ms as u128 {
             return false;
         }
@@ -634,7 +645,10 @@ impl UndoableCmd for TextDeleteCmd {
         }
 
         // Check time constraint
-        let elapsed = other.metadata.timestamp.duration_since(self.metadata.timestamp);
+        let elapsed = other
+            .metadata
+            .timestamp
+            .duration_since(self.metadata.timestamp);
         if elapsed.as_millis() > config.max_delay_ms as u128 {
             return false;
         }

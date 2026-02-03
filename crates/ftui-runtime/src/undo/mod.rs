@@ -90,9 +90,13 @@
 //! - Commands can estimate or measure their size
 
 pub mod command;
+pub mod history;
+pub mod transaction;
 
 // Re-export commonly used types
 pub use command::{
     CommandBatch, CommandError, CommandMetadata, CommandResult, CommandSource, MergeConfig,
     TextDeleteCmd, TextInsertCmd, TextReplaceCmd, UndoableCmd, WidgetId,
 };
+pub use history::{HistoryConfig, HistoryManager};
+pub use transaction::{Transaction, TransactionScope};

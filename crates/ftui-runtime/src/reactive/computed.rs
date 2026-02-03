@@ -449,16 +449,16 @@ mod tests {
         assert_eq!(computed.version(), 0);
 
         // First get triggers compute.
-        computed.get();
+        let _ = computed.get();
         assert_eq!(computed.version(), 1);
 
         // Same source, no change — no recompute.
-        computed.get();
+        let _ = computed.get();
         assert_eq!(computed.version(), 1);
 
         // Source changes.
         source.set(1);
-        computed.get();
+        let _ = computed.get();
         assert_eq!(computed.version(), 2);
     }
 
@@ -511,13 +511,13 @@ mod tests {
             *v
         });
 
-        computed.get();
+        let _ = computed.get();
         assert_eq!(compute_count.get(), 1);
 
         // Set same value — Observable won't notify, so computed stays clean.
         source.set(42);
         assert!(!computed.is_dirty());
-        computed.get();
+        let _ = computed.get();
         assert_eq!(compute_count.get(), 1);
     }
 
@@ -525,7 +525,7 @@ mod tests {
     fn debug_format() {
         let source = Observable::new(42);
         let computed = Computed::from_observable(&source, |v| *v);
-        computed.get();
+        let _ = computed.get();
         let dbg = format!("{:?}", computed);
         assert!(dbg.contains("Computed"));
         assert!(dbg.contains("42"));
@@ -534,7 +534,6 @@ mod tests {
     #[test]
     fn from_fn_with_manual_subscriptions() {
         let source = Observable::new(10);
-        let source_clone = source.clone();
 
         // Use from_observable for proper dirty wiring.
         let computed = Computed::from_observable(&source, |v| v * 3);
@@ -590,7 +589,7 @@ mod tests {
         {
             let source = Observable::new(42);
             computed = Computed::from_observable(&source, |v| *v);
-            computed.get(); // Cache the value.
+            let _ = computed.get(); // Cache the value.
         }
         // Source dropped, but computed retains its last cached value.
         assert_eq!(computed.get(), 42);
@@ -604,7 +603,7 @@ mod tests {
 
         for i in 1..=50 {
             source.set(i);
-            computed.get();
+            let _ = computed.get();
         }
         // 50 updates, each triggering a recomputation.
         assert_eq!(computed.version(), 50);
