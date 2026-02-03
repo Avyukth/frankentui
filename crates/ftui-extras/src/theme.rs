@@ -24,10 +24,21 @@ pub enum ThemeId {
     LumenLight,
     /// Nordic-inspired low-contrast dark theme.
     NordicFrost,
+    /// High contrast accessibility theme.
+    HighContrast,
 }
 
 impl ThemeId {
-    pub const ALL: [ThemeId; 4] = [
+    pub const ALL: [ThemeId; 5] = [
+        ThemeId::CyberpunkAurora,
+        ThemeId::Darcula,
+        ThemeId::LumenLight,
+        ThemeId::NordicFrost,
+        ThemeId::HighContrast,
+    ];
+
+    /// Themes suitable for normal use (excludes accessibility-only themes).
+    pub const STANDARD: [ThemeId; 4] = [
         ThemeId::CyberpunkAurora,
         ThemeId::Darcula,
         ThemeId::LumenLight,
@@ -40,6 +51,7 @@ impl ThemeId {
             ThemeId::Darcula => 1,
             ThemeId::LumenLight => 2,
             ThemeId::NordicFrost => 3,
+            ThemeId::HighContrast => 4,
         }
     }
 
@@ -49,12 +61,26 @@ impl ThemeId {
             ThemeId::Darcula => "Darcula",
             ThemeId::LumenLight => "Lumen Light",
             ThemeId::NordicFrost => "Nordic Frost",
+            ThemeId::HighContrast => "High Contrast",
         }
     }
 
     pub const fn next(self) -> Self {
         let idx = (self.index() + 1) % Self::ALL.len();
         Self::ALL[idx]
+    }
+
+    /// Get the next theme in the standard rotation (skipping accessibility-only themes).
+    pub const fn next_non_accessibility(self) -> Self {
+        let current_standard_idx = match self {
+            ThemeId::CyberpunkAurora => 0,
+            ThemeId::Darcula => 1,
+            ThemeId::LumenLight => 2,
+            ThemeId::NordicFrost => 3,
+            ThemeId::HighContrast => 0, // HighContrast -> CyberpunkAurora
+        };
+        let next_idx = (current_standard_idx + 1) % Self::STANDARD.len();
+        Self::STANDARD[next_idx]
     }
 
     pub const fn from_index(idx: usize) -> Self {
@@ -92,7 +118,7 @@ pub struct ThemePalette {
     pub syntax_punctuation: PackedRgba,
 }
 
-const THEMES: [ThemePalette; 4] = [
+const THEMES: [ThemePalette; 5] = [
     ThemePalette {
         bg_deep: PackedRgba::rgb(10, 14, 20),
         bg_base: PackedRgba::rgb(26, 31, 41),
@@ -101,37 +127,37 @@ const THEMES: [ThemePalette; 4] = [
         bg_highlight: PackedRgba::rgb(61, 79, 95),
         fg_primary: PackedRgba::rgb(179, 244, 255),
         fg_secondary: PackedRgba::rgb(199, 213, 224),
-        fg_muted: PackedRgba::rgb(127, 147, 166),
+        fg_muted: PackedRgba::rgb(140, 160, 180),
         fg_disabled: PackedRgba::rgb(61, 79, 95),
         accent_primary: PackedRgba::rgb(0, 170, 255),
         accent_secondary: PackedRgba::rgb(255, 0, 255),
-        accent_success: PackedRgba::rgb(57, 255, 180),
+        accent_success: PackedRgba::rgb(110, 255, 200),
         accent_warning: PackedRgba::rgb(255, 229, 102),
-        accent_error: PackedRgba::rgb(255, 51, 102),
+        accent_error: PackedRgba::rgb(255, 60, 110),
         accent_info: PackedRgba::rgb(0, 255, 255),
         accent_link: PackedRgba::rgb(102, 204, 255),
         accent_slots: [
             PackedRgba::rgb(0, 170, 255),
             PackedRgba::rgb(255, 0, 255),
-            PackedRgba::rgb(57, 255, 180),
+            PackedRgba::rgb(110, 255, 200),
             PackedRgba::rgb(255, 229, 102),
-            PackedRgba::rgb(255, 51, 102),
+            PackedRgba::rgb(255, 60, 110),
             PackedRgba::rgb(0, 255, 255),
             PackedRgba::rgb(102, 204, 255),
-            PackedRgba::rgb(255, 107, 157),
+            PackedRgba::rgb(255, 130, 175),
             PackedRgba::rgb(107, 255, 205),
             PackedRgba::rgb(255, 239, 153),
             PackedRgba::rgb(102, 255, 255),
             PackedRgba::rgb(255, 102, 255),
         ],
         syntax_keyword: PackedRgba::rgb(255, 102, 255),
-        syntax_string: PackedRgba::rgb(57, 255, 180),
+        syntax_string: PackedRgba::rgb(110, 255, 200),
         syntax_number: PackedRgba::rgb(255, 229, 102),
         syntax_comment: PackedRgba::rgb(61, 79, 95),
         syntax_function: PackedRgba::rgb(0, 170, 255),
         syntax_type: PackedRgba::rgb(102, 255, 255),
         syntax_operator: PackedRgba::rgb(199, 213, 224),
-        syntax_punctuation: PackedRgba::rgb(127, 147, 166),
+        syntax_punctuation: PackedRgba::rgb(140, 160, 180),
     },
     ThemePalette {
         bg_deep: PackedRgba::rgb(43, 43, 43),
@@ -252,6 +278,47 @@ const THEMES: [ThemePalette; 4] = [
         syntax_type: PackedRgba::rgb(143, 188, 187),
         syntax_operator: PackedRgba::rgb(216, 222, 233),
         syntax_punctuation: PackedRgba::rgb(229, 233, 240),
+    },
+    // High Contrast accessibility theme (WCAG AAA compliant)
+    ThemePalette {
+        bg_deep: PackedRgba::rgb(0, 0, 0),
+        bg_base: PackedRgba::rgb(0, 0, 0),
+        bg_surface: PackedRgba::rgb(20, 20, 20),
+        bg_overlay: PackedRgba::rgb(40, 40, 40),
+        bg_highlight: PackedRgba::rgb(80, 80, 80),
+        fg_primary: PackedRgba::rgb(255, 255, 255),
+        fg_secondary: PackedRgba::rgb(230, 230, 230),
+        fg_muted: PackedRgba::rgb(180, 180, 180),
+        fg_disabled: PackedRgba::rgb(120, 120, 120),
+        accent_primary: PackedRgba::rgb(0, 255, 255),
+        accent_secondary: PackedRgba::rgb(255, 255, 0),
+        accent_success: PackedRgba::rgb(0, 255, 0),
+        accent_warning: PackedRgba::rgb(255, 255, 0),
+        accent_error: PackedRgba::rgb(255, 100, 100),
+        accent_info: PackedRgba::rgb(100, 200, 255),
+        accent_link: PackedRgba::rgb(100, 200, 255),
+        accent_slots: [
+            PackedRgba::rgb(0, 255, 255),
+            PackedRgba::rgb(255, 255, 0),
+            PackedRgba::rgb(0, 255, 0),
+            PackedRgba::rgb(255, 165, 0),
+            PackedRgba::rgb(255, 100, 100),
+            PackedRgba::rgb(100, 200, 255),
+            PackedRgba::rgb(255, 0, 255),
+            PackedRgba::rgb(0, 255, 128),
+            PackedRgba::rgb(255, 128, 0),
+            PackedRgba::rgb(128, 255, 255),
+            PackedRgba::rgb(255, 128, 255),
+            PackedRgba::rgb(128, 255, 0),
+        ],
+        syntax_keyword: PackedRgba::rgb(255, 255, 0),
+        syntax_string: PackedRgba::rgb(0, 255, 0),
+        syntax_number: PackedRgba::rgb(255, 165, 0),
+        syntax_comment: PackedRgba::rgb(128, 128, 128),
+        syntax_function: PackedRgba::rgb(0, 255, 255),
+        syntax_type: PackedRgba::rgb(255, 0, 255),
+        syntax_operator: PackedRgba::rgb(255, 255, 255),
+        syntax_punctuation: PackedRgba::rgb(200, 200, 200),
     },
 ];
 
@@ -1102,9 +1169,13 @@ mod tests {
 
     #[test]
     fn theme_rotation_wraps() {
+        // CyberpunkAurora -> Darcula
         set_theme(ThemeId::CyberpunkAurora);
         assert_eq!(cycle_theme(), ThemeId::Darcula);
+        // NordicFrost -> HighContrast
         set_theme(ThemeId::NordicFrost);
+        assert_eq!(cycle_theme(), ThemeId::HighContrast);
+        // HighContrast -> CyberpunkAurora (wraps)
         assert_eq!(cycle_theme(), ThemeId::CyberpunkAurora);
     }
 

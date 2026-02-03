@@ -31,7 +31,7 @@ const BAR_CHARS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '�
 
 /// Linearly interpolate between two colors.
 fn lerp_color(a: PackedRgba, b: PackedRgba, t: f64) -> PackedRgba {
-    let t = t.clamp(0.0, 1.0) as f32;
+    let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) } as f32;
     let inv = 1.0 - t;
     let r = (a.r() as f32 * inv + b.r() as f32 * t).round() as u8;
     let g = (a.g() as f32 * inv + b.g() as f32 * t).round() as u8;
@@ -55,7 +55,11 @@ pub fn heatmap_gradient(value: f64) -> PackedRgba {
         (1.000, PackedRgba::rgb(255, 100, 180)), // Hot Pink
     ];
 
-    let clamped = value.clamp(0.0, 1.0);
+    let clamped = if value.is_nan() {
+        0.0
+    } else {
+        value.clamp(0.0, 1.0)
+    };
     for window in STOPS.windows(2) {
         let (t0, c0) = window[0];
         let (t1, c1) = window[1];
@@ -159,7 +163,8 @@ impl Widget for Sparkline<'_> {
             let x = area.x.saturating_add(i as u16);
 
             let normalized = if range > 0.0 {
-                ((value - min) / range).clamp(0.0, 1.0)
+                let v = (value - min) / range;
+                if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) }
             } else {
                 1.0 // all values equal: full bar
             };
@@ -360,6 +365,7 @@ impl BarChart<'_> {
                             x_cursor += self.bar_gap;
                         }
                         let h = (val / max_val) * chart_height;
+                        let h = if h.is_nan() { 0.0 } else { h };
                         let full = h.floor() as u16;
                         let frac_idx = ((h - h.floor()) * 8.0).round().min(8.0) as usize;
                         let color = self.get_color(si);
@@ -465,7 +471,12 @@ impl BarChart<'_> {
                         if si > 0 {
                             y_cursor += self.bar_gap;
                         }
-                        let bar_len = ((val / max_val) * chart_width).round() as u16;
+                        let bar_len_f = (val / max_val) * chart_width;
+                        let bar_len = if bar_len_f.is_nan() {
+                            0
+                        } else {
+                            bar_len_f.round() as u16
+                        };
                         let color = self.get_color(si);
 
                         for dy in 0..self.bar_width {
@@ -489,7 +500,12 @@ impl BarChart<'_> {
                 BarMode::Stacked => {
                     let mut left_col = 0_u16;
                     for (si, &val) in group.values.iter().enumerate() {
-                        let bar_len = ((val / max_val) * chart_width).round() as u16;
+                        let bar_len_f = (val / max_val) * chart_width;
+                        let bar_len = if bar_len_f.is_nan() {
+                            0
+                        } else {
+                            bar_len_f.round() as u16
+                        };
                         let color = self.get_color(si);
 
                         for dy in 0..self.bar_width {
@@ -692,9 +708,13 @@ impl Widget for LineChart<'_> {
         let px_h = (chart_area.height * Mode::Braille.rows_per_cell()) as f64;
 
         let to_px = |x: f64, y: f64| -> (i32, i32) {
-            let px = ((x - x_min) / x_range * (px_w - 1.0)).round() as i32;
-            let py = ((y_max - y) / y_range * (px_h - 1.0)).round() as i32;
-            (px, py)
+            let px = (x - x_min) / x_range * (px_w - 1.0);
+            let py = (y_max - y) / y_range * (px_h - 1.0);
+
+            let px = if px.is_nan() { 0.0 } else { px };
+            let py = if py.is_nan() { 0.0 } else { py };
+
+            (px.round() as i32, py.round() as i32)
         };
 
         for series in &self.series {

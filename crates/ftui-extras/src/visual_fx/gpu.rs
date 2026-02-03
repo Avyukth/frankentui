@@ -6,6 +6,7 @@
 //! compute pipeline for metaballs. It is designed to be failure-tolerant:
 //! any init or render failure permanently disables GPU usage for the process.
 
+use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
 
 use super::FxContext;
@@ -26,7 +27,7 @@ pub(crate) enum GpuDisableReason {
 
 #[derive(Debug)]
 enum GpuInitError {
-    AdapterNotFound,
+    AdapterNotFound(wgpu::RequestAdapterError),
     RequestDevice(wgpu::RequestDeviceError),
 }
 
@@ -158,6 +159,18 @@ pub(crate) fn reset_for_tests() {
 }
 
 #[cfg(test)]
+pub(crate) fn force_disable_for_tests() {
+    let mut guard = backend().lock().expect("gpu backend mutex poisoned");
+    guard.state = GpuState::Unavailable(GpuDisableReason::ForcedByEnv);
+}
+
+#[cfg(test)]
+pub(crate) fn force_init_fail_for_tests() {
+    let mut guard = backend().lock().expect("gpu backend mutex poisoned");
+    guard.state = GpuState::Unavailable(GpuDisableReason::InitFailed);
+}
+
+#[cfg(test)]
 pub(crate) fn is_disabled_for_tests() -> bool {
     GPU_BACKEND
         .get()
@@ -222,23 +235,22 @@ impl GpuContext {
     fn new() -> Result<Self, GpuInitError> {
         let instance = wgpu::Instance::default();
         let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok_or(GpuInitError::AdapterNotFound)?;
-        let (device, queue) = block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                experimental_features: wgpu::Features::empty(),
-                memory_hints: wgpu::MemoryHints::default(),
-                label: Some("fx-gpu-device"),
-            },
-            None,
-        ))
+            .map_err(GpuInitError::AdapterNotFound)?;
+        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            memory_hints: wgpu::MemoryHints::default(),
+            label: Some("fx-gpu-device"),
+            trace: wgpu::Trace::Off,
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
+        }))
         .map_err(GpuInitError::RequestDevice)?;
 
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("fx-gpu-metaballs"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("gpu_metaballs.wgsl").into()),
-        });
+        let shader: wgpu::ShaderModule =
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("fx-gpu-metaballs"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("gpu_metaballs.wgsl").into()),
+            });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("fx-gpu-metaballs-bgl"),
@@ -279,7 +291,7 @@ impl GpuContext {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("fx-gpu-metaballs-layout"),
             bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -469,14 +481,22 @@ impl GpuContext {
             (pixel_count * std::mem::size_of::<u32>()) as u64,
         );
 
-        let submission = self.queue.submit(Some(encoder.finish()));
-        self.device
-            .poll(wgpu::PollType::wait_for_submission_index(submission));
+        self.queue.submit(Some(encoder.finish()));
 
         let slice = self
             .readback_buffer
             .slice(0..(pixel_count * std::mem::size_of::<u32>()) as u64);
-        block_on(slice.map_async(wgpu::MapMode::Read))?;
+
+        // Use channel-based callback pattern for map_async
+        let (sender, receiver) = mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+
+        // Poll until map completes
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        receiver.recv().expect("map_async callback not called")?;
+
         let data = slice.get_mapped_range();
         let pixels: &[u32] = bytemuck::cast_slice(&data);
         for (dst, src) in out.iter_mut().zip(pixels.iter()) {

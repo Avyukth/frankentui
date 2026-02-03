@@ -497,8 +497,6 @@ fn ordered_pair(a: f64, b: f64) -> (f64, f64) {
 mod tests {
     use super::*;
     #[cfg(feature = "fx-gpu")]
-    use std::env;
-    #[cfg(feature = "fx-gpu")]
     use std::sync::Mutex;
 
     fn ctx(theme: &ThemeInputs) -> FxContext<'_> {
@@ -521,6 +519,22 @@ mod tests {
         hash
     }
 
+    fn field_sum_at(fx: &MetaballsFx, x: f64, y: f64) -> f64 {
+        let eps = 0.0001;
+        let mut sum = 0.0;
+        for ball in &fx.ball_cache {
+            let dx = x - ball.x;
+            let dy = y - ball.y;
+            let dist_sq = dx * dx + dy * dy;
+            if dist_sq > eps {
+                sum += ball.r2 / dist_sq;
+            } else {
+                sum += 100.0;
+            }
+        }
+        sum
+    }
+
     #[test]
     fn deterministic_for_fixed_inputs() {
         let theme = ThemeInputs::default_dark();
@@ -533,6 +547,103 @@ mod tests {
         let h1 = hash_pixels(&out1);
         let h2 = hash_pixels(&out2);
         assert_eq!(out1, out2, "hash1={h1:#x} hash2={h2:#x}");
+    }
+
+    #[test]
+    fn field_sum_monotonic_with_distance() {
+        let params = MetaballsParams {
+            balls: vec![Metaball {
+                x: 0.5,
+                y: 0.5,
+                vx: 0.0,
+                vy: 0.0,
+                radius: 0.2,
+                hue: 0.1,
+                phase: 0.0,
+            }],
+            ..Default::default()
+        };
+        let mut fx = MetaballsFx::new(params);
+        fx.populate_ball_cache(0.0, FxQuality::Full);
+
+        let center = field_sum_at(&fx, 0.5, 0.5);
+        let near = field_sum_at(&fx, 0.55, 0.5);
+        let far = field_sum_at(&fx, 0.8, 0.5);
+
+        assert!(center > near, "Field should decrease with distance");
+        assert!(near > far, "Field should decrease with distance");
+    }
+
+    #[test]
+    fn high_threshold_yields_transparent_output() {
+        let theme = ThemeInputs::default_dark();
+        let params = MetaballsParams {
+            balls: vec![Metaball {
+                x: 0.5,
+                y: 0.5,
+                vx: 0.0,
+                vy: 0.0,
+                radius: 0.2,
+                hue: 0.1,
+                phase: 0.0,
+            }],
+            glow_threshold: 999.0,
+            threshold: 1000.0,
+            ..Default::default()
+        };
+
+        let mut fx = MetaballsFx::new(params);
+        let ctx = FxContext {
+            width: 8,
+            height: 4,
+            frame: 0,
+            time_seconds: 0.0,
+            quality: FxQuality::Full,
+            theme: &theme,
+        };
+        let mut out = vec![PackedRgba::TRANSPARENT; ctx.len()];
+        fx.render(ctx, &mut out);
+
+        assert!(
+            out.iter().all(|&px| px == PackedRgba::TRANSPARENT),
+            "High thresholds should yield transparent output"
+        );
+    }
+
+    #[test]
+    fn low_threshold_yields_visible_output() {
+        let theme = ThemeInputs::default_dark();
+        let params = MetaballsParams {
+            balls: vec![Metaball {
+                x: 0.5,
+                y: 0.5,
+                vx: 0.0,
+                vy: 0.0,
+                radius: 0.2,
+                hue: 0.1,
+                phase: 0.0,
+            }],
+            glow_threshold: 0.0,
+            threshold: 0.1,
+            ..Default::default()
+        };
+
+        let mut fx = MetaballsFx::new(params);
+        let ctx = FxContext {
+            width: 8,
+            height: 4,
+            frame: 0,
+            time_seconds: 0.0,
+            quality: FxQuality::Full,
+            theme: &theme,
+        };
+        let mut out = vec![PackedRgba::TRANSPARENT; ctx.len()];
+        fx.render(ctx, &mut out);
+
+        assert!(
+            out.iter().any(|&px| px != PackedRgba::TRANSPARENT),
+            "Low thresholds should yield visible output"
+        );
     }
 
     #[test]
@@ -690,19 +801,15 @@ mod tests {
             theme: &theme,
         };
 
-        // Baseline CPU render (GPU disabled).
-        env::set_var("FTUI_FX_GPU_DISABLE", "1");
-        env::remove_var("FTUI_FX_GPU_FORCE_FAIL");
-        gpu::reset_for_tests();
+        // Baseline CPU render (GPU disabled via test helper).
+        gpu::force_disable_for_tests();
 
         let mut fx_cpu = MetaballsFx::default();
         let mut out_cpu = vec![PackedRgba::TRANSPARENT; ctx.len()];
         fx_cpu.render(ctx, &mut out_cpu);
 
         // Force GPU init failure; render should silently fall back to CPU.
-        env::remove_var("FTUI_FX_GPU_DISABLE");
-        env::set_var("FTUI_FX_GPU_FORCE_FAIL", "1");
-        gpu::reset_for_tests();
+        gpu::force_init_fail_for_tests();
 
         let mut fx_fallback = MetaballsFx::default();
         let mut out_fallback = vec![PackedRgba::TRANSPARENT; ctx.len()];
@@ -717,8 +824,8 @@ mod tests {
             "GPU should be marked unavailable after forced failure"
         );
 
-        env::remove_var("FTUI_FX_GPU_DISABLE");
-        env::remove_var("FTUI_FX_GPU_FORCE_FAIL");
+        // Reset for other tests.
+        gpu::reset_for_tests();
     }
 
     #[cfg(feature = "fx-gpu")]
@@ -727,8 +834,7 @@ mod tests {
         static ENV_LOCK: Mutex<()> = Mutex::new(());
         let _guard = ENV_LOCK.lock().expect("env lock poisoned");
 
-        env::remove_var("FTUI_FX_GPU_DISABLE");
-        env::remove_var("FTUI_FX_GPU_FORCE_FAIL");
+        // Reset to allow GPU initialization.
         gpu::reset_for_tests();
 
         let theme = ThemeInputs::default_dark();
@@ -761,11 +867,14 @@ mod tests {
             return;
         }
 
-        env::set_var("FTUI_FX_GPU_DISABLE", "1");
+        // Force CPU-only rendering for comparison.
+        gpu::force_disable_for_tests();
         let mut fx_cpu = MetaballsFx::default();
         let mut cpu_out = vec![PackedRgba::TRANSPARENT; ctx.len()];
         fx_cpu.render(ctx, &mut cpu_out);
-        env::remove_var("FTUI_FX_GPU_DISABLE");
+
+        // Reset for other tests.
+        gpu::reset_for_tests();
 
         let max_diff = max_channel_diff(&cpu_out, &gpu_out);
         assert!(
@@ -793,14 +902,16 @@ mod tests {
         static ENV_LOCK: Mutex<()> = Mutex::new(());
         let _guard = ENV_LOCK.lock().expect("env lock poisoned");
 
-        env::remove_var("FTUI_FX_GPU_DISABLE");
-        env::remove_var("FTUI_FX_GPU_FORCE_FAIL");
+        // Reset to allow GPU initialization.
         gpu::reset_for_tests();
 
         let theme = ThemeInputs::default_dark();
         let sizes = [(120u16, 40u16), (240u16, 80u16)];
 
         for (width, height) in sizes {
+            // Reset GPU state for each size to measure fresh init.
+            gpu::reset_for_tests();
+
             let ctx = FxContext {
                 width,
                 height,
@@ -834,18 +945,21 @@ mod tests {
                 continue;
             }
 
-            env::set_var("FTUI_FX_GPU_DISABLE", "1");
+            // Force CPU-only rendering for comparison.
+            gpu::force_disable_for_tests();
             let mut fx_cpu = MetaballsFx::default();
             let mut cpu_out = vec![PackedRgba::TRANSPARENT; ctx.len()];
             let cpu_start = std::time::Instant::now();
             fx_cpu.render(ctx, &mut cpu_out);
             let cpu_elapsed = cpu_start.elapsed();
-            env::remove_var("FTUI_FX_GPU_DISABLE");
 
             eprintln!(
                 "Metaballs {width}x{height}: GPU={:?} CPU={:?}",
                 gpu_elapsed, cpu_elapsed
             );
         }
+
+        // Reset for other tests.
+        gpu::reset_for_tests();
     }
 }
