@@ -18,10 +18,12 @@
 //! assert_eq!(tree.root().children().len(), 2);
 //! ```
 
+use crate::stateful::{StateKey, Stateful};
 use crate::{Widget, draw_text_span};
 use ftui_core::geometry::Rect;
 use ftui_render::frame::Frame;
 use ftui_style::Style;
+use std::collections::HashSet;
 
 /// Guide character styles for tree rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -182,6 +184,40 @@ impl TreeNode {
             child.flatten_visible(depth + 1, &child_is_last, out);
         }
     }
+
+    /// Collect all expanded node paths into a set.
+    pub(crate) fn collect_expanded(&self, prefix: &str, out: &mut HashSet<String>) {
+        let path = if prefix.is_empty() {
+            self.label.clone()
+        } else {
+            format!("{}/{}", prefix, self.label)
+        };
+
+        if self.expanded && !self.children.is_empty() {
+            out.insert(path.clone());
+        }
+
+        for child in &self.children {
+            child.collect_expanded(&path, out);
+        }
+    }
+
+    /// Apply expanded state from a set of paths.
+    pub(crate) fn apply_expanded(&mut self, prefix: &str, expanded_paths: &HashSet<String>) {
+        let path = if prefix.is_empty() {
+            self.label.clone()
+        } else {
+            format!("{}/{}", prefix, self.label)
+        };
+
+        if !self.children.is_empty() {
+            self.expanded = expanded_paths.contains(&path);
+        }
+
+        for child in &mut self.children {
+            child.apply_expanded(&path, expanded_paths);
+        }
+    }
 }
 
 /// Flattened representation of a visible tree node for rendering.
@@ -207,6 +243,8 @@ pub struct Tree {
     label_style: Style,
     /// Style for the root node label.
     root_style: Style,
+    /// Optional persistence ID for state saving/restoration.
+    persistence_id: Option<String>,
 }
 
 impl Tree {
@@ -220,6 +258,7 @@ impl Tree {
             guide_style: Style::default(),
             label_style: Style::default(),
             root_style: Style::default(),
+            persistence_id: None,
         }
     }
 

@@ -2518,8 +2518,30 @@ impl StyledText {
                 | TextEffect::Bounce { .. }
                 | TextEffect::Shake { .. }
                 | TextEffect::Cascade { .. }
-                | TextEffect::Cursor { .. }
-                | TextEffect::Scanline { .. } => {}
+                | TextEffect::Cursor { .. } => {}
+
+                // Scanline applies flicker in single-line mode
+                TextEffect::Scanline {
+                    intensity,
+                    line_gap: _,
+                    scroll: _,
+                    scroll_speed: _,
+                    flicker,
+                } => {
+                    if *flicker > 0.0 {
+                        // Use time-based pseudo-random flicker
+                        let flicker_seed = (self.time * 60.0) as u64; // ~60Hz flicker
+                        let hash = flicker_seed
+                            .wrapping_mul(2654435761)
+                            .wrapping_add(idx as u64 * 2246822519);
+                        let rand = (hash % 10000) as f64 / 10000.0;
+                        let flicker_factor = 1.0 - (*flicker * rand);
+                        alpha_multiplier *= flicker_factor;
+                    } else if *intensity > 0.0 {
+                        // No flicker, apply subtle phosphor-like dimming
+                        alpha_multiplier *= 1.0 - intensity * 0.5;
+                    }
+                }
             }
         }
 

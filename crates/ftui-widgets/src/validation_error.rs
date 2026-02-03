@@ -691,7 +691,7 @@ mod tests {
         let area = Rect::new(0, 0, 20, 1);
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(20, 1, &mut pool);
-        error.render(area, &mut frame);
+        Widget::render(&error, area, &mut frame);
 
         assert_eq!(frame.buffer.get(0, 0).unwrap().content.as_char(), Some('X'));
         // Position 1+ should be empty (no message)
