@@ -20,11 +20,11 @@
 //! ```
 
 use ftui_core::geometry::Rect;
-use ftui_render::buffer::Buffer;
-use ftui_render::cell::Cell;
+use ftui_render::cell::{Cell, CellContent};
 use ftui_render::frame::Frame;
 use ftui_style::Style;
-use unicode_width::UnicodeWidthStr;
+use ftui_text::graphemes;
+use unicode_width::UnicodeWidthChar;
 
 /// The kind of a file entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -314,14 +314,7 @@ impl FilePicker {
 
         // First line: current path
         let path_display = truncate_str(&self.current_path, width);
-        draw_line(
-            &mut frame.buffer,
-            area.x,
-            area.y,
-            &path_display,
-            self.style.path,
-            width,
-        );
+        draw_line(frame, area.x, area.y, &path_display, self.style.path, width);
 
         // Remaining lines: entries
         let entry_area_height = (area.height as usize).saturating_sub(1);
@@ -351,15 +344,32 @@ impl FilePicker {
                     }
                 };
 
-                draw_line(&mut frame.buffer, area.x, y, &display, style, width);
+                draw_line(frame, area.x, y, &display, style, width);
             }
         }
     }
 }
 
+/// Calculate grapheme cluster width in terminal cells.
+fn grapheme_width(grapheme: &str) -> usize {
+    grapheme
+        .chars()
+        .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
+        .max()
+        .unwrap_or(0)
+}
+
+/// Calculate display width for a string using grapheme clusters.
+fn text_width(text: &str) -> usize {
+    if text.is_ascii() {
+        return text.len();
+    }
+    graphemes(text).map(grapheme_width).sum()
+}
+
 /// Truncate a string to fit within `max_width` display columns.
 fn truncate_str(s: &str, max_width: usize) -> String {
-    if s.width() <= max_width {
+    if text_width(s) <= max_width {
         return s.to_string();
     }
     if max_width <= 3 {
@@ -368,12 +378,15 @@ fn truncate_str(s: &str, max_width: usize) -> String {
     let target = max_width - 3;
     let mut result = String::new();
     let mut current_width = 0;
-    for ch in s.chars() {
-        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+    for grapheme in graphemes(s) {
+        let w = grapheme_width(grapheme);
+        if w == 0 {
+            continue;
+        }
         if current_width + w > target {
             break;
         }
-        result.push(ch);
+        result.push_str(grapheme);
         current_width += w;
     }
     result.push_str("...");
@@ -381,24 +394,41 @@ fn truncate_str(s: &str, max_width: usize) -> String {
 }
 
 /// Draw a single line of text into the buffer, filling remaining width with spaces.
-fn draw_line(buffer: &mut Buffer, x: u16, y: u16, text: &str, style: Style, width: usize) {
+fn draw_line(frame: &mut Frame, x: u16, y: u16, text: &str, style: Style, width: usize) {
     let mut col = 0;
-    for ch in text.chars() {
+    for grapheme in graphemes(text) {
         if col >= width {
             break;
         }
+        let w = grapheme_width(grapheme);
+        if w == 0 {
+            continue;
+        }
+        if col.saturating_add(w) > width {
+            break;
+        }
+
+        let content = if w > 1 || grapheme.chars().count() > 1 {
+            let id = frame.intern_with_width(grapheme, w.min(u8::MAX as usize) as u8);
+            CellContent::from_grapheme(id)
+        } else if let Some(c) = grapheme.chars().next() {
+            CellContent::from_char(c)
+        } else {
+            continue;
+        };
+
         let cell_x = x.saturating_add(col as u16);
-        let mut cell = Cell::from_char(ch);
+        let mut cell = Cell::new(content);
         apply_style(&mut cell, style);
-        buffer.set(cell_x, y, cell);
-        col += unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+        frame.buffer.set(cell_x, y, cell);
+        col += w;
     }
     // Fill remaining with spaces
     while col < width {
         let cell_x = x.saturating_add(col as u16);
         let mut cell = Cell::from_char(' ');
         apply_style(&mut cell, style);
-        buffer.set(cell_x, y, cell);
+        frame.buffer.set(cell_x, y, cell);
         col += 1;
     }
 }
@@ -421,6 +451,7 @@ fn apply_style(cell: &mut Cell, style: Style) {
 mod tests {
     use super::*;
     use ftui_render::grapheme_pool::GraphemePool;
+    use unicode_width::UnicodeWidthStr;
 
     fn sample_entries() -> Vec<FileEntry> {
         vec![
@@ -603,7 +634,7 @@ mod tests {
     fn truncate_str_truncated() {
         let result = truncate_str("hello world", 8);
         assert!(result.ends_with("..."));
-        assert!(result.width() <= 8);
+        assert!(text_width(&result) <= 8);
     }
 
     #[test]
