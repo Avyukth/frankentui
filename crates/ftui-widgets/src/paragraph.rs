@@ -723,8 +723,9 @@ mod tests {
         // Empty text: 0 width, 0 height (no lines)
         assert_eq!(constraints.preferred.width, 0);
         assert_eq!(constraints.preferred.height, 0);
-        // Min height is still 1 (chrome calculation adds 1 for content)
-        assert_eq!(constraints.min.height, 1);
+        // Min height is 0 for empty text (no content to display)
+        // This ensures min <= preferred invariant holds
+        assert_eq!(constraints.min.height, 0);
     }
 
     #[test]
