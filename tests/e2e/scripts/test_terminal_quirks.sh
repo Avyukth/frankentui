@@ -14,12 +14,23 @@ source "$LIB_DIR/logging.sh"
 source "$LIB_DIR/pty.sh"
 
 JSONL_FILE="$E2E_RESULTS_DIR/terminal_quirks.jsonl"
-RUN_ID="terminal_quirks_$(date +%Y%m%d_%H%M%S)_$$"
+RUN_ID="${TERMINAL_QUIRKS_RUN_ID:-terminal_quirks_$(date +%Y%m%d_%H%M%S)_$$}"
+SEED="${TERMINAL_QUIRKS_SEED:-0}"
+DETERMINISTIC="${TERMINAL_QUIRKS_DETERMINISTIC:-0}"
+RUN_START_MS="$(date +%s%3N)"
+
+if [[ "$DETERMINISTIC" == "1" ]]; then
+    RUN_ID="${TERMINAL_QUIRKS_RUN_ID:-terminal_quirks_deterministic}"
+fi
 
 jsonl_log() {
     local line="$1"
     mkdir -p "$E2E_RESULTS_DIR"
     printf '%s\n' "$line" >> "$JSONL_FILE"
+}
+
+json_escape() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
 
 sha256_file() {
@@ -37,10 +48,12 @@ if ! CANON_BIN="$(resolve_canonicalize_bin)"; then
     for t in screen_immediate_wrap tmux_nested_cursor windows_no_alt_screen; do
         log_test_skip "$t" "pty_canonicalize binary missing"
         record_result "$t" "skipped" 0 "$LOG_FILE" "binary missing"
-        jsonl_log "{\"run_id\":\"$RUN_ID\",\"case\":\"$t\",\"status\":\"skipped\",\"reason\":\"binary missing\"}"
+        jsonl_log "{\"run_id\":\"$RUN_ID\",\"case\":\"$t\",\"status\":\"skipped\",\"reason\":\"binary missing\",\"seed\":\"$SEED\",\"deterministic\":$DETERMINISTIC}"
     done
     exit 0
 fi
+
+jsonl_log "{\"run_id\":\"$RUN_ID\",\"ts_ms\":${RUN_START_MS},\"event\":\"start\",\"seed\":\"$SEED\",\"deterministic\":$DETERMINISTIC,\"env\":{\"term\":\"$(json_escape "${TERM:-}")\",\"colorterm\":\"$(json_escape "${COLORTERM:-}")\",\"no_color\":\"$(json_escape "${NO_COLOR:-}")\",\"hostname\":\"$(json_escape "$(hostname 2>/dev/null || echo unknown)")\"},\"capabilities\":{\"profiles\":\"screen,tmux_nested,windows_console\"}}"
 
 run_case() {
     local name="$1"
@@ -60,6 +73,10 @@ run_case() {
     log_test_start "$name"
 
     printf '%b' "$input_bytes" > "$input_file"
+    local input_sha
+    input_sha="$(sha256_file "$input_file")"
+    local input_bytes_len
+    input_bytes_len=$(wc -c < "$input_file" | tr -d ' ')
 
     if "$CANON_BIN" --input "$input_file" --output "$output_file" --cols "$cols" --rows "$rows" --profile "$profile"; then
         local end_ms
@@ -75,19 +92,19 @@ run_case() {
         if [[ "$actual_line0" != "$expected_line0" ]]; then
             log_test_fail "$name" "line0 mismatch"
             record_result "$name" "failed" "$duration_ms" "$LOG_FILE" "line0 mismatch"
-            jsonl_log "{\"run_id\":\"$RUN_ID\",\"case\":\"$name\",\"status\":\"failed\",\"duration_ms\":$duration_ms,\"profile\":\"$profile\",\"cols\":$cols,\"rows\":$rows,\"output_sha256\":\"$output_sha\",\"expected_line0\":\"$expected_line0\",\"actual_line0\":\"$actual_line0\"}"
+            jsonl_log "{\"run_id\":\"$RUN_ID\",\"case\":\"$name\",\"status\":\"failed\",\"duration_ms\":$duration_ms,\"profile\":\"$profile\",\"cols\":$cols,\"rows\":$rows,\"seed\":\"$SEED\",\"deterministic\":$DETERMINISTIC,\"input_sha256\":\"$input_sha\",\"input_bytes\":$input_bytes_len,\"output_sha256\":\"$output_sha\",\"expected_line0\":\"$expected_line0\",\"actual_line0\":\"$actual_line0\"}"
             return 1
         fi
         if [[ -n "$expected_line1" && "$actual_line1" != "$expected_line1" ]]; then
             log_test_fail "$name" "line1 mismatch"
             record_result "$name" "failed" "$duration_ms" "$LOG_FILE" "line1 mismatch"
-            jsonl_log "{\"run_id\":\"$RUN_ID\",\"case\":\"$name\",\"status\":\"failed\",\"duration_ms\":$duration_ms,\"profile\":\"$profile\",\"cols\":$cols,\"rows\":$rows,\"output_sha256\":\"$output_sha\",\"expected_line1\":\"$expected_line1\",\"actual_line1\":\"$actual_line1\"}"
+            jsonl_log "{\"run_id\":\"$RUN_ID\",\"case\":\"$name\",\"status\":\"failed\",\"duration_ms\":$duration_ms,\"profile\":\"$profile\",\"cols\":$cols,\"rows\":$rows,\"seed\":\"$SEED\",\"deterministic\":$DETERMINISTIC,\"input_sha256\":\"$input_sha\",\"input_bytes\":$input_bytes_len,\"output_sha256\":\"$output_sha\",\"expected_line1\":\"$expected_line1\",\"actual_line1\":\"$actual_line1\"}"
             return 1
         fi
 
         log_test_pass "$name"
         record_result "$name" "passed" "$duration_ms" "$LOG_FILE"
-        jsonl_log "{\"run_id\":\"$RUN_ID\",\"case\":\"$name\",\"status\":\"passed\",\"duration_ms\":$duration_ms,\"profile\":\"$profile\",\"cols\":$cols,\"rows\":$rows,\"output_sha256\":\"$output_sha\",\"actual_line0\":\"$actual_line0\",\"actual_line1\":\"$actual_line1\"}"
+        jsonl_log "{\"run_id\":\"$RUN_ID\",\"case\":\"$name\",\"status\":\"passed\",\"duration_ms\":$duration_ms,\"profile\":\"$profile\",\"cols\":$cols,\"rows\":$rows,\"seed\":\"$SEED\",\"deterministic\":$DETERMINISTIC,\"input_sha256\":\"$input_sha\",\"input_bytes\":$input_bytes_len,\"output_sha256\":\"$output_sha\",\"actual_line0\":\"$actual_line0\",\"actual_line1\":\"$actual_line1\"}"
         return 0
     fi
 
@@ -96,7 +113,7 @@ run_case() {
     local duration_ms=$((end_ms - start_ms))
     log_test_fail "$name" "pty_canonicalize failed"
     record_result "$name" "failed" "$duration_ms" "$LOG_FILE" "pty_canonicalize failed"
-    jsonl_log "{\"run_id\":\"$RUN_ID\",\"case\":\"$name\",\"status\":\"failed\",\"duration_ms\":$duration_ms,\"profile\":\"$profile\",\"cols\":$cols,\"rows\":$rows,\"error\":\"pty_canonicalize failed\"}"
+    jsonl_log "{\"run_id\":\"$RUN_ID\",\"case\":\"$name\",\"status\":\"failed\",\"duration_ms\":$duration_ms,\"profile\":\"$profile\",\"cols\":$cols,\"rows\":$rows,\"seed\":\"$SEED\",\"deterministic\":$DETERMINISTIC,\"input_sha256\":\"$input_sha\",\"input_bytes\":$input_bytes_len,\"error\":\"pty_canonicalize failed\"}"
     return 1
 }
 

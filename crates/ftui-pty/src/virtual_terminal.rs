@@ -1091,6 +1091,17 @@ fn color_256(idx: u16) -> Color {
 mod tests {
     use super::*;
 
+    fn assert_invariants(vt: &VirtualTerminal) {
+        assert!(vt.cursor_x < vt.width);
+        assert!(vt.cursor_y < vt.height);
+        assert_eq!(vt.grid.len(), vt.width as usize * vt.height as usize);
+        assert!(vt.scroll_top <= vt.scroll_bottom);
+        assert!(vt.scroll_bottom < vt.height);
+        for line in &vt.scrollback {
+            assert_eq!(line.len(), vt.width as usize);
+        }
+    }
+
     #[test]
     fn new_terminal_dimensions() {
         let vt = VirtualTerminal::new(80, 24);
@@ -1110,6 +1121,30 @@ mod tests {
     #[should_panic(expected = "dimensions must be > 0")]
     fn zero_height_panics() {
         let _ = VirtualTerminal::new(80, 0);
+    }
+
+    #[test]
+    fn invariants_hold_for_varied_inputs() {
+        let inputs: [&[u8]; 6] = [
+            b"",
+            b"Hello",
+            b"ABCDE\r\nFGHIJ",
+            b"\x1b[2J",
+            b"\x1b[1;1H\x1b[2;2H",
+            b"\x1b[?1049hAlt\x1b[?1049l",
+        ];
+
+        for width in 1..=6 {
+            for height in 1..=4 {
+                for input in inputs {
+                    let mut vt = VirtualTerminal::new(width, height);
+                    for chunk in input.chunks(3) {
+                        vt.feed(chunk);
+                        assert_invariants(&vt);
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -1281,6 +1316,21 @@ mod tests {
         vt.feed(b"\x1b7"); // Save (ignored)
         vt.feed(b"\x1b[1;1H"); // Move to (0, 0)
         vt.feed(b"\x1b8"); // Restore (ignored)
+        assert_eq!(vt.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn combined_quirks_apply_independently() {
+        let quirks = QuirkSet::empty()
+            .with_screen_immediate_wrap(true)
+            .with_tmux_nested_cursor(true);
+        let mut vt = VirtualTerminal::with_quirks(5, 3, quirks);
+
+        vt.feed(b"\x1b[?1049h");
+        vt.feed(b"ABCDE");
+        assert_eq!(vt.cursor(), (0, 1));
+
+        vt.feed(b"\x1b[2;2H\x1b7\x1b[1;1H\x1b8");
         assert_eq!(vt.cursor(), (0, 0));
     }
 

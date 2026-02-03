@@ -554,8 +554,9 @@ fn input_forward_alt_modifier() {
 
 #[test]
 fn input_forward_bracketed_paste() {
-    let paste = BracketedPaste::new("Hello, World!");
-    let seq = paste.as_bytes();
+    let mut paste = BracketedPaste::new();
+    paste.enable();
+    let seq = paste.wrap(b"Hello, World!");
 
     assert!(seq.starts_with(b"\x1b[200~"));
     assert!(seq.ends_with(b"\x1b[201~"));
@@ -569,11 +570,13 @@ fn input_forward_bracketed_paste() {
 // Widget Rendering Tests
 // ============================================================================
 
-fn create_test_frame(width: u16, height: u16) -> (Frame, GraphemePool) {
-    let pool = GraphemePool::default();
-    let buffer = Buffer::new(width, height);
-    let frame = Frame::new(buffer);
-    (frame, pool)
+fn create_test_frame(width: u16, height: u16) -> (Frame<'static>, GraphemePool) {
+    let mut pool = GraphemePool::default();
+    // SAFETY: We're leaking the pool to get a static lifetime for testing.
+    // This is acceptable in tests where memory is cleaned up at process exit.
+    let pool_ref: &'static mut GraphemePool = Box::leak(Box::new(pool));
+    let frame = Frame::new(width, height, pool_ref);
+    (frame, GraphemePool::default())
 }
 
 #[test]

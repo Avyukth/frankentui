@@ -510,16 +510,17 @@ mod tests {
     }
 
     #[test]
-    fn position_at_screen_edge_does_not_go_negative() {
+    fn position_at_screen_edge_does_not_panic() {
         let tooltip = Tooltip::new("Info")
             .for_widget(Rect::new(0, 0, 5, 2))
             .config(TooltipConfig::default().position(TooltipPosition::Above));
 
         let screen = Rect::new(0, 0, 80, 24);
+        // Simply verify that calculating position doesn't panic due to overflow
         let (x, y) = tooltip.calculate_position(screen);
-
-        assert!(x >= 0, "X should not underflow");
-        assert!(y >= 0, "Y should not underflow (clamped)");
+        // Values are unsigned, so they're always >= 0. Just check they're within screen.
+        assert!(x <= screen.width, "X should be within screen width");
+        assert!(y <= screen.height, "Y should be within screen height");
     }
 
     // ── Wrapping tests ────────────────────────────────────────────────
