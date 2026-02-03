@@ -1987,4 +1987,429 @@ mod tests {
         let caps = builder.build();
         assert_eq!(caps.profile(), TerminalProfile::Custom);
     }
+
+    // ==========================================================================
+    // Mux Compatibility Matrix Tests (bd-1rz0.19)
+    // ==========================================================================
+    //
+    // These tests verify the invariants and fallback behaviors for multiplexer
+    // compatibility as documented in the capability detection system.
+
+    /// Tests the complete mux × capability matrix to ensure fallbacks are correct.
+    #[test]
+    fn mux_compatibility_matrix() {
+        // Test matrix covers: baseline (no mux), tmux, screen, zellij
+        // Each verifies: use_sync_output, use_scroll_region, use_hyperlinks, needs_passthrough_wrap
+
+        // Test baseline (no mux)
+        {
+            let caps = TerminalCapabilities::modern();
+            assert!(
+                caps.use_sync_output(),
+                "baseline: sync_output should be enabled"
+            );
+            assert!(
+                caps.use_scroll_region(),
+                "baseline: scroll_region should be enabled"
+            );
+            assert!(
+                caps.use_hyperlinks(),
+                "baseline: hyperlinks should be enabled"
+            );
+            assert!(!caps.needs_passthrough_wrap(), "baseline: no wrap needed");
+        }
+
+        // Test tmux
+        {
+            let caps = TerminalCapabilities::tmux();
+            assert!(!caps.use_sync_output(), "tmux: sync_output disabled");
+            assert!(!caps.use_scroll_region(), "tmux: scroll_region disabled");
+            assert!(!caps.use_hyperlinks(), "tmux: hyperlinks disabled");
+            assert!(caps.needs_passthrough_wrap(), "tmux: needs wrap");
+        }
+
+        // Test screen
+        {
+            let caps = TerminalCapabilities::screen();
+            assert!(!caps.use_sync_output(), "screen: sync_output disabled");
+            assert!(!caps.use_scroll_region(), "screen: scroll_region disabled");
+            assert!(!caps.use_hyperlinks(), "screen: hyperlinks disabled");
+            assert!(caps.needs_passthrough_wrap(), "screen: needs wrap");
+        }
+
+        // Test zellij
+        {
+            let caps = TerminalCapabilities::zellij();
+            assert!(!caps.use_sync_output(), "zellij: sync_output disabled");
+            assert!(!caps.use_scroll_region(), "zellij: scroll_region disabled");
+            assert!(!caps.use_hyperlinks(), "zellij: hyperlinks disabled");
+            assert!(
+                !caps.needs_passthrough_wrap(),
+                "zellij: no wrap needed (native passthrough)"
+            );
+        }
+    }
+
+    /// Tests that modern terminal detection works correctly even inside muxes.
+    #[test]
+    fn modern_terminal_in_mux_matrix() {
+        // Modern terminal (WezTerm) detected inside each mux type
+        // Feature detection should still work, but policies should disable
+
+        for (mux_name, in_tmux, in_screen, in_zellij) in [
+            ("tmux", true, false, false),
+            ("screen", false, true, false),
+            ("zellij", false, false, true),
+        ] {
+            let mut env = make_env("screen-256color", "WezTerm", "truecolor");
+            env.in_tmux = in_tmux;
+            env.in_screen = in_screen;
+            env.in_zellij = in_zellij;
+            let caps = TerminalCapabilities::detect_from_inputs(&env);
+
+            // Feature DETECTION still works
+            assert!(
+                caps.true_color,
+                "{mux_name}: true_color detection should work"
+            );
+            assert!(
+                caps.sync_output,
+                "{mux_name}: sync_output detection should work"
+            );
+
+            // But POLICIES disable features
+            assert!(
+                !caps.use_sync_output(),
+                "{mux_name}: use_sync_output() should be false"
+            );
+            assert!(
+                !caps.use_scroll_region(),
+                "{mux_name}: use_scroll_region() should be false"
+            );
+            assert!(
+                !caps.use_hyperlinks(),
+                "{mux_name}: use_hyperlinks() should be false"
+            );
+        }
+    }
+
+    /// Tests all terminal profiles against mux detection to ensure invariants hold.
+    #[test]
+    fn profile_mux_invariant_matrix() {
+        // For each predefined profile, verify mux-related invariants
+        for profile in TerminalProfile::all_predefined() {
+            let caps = TerminalCapabilities::from_profile(*profile);
+            let name = profile.as_str();
+
+            // Invariant 1: in_any_mux() is consistent with individual flags
+            let expected_mux = caps.in_tmux || caps.in_screen || caps.in_zellij;
+            assert_eq!(
+                caps.in_any_mux(),
+                expected_mux,
+                "{name}: in_any_mux() should match individual flags"
+            );
+
+            // Invariant 2: If in any mux, policies should disable sync/scroll/hyperlinks
+            if caps.in_any_mux() {
+                assert!(
+                    !caps.use_sync_output(),
+                    "{name}: mux should disable use_sync_output()"
+                );
+                assert!(
+                    !caps.use_scroll_region(),
+                    "{name}: mux should disable use_scroll_region()"
+                );
+                assert!(
+                    !caps.use_hyperlinks(),
+                    "{name}: mux should disable use_hyperlinks()"
+                );
+            }
+
+            // Invariant 3: Only tmux and screen need passthrough wrap, not zellij
+            if caps.in_tmux || caps.in_screen {
+                assert!(
+                    caps.needs_passthrough_wrap(),
+                    "{name}: tmux/screen should need passthrough wrap"
+                );
+            } else if caps.in_zellij {
+                assert!(
+                    !caps.needs_passthrough_wrap(),
+                    "{name}: zellij should NOT need passthrough wrap"
+                );
+            }
+        }
+    }
+
+    /// Tests the fallback ordering: sync_output → scroll_region → overlay_redraw
+    #[test]
+    fn fallback_ordering_matrix() {
+        use crate::inline_mode::InlineStrategy;
+
+        // Case 1: Both sync and scroll available -> ScrollRegion strategy
+        let caps_full = TerminalCapabilities::builder()
+            .sync_output(true)
+            .scroll_region(true)
+            .build();
+        assert_eq!(
+            InlineStrategy::select(&caps_full),
+            InlineStrategy::ScrollRegion,
+            "full capabilities should use ScrollRegion"
+        );
+
+        // Case 2: Scroll but no sync -> Hybrid strategy
+        let caps_hybrid = TerminalCapabilities::builder()
+            .sync_output(false)
+            .scroll_region(true)
+            .build();
+        assert_eq!(
+            InlineStrategy::select(&caps_hybrid),
+            InlineStrategy::Hybrid,
+            "scroll without sync should use Hybrid"
+        );
+
+        // Case 3: Neither -> OverlayRedraw strategy
+        let caps_none = TerminalCapabilities::builder()
+            .sync_output(false)
+            .scroll_region(false)
+            .build();
+        assert_eq!(
+            InlineStrategy::select(&caps_none),
+            InlineStrategy::OverlayRedraw,
+            "no capabilities should use OverlayRedraw"
+        );
+
+        // Case 4: In mux (even with capabilities) -> OverlayRedraw
+        let caps_tmux = TerminalCapabilities::tmux();
+        assert_eq!(
+            InlineStrategy::select(&caps_tmux),
+            InlineStrategy::OverlayRedraw,
+            "tmux should force OverlayRedraw"
+        );
+    }
+
+    /// Tests the complete terminal × mux matrix for strategy selection.
+    #[test]
+    fn terminal_mux_strategy_matrix() {
+        use crate::inline_mode::InlineStrategy;
+
+        struct TestCase {
+            name: &'static str,
+            profile: TerminalProfile,
+            expected: InlineStrategy,
+        }
+
+        let cases = [
+            TestCase {
+                name: "modern (no mux)",
+                profile: TerminalProfile::Modern,
+                expected: InlineStrategy::ScrollRegion,
+            },
+            TestCase {
+                name: "kitty (no mux)",
+                profile: TerminalProfile::Kitty,
+                expected: InlineStrategy::ScrollRegion,
+            },
+            TestCase {
+                name: "xterm-256color (no mux)",
+                profile: TerminalProfile::Xterm256Color,
+                expected: InlineStrategy::Hybrid, // has scroll_region but no sync_output
+            },
+            TestCase {
+                name: "xterm (no mux)",
+                profile: TerminalProfile::Xterm,
+                expected: InlineStrategy::Hybrid,
+            },
+            TestCase {
+                name: "vt100 (no mux)",
+                profile: TerminalProfile::Vt100,
+                expected: InlineStrategy::Hybrid,
+            },
+            TestCase {
+                name: "dumb",
+                profile: TerminalProfile::Dumb,
+                expected: InlineStrategy::OverlayRedraw, // no scroll_region
+            },
+            TestCase {
+                name: "tmux",
+                profile: TerminalProfile::Tmux,
+                expected: InlineStrategy::OverlayRedraw,
+            },
+            TestCase {
+                name: "screen",
+                profile: TerminalProfile::Screen,
+                expected: InlineStrategy::OverlayRedraw,
+            },
+            TestCase {
+                name: "zellij",
+                profile: TerminalProfile::Zellij,
+                expected: InlineStrategy::OverlayRedraw,
+            },
+        ];
+
+        for case in cases {
+            let caps = TerminalCapabilities::from_profile(case.profile);
+            let actual = InlineStrategy::select(&caps);
+            assert_eq!(
+                actual, case.expected,
+                "{}: expected {:?}, got {:?}",
+                case.name, case.expected, actual
+            );
+        }
+    }
+}
+
+// ==========================================================================
+// Property Tests for Mux Compatibility (bd-1rz0.19)
+// ==========================================================================
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Property: in_any_mux() is always consistent with individual mux flags.
+        #[test]
+        fn prop_in_any_mux_consistent(
+            in_tmux in any::<bool>(),
+            in_screen in any::<bool>(),
+            in_zellij in any::<bool>(),
+        ) {
+            let caps = TerminalCapabilities::builder()
+                .in_tmux(in_tmux)
+                .in_screen(in_screen)
+                .in_zellij(in_zellij)
+                .build();
+
+            let expected = in_tmux || in_screen || in_zellij;
+            prop_assert_eq!(caps.in_any_mux(), expected);
+        }
+
+        /// Property: If in any mux, use_sync_output() is always false (regardless of sync_output flag).
+        #[test]
+        fn prop_mux_disables_sync_output(
+            in_tmux in any::<bool>(),
+            in_screen in any::<bool>(),
+            in_zellij in any::<bool>(),
+            sync_output in any::<bool>(),
+        ) {
+            let caps = TerminalCapabilities::builder()
+                .in_tmux(in_tmux)
+                .in_screen(in_screen)
+                .in_zellij(in_zellij)
+                .sync_output(sync_output)
+                .build();
+
+            if caps.in_any_mux() {
+                prop_assert!(!caps.use_sync_output(), "mux should disable sync_output policy");
+            }
+        }
+
+        /// Property: If in any mux, use_scroll_region() is always false.
+        #[test]
+        fn prop_mux_disables_scroll_region(
+            in_tmux in any::<bool>(),
+            in_screen in any::<bool>(),
+            in_zellij in any::<bool>(),
+            scroll_region in any::<bool>(),
+        ) {
+            let caps = TerminalCapabilities::builder()
+                .in_tmux(in_tmux)
+                .in_screen(in_screen)
+                .in_zellij(in_zellij)
+                .scroll_region(scroll_region)
+                .build();
+
+            if caps.in_any_mux() {
+                prop_assert!(!caps.use_scroll_region(), "mux should disable scroll_region policy");
+            }
+        }
+
+        /// Property: If in any mux, use_hyperlinks() is always false.
+        #[test]
+        fn prop_mux_disables_hyperlinks(
+            in_tmux in any::<bool>(),
+            in_screen in any::<bool>(),
+            in_zellij in any::<bool>(),
+            osc8_hyperlinks in any::<bool>(),
+        ) {
+            let caps = TerminalCapabilities::builder()
+                .in_tmux(in_tmux)
+                .in_screen(in_screen)
+                .in_zellij(in_zellij)
+                .osc8_hyperlinks(osc8_hyperlinks)
+                .build();
+
+            if caps.in_any_mux() {
+                prop_assert!(!caps.use_hyperlinks(), "mux should disable hyperlinks policy");
+            }
+        }
+
+        /// Property: needs_passthrough_wrap() is true IFF in_tmux || in_screen (NOT zellij).
+        #[test]
+        fn prop_passthrough_wrap_logic(
+            in_tmux in any::<bool>(),
+            in_screen in any::<bool>(),
+            in_zellij in any::<bool>(),
+        ) {
+            let caps = TerminalCapabilities::builder()
+                .in_tmux(in_tmux)
+                .in_screen(in_screen)
+                .in_zellij(in_zellij)
+                .build();
+
+            let expected = in_tmux || in_screen;  // NOT zellij
+            prop_assert_eq!(caps.needs_passthrough_wrap(), expected);
+        }
+
+        /// Property: Policy methods return false when capability is not set (regardless of mux).
+        #[test]
+        fn prop_policy_false_when_capability_off(
+            in_tmux in any::<bool>(),
+            in_screen in any::<bool>(),
+            in_zellij in any::<bool>(),
+        ) {
+            let caps = TerminalCapabilities::builder()
+                .in_tmux(in_tmux)
+                .in_screen(in_screen)
+                .in_zellij(in_zellij)
+                .sync_output(false)
+                .scroll_region(false)
+                .osc8_hyperlinks(false)
+                .osc52_clipboard(false)
+                .build();
+
+            prop_assert!(!caps.use_sync_output(), "sync_output=false implies use_sync_output()=false");
+            prop_assert!(!caps.use_scroll_region(), "scroll_region=false implies use_scroll_region()=false");
+            prop_assert!(!caps.use_hyperlinks(), "osc8_hyperlinks=false implies use_hyperlinks()=false");
+            prop_assert!(!caps.use_clipboard(), "osc52_clipboard=false implies use_clipboard()=false");
+        }
+
+        /// Property: NO_COLOR disables all color-related features but not non-visual features.
+        #[test]
+        fn prop_no_color_preserves_non_visual(no_color in any::<bool>()) {
+            let mut env = DetectInputs {
+                no_color,
+                term: "xterm-256color".to_string(),
+                term_program: "WezTerm".to_string(),
+                colorterm: "truecolor".to_string(),
+                in_tmux: false,
+                in_screen: false,
+                in_zellij: false,
+                kitty_window_id: false,
+                wt_session: false,
+            };
+            let caps = TerminalCapabilities::detect_from_inputs(&env);
+
+            if no_color {
+                prop_assert!(!caps.true_color, "NO_COLOR disables true_color");
+                prop_assert!(!caps.colors_256, "NO_COLOR disables colors_256");
+                prop_assert!(!caps.osc8_hyperlinks, "NO_COLOR disables hyperlinks");
+            }
+
+            // Non-visual features preserved regardless of NO_COLOR
+            prop_assert!(caps.sync_output, "sync_output preserved despite NO_COLOR");
+            prop_assert!(caps.bracketed_paste, "bracketed_paste preserved despite NO_COLOR");
+        }
+    }
 }
