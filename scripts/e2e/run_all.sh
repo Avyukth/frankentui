@@ -121,6 +121,7 @@ run_group "$SCRIPT_DIR/layout"
 run_group "$SCRIPT_DIR/widgets"
 run_group "$SCRIPT_DIR/input"
 run_group "$SCRIPT_DIR/integration"
+run_group "$SCRIPT_DIR/modal_dialog"
 
 SUMMARY_JSON="$E2E_RESULTS_DIR/summary.json"
 finalize_summary "$SUMMARY_JSON"

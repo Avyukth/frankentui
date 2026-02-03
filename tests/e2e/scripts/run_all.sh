@@ -140,6 +140,9 @@ else
     if [[ -x "$SCRIPT_DIR/test_action_timeline.sh" ]]; then
         run_suite "action_timeline" "$SCRIPT_DIR/test_action_timeline.sh"
     fi
+    if [[ -x "$SCRIPT_DIR/test_theme_studio.sh" ]]; then
+        run_suite "theme_studio" "$SCRIPT_DIR/test_theme_studio.sh"
+    fi
 fi
 
 # Finalize JSON summary

@@ -237,7 +237,7 @@ run_in_pty() {
 if $QUICK; then
     TOTAL_STEPS=3
 else
-    TOTAL_STEPS=9
+    TOTAL_STEPS=10  # Updated: added VisualEffects test (bd-l8x9.8)
 fi
 
 echo "=============================================="
@@ -353,18 +353,19 @@ if $CAN_SMOKE; then
     # ────────────────────────────────────────────────────────────────────────
     # Step 7: Screen Navigation
     #
-    # Launch the demo on each screen (--screen=1..13) with a
+    # Launch the demo on each screen (--screen=1..22) with a
     # short auto-exit. If any screen panics on startup, this catches it.
+    # Updated for 22 screens (bd-l8x9.8.1: includes VisualEffects at screen 13)
     # ────────────────────────────────────────────────────────────────────────
-    log_step "Screen navigation (all 13 screens)"
+    log_step "Screen navigation (all 22 screens)"
     log_info "Starting demo on each screen to verify no panics..."
     NAV_LOG="$LOG_DIR/07_navigation.log"
-    STEP_NAMES+=("Screen navigation (all 13)")
+    STEP_NAMES+=("Screen navigation (all 22)")
 
     nav_start=$(date +%s%N)
     {
         NAV_FAILURES=0
-        for screen_num in 1 2 3 4 5 6 7 8 9 10 11 12 13; do
+        for screen_num in $(seq 1 22); do
             echo "--- Screen $screen_num ---"
             if run_in_pty "FTUI_DEMO_EXIT_AFTER_MS=1500 timeout 8 $DEMO_BIN --screen=$screen_num" 2>&1; then
                 echo "  Screen $screen_num: OK"
@@ -463,11 +464,107 @@ if $CAN_SMOKE; then
         STEP_STATUSES+=("FAIL")
     fi
 
+    # ────────────────────────────────────────────────────────────────────────
+    # Step 10: VisualEffects Backdrop Test (bd-l8x9.8.2)
+    #
+    # Targeted test for the VisualEffects screen (screen 13) which exercises
+    # backdrop blending, metaballs/plasma effects, and markdown-over-backdrop
+    # composition paths. Runs at multiple sizes to verify determinism and
+    # no panics under various render conditions.
+    # ────────────────────────────────────────────────────────────────────────
+    log_step "VisualEffects backdrop test (bd-l8x9.8)"
+    log_info "Testing VisualEffects screen at multiple sizes..."
+    VFX_LOG="$LOG_DIR/10_visual_effects.log"
+    STEP_NAMES+=("VisualEffects backdrop")
+
+    vfx_start=$(date +%s%N)
+    {
+        echo "=== VisualEffects (Screen 13) Backdrop Blending Tests ==="
+        echo "Bead: bd-l8x9.8.2 - Targeted runs for metaballs/plasma/backdrop paths"
+        echo ""
+        VFX_FAILURES=0
+
+        # Test 1: Standard size (80x24)
+        echo "--- Test 1: Standard size (80x24) ---"
+        if run_in_pty "stty rows 24 cols 80 2>/dev/null; FTUI_DEMO_EXIT_AFTER_MS=2500 timeout 10 $DEMO_BIN --screen=13" 2>&1; then
+            echo "  80x24: OK"
+        else
+            vfx_exit=$?
+            if [ "$vfx_exit" -eq 124 ]; then
+                echo "  80x24: OK (timeout)"
+            else
+                echo "  80x24: FAILED (exit=$vfx_exit)"
+                VFX_FAILURES=$((VFX_FAILURES + 1))
+            fi
+        fi
+
+        # Test 2: Large size (120x40) - stress test backdrop buffer scaling
+        echo "--- Test 2: Large size (120x40) ---"
+        if run_in_pty "stty rows 40 cols 120 2>/dev/null; FTUI_DEMO_EXIT_AFTER_MS=2500 timeout 10 $DEMO_BIN --screen=13" 2>&1; then
+            echo "  120x40: OK"
+        else
+            vfx_exit=$?
+            if [ "$vfx_exit" -eq 124 ]; then
+                echo "  120x40: OK (timeout)"
+            else
+                echo "  120x40: FAILED (exit=$vfx_exit)"
+                VFX_FAILURES=$((VFX_FAILURES + 1))
+            fi
+        fi
+
+        # Test 3: Tiny size (40x10) - edge case for small backdrop areas
+        echo "--- Test 3: Tiny size (40x10) ---"
+        if run_in_pty "stty rows 10 cols 40 2>/dev/null; FTUI_DEMO_EXIT_AFTER_MS=2500 timeout 10 $DEMO_BIN --screen=13" 2>&1; then
+            echo "  40x10: OK"
+        else
+            vfx_exit=$?
+            if [ "$vfx_exit" -eq 124 ]; then
+                echo "  40x10: OK (timeout)"
+            else
+                echo "  40x10: FAILED (exit=$vfx_exit)"
+                VFX_FAILURES=$((VFX_FAILURES + 1))
+            fi
+        fi
+
+        # Test 4: Very wide (200x24) - horizontal scaling
+        echo "--- Test 4: Very wide (200x24) ---"
+        if run_in_pty "stty rows 24 cols 200 2>/dev/null; FTUI_DEMO_EXIT_AFTER_MS=2500 timeout 10 $DEMO_BIN --screen=13" 2>&1; then
+            echo "  200x24: OK"
+        else
+            vfx_exit=$?
+            if [ "$vfx_exit" -eq 124 ]; then
+                echo "  200x24: OK (timeout)"
+            else
+                echo "  200x24: FAILED (exit=$vfx_exit)"
+                VFX_FAILURES=$((VFX_FAILURES + 1))
+            fi
+        fi
+
+        echo ""
+        echo "VisualEffects tests with failures: $VFX_FAILURES"
+        [ "$VFX_FAILURES" -eq 0 ]
+    } > "$VFX_LOG" 2>&1
+    vfx_exit=$?
+    vfx_end=$(date +%s%N)
+    vfx_dur_ms=$(( (vfx_end - vfx_start) / 1000000 ))
+    vfx_dur_s=$(echo "scale=2; $vfx_dur_ms / 1000" | bc 2>/dev/null || echo "${vfx_dur_ms}ms")
+    STEP_DURATIONS+=("${vfx_dur_s}s")
+
+    if [ $vfx_exit -eq 0 ]; then
+        log_pass "VisualEffects backdrop test passed in ${vfx_dur_s}s"
+        PASS_COUNT=$((PASS_COUNT + 1))
+        STEP_STATUSES+=("PASS")
+    else
+        log_fail "VisualEffects backdrop test failed. See: $VFX_LOG"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        STEP_STATUSES+=("FAIL")
+    fi
+
 else
     # No PTY support — skip all smoke/interactive tests
     for step in "Smoke test (alt-screen)" "Smoke test (inline)" \
                 "Screen navigation" "Search test (Shakespeare)" \
-                "Resize (SIGWINCH) test"; do
+                "Resize (SIGWINCH) test" "VisualEffects backdrop"; do
         skip_step "$step" "$SMOKE_REASON"
     done
 fi
