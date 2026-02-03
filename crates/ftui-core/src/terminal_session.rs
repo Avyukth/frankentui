@@ -318,7 +318,11 @@ impl TerminalSession {
             return Ok((w2, h2));
         }
 
-        Ok((w, h))
+        // Ensure minimum viable size to prevent downstream panics in buffer allocation
+        // and layout calculations. 2x2 is the absolute minimum for a functional TUI.
+        let final_w = w.max(2);
+        let final_h = h.max(2);
+        Ok((final_w, final_h))
     }
 
     /// Poll for an event with a timeout.

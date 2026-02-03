@@ -71,26 +71,18 @@ fn scan_row_changes(old_row: &[Cell], new_row: &[Cell], y: u16, changes: &mut Ve
         let old_block = &old_row[base..base + BLOCK_SIZE];
         let new_block = &new_row[base..base + BLOCK_SIZE];
 
-        // Compute change mask: 1 bit per changed cell in this block.
-        // This tight loop is autovec-friendly: each iteration compares
-        // four u32 fields and accumulates a boolean.
-        let mut mask: u32 = 0;
-        for i in 0..BLOCK_SIZE {
-            if !old_block[i].bits_eq(&new_block[i]) {
-                mask |= 1 << i;
-            }
+        // Compare each cell and push changes directly (unrolled for BLOCK_SIZE=4).
+        if !old_block[0].bits_eq(&new_block[0]) {
+            changes.push((base as u16, y));
         }
-
-        // Fast skip: if no cells changed in this block, move on.
-        if mask == 0 {
-            continue;
+        if !old_block[1].bits_eq(&new_block[1]) {
+            changes.push((base as u16 + 1, y));
         }
-
-        // Expand mask into change positions
-        for i in 0..BLOCK_SIZE {
-            if mask & (1 << i) != 0 {
-                changes.push(((base + i) as u16, y));
-            }
+        if !old_block[2].bits_eq(&new_block[2]) {
+            changes.push((base as u16 + 2, y));
+        }
+        if !old_block[3].bits_eq(&new_block[3]) {
+            changes.push((base as u16 + 3, y));
         }
     }
 
