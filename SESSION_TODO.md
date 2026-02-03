@@ -43,6 +43,13 @@
 - [ ] Send completion message to OliveDesert (MCP send failed; retry)
 - [ ] Reserve/release files via MCP (MCP connection error; retry)
 
+## Current Session (ScarletStream) — bd-2sog.3 Terminal Capability Explorer Unit/Property Tests
+- [x] Inspect existing tests in `crates/ftui-demo-showcase/src/screens/terminal_capabilities.rs`
+- [x] Confirm unit tests + proptests already cover selection wrapping, determinism, profile cycling, diagnostic logging
+- [x] Close `bd-2sog.3` as already implemented
+- [x] `br sync --flush-only`
+- [ ] Send closure note to OliveDesert (MCP send failed; retry)
+
 ## 8. Current Session (DustyCanyon) — Agent Mail + E2E Kitty Keyboard
 - [x] **Confirm AGENTS.md + README.md fully read** (requirements + architecture context)
 - [x] **Run code investigation agent** to map FrankenTUI architecture and key crates
