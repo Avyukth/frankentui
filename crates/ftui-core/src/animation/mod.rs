@@ -495,11 +495,13 @@ impl<A: Animation> Animation for Delayed<A> {
 pub mod callbacks;
 pub mod group;
 pub mod presets;
+pub mod spring;
 pub mod stagger;
 pub mod timeline;
 pub use callbacks::{AnimationEvent, Callbacks};
 pub use group::AnimationGroup;
 pub use presets::InvertedFade;
+pub use spring::Spring;
 pub use stagger::{StaggerMode, stagger_offsets, stagger_offsets_with_jitter};
 pub use timeline::Timeline;
 
