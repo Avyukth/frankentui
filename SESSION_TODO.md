@@ -1,6 +1,28 @@
 # Session TODO List
 
-## Current Session (DustyCanyon) — bd-2sog.5 Terminal Capability Explorer Diagnostic Logging
+## Current Session (FoggyHawk) — bd-2qbx.3, bd-3k3x, bd-3vbf.27
+- [x] Commit & push previous session work (bd-2qbx.3 KeybindingHints + bd-2qbx.6 E2E tests)
+- [x] Claim bd-3k3x (Performance HUD + Render Budget Visualizer)
+- [x] Implement performance_hud.rs screen (ring buffer, FPS estimation, sparkline, budget tracking, degradation tiers)
+- [x] Wire into app.rs (ScreenId, ScreenStates, dispatchers)
+- [x] Add 18 unit tests, all passing
+- [x] Commit & push (92f66c4)
+- [x] Close bd-3k3x
+- [x] Claim bd-3vbf.27 (Visual Effects: Polish Existing Effects)
+- [x] Polish metaballs: increase pulse/hue speeds, boost ball velocities/radii, smooth-step glow easing
+- [x] Polish plasma: add Galaxy palette, reduce Neon saturation, add breathing envelope
+- [x] Wire Galaxy into palette cycle in visual_effects.rs
+- [x] Polish 3D wireframe: increase rotation speeds, add blue-tinted distant stars, more twinkle variety
+- [x] Polish particles: faster rocket launches, hue-shifted trails, warm-tinted glow halos
+- [x] Add Galaxy assertion in is_theme_derived test
+- [x] All quality gates pass (cargo check, clippy, fmt, 160 tests)
+- [x] Commit & push (3b988be)
+- [x] Close bd-3vbf.27
+- [x] Re-register with MCP Agent Mail as FoggyHawk
+- [x] Check inbox (empty)
+- [x] No open unclaimed beads available — all remaining work is in-progress or blocked
+
+## Previous Session (DustyCanyon) — bd-2sog.5 Terminal Capability Explorer Diagnostic Logging
 - [x] Close bd-12o8.5 (Advanced Text Editor Diagnostic Logging) — was completed but not closed
 - [x] Claim bd-2sog.5 (Terminal Capability Explorer — Diagnostic Logging + Telemetry Hooks)
 - [x] Implement DiagnosticEventKind enum (8 event types: ViewModeChanged, SelectionChanged, ProfileCycled, ProfileReset, CapabilityInspected, EvidenceLedgerAccessed, SimulationActivated, EnvironmentRead)
