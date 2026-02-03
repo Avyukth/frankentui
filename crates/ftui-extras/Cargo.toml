@@ -17,6 +17,7 @@ pulldown-cmark = { version = "0.12", default-features = false, optional = true }
 unicodeit = { version = "0.2", optional = true }
 math-text-transform = { version = "0.1", optional = true }
 portable-pty = { version = "0.8.1", optional = true }
+vte = { version = "0.13", optional = true }
 tracing = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3", optional = true }
 unicode-segmentation = { version = "1.12.0", optional = true }
@@ -34,6 +35,7 @@ markdown = ["dep:pulldown-cmark", "dep:ftui-render", "dep:ftui-style", "dep:ftui
 export = ["dep:ftui-render"]
 filesize = []
 forms = ["dep:ftui-core", "dep:ftui-render", "dep:ftui-style", "dep:ftui-widgets", "dep:unicode-segmentation", "dep:unicode-width"]
+validation = []
 pty-capture = ["dep:portable-pty", "dep:ftui-core"]
 live = ["console"]
 logging = ["console", "dep:tracing", "dep:tracing-subscriber"]
@@ -50,7 +52,18 @@ visual-fx-metaballs = ["visual-fx"]
 visual-fx-plasma = ["visual-fx"]
 # GPU acceleration is strictly opt-in. No GPU deps are pulled unless this feature is enabled.
 fx-gpu = ["visual-fx-metaballs"]
+terminal = ["dep:vte", "dep:ftui-core", "dep:ftui-style"]
 
 [dev-dependencies]
 tracing = "0.1"
 tracing-subscriber = "0.3"
+criterion = { version = "0.5", features = ["html_reports"] }
+ftui-harness = { path = "../ftui-harness" }
+ftui-core = { path = "../ftui-core" }
+ftui-render = { path = "../ftui-render" }
+ftui-widgets = { path = "../ftui-widgets" }
+
+[[bench]]
+name = "text_effects_bench"
+harness = false
+required-features = ["text-effects"]
