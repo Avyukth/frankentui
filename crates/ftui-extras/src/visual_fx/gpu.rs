@@ -26,12 +26,14 @@ pub(crate) enum GpuDisableReason {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 enum GpuInitError {
     AdapterNotFound(wgpu::RequestAdapterError),
     RequestDevice(wgpu::RequestDeviceError),
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 enum GpuState {
     Uninitialized,
     Available(GpuContext),
@@ -81,6 +83,7 @@ impl GpuBackend {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_metaballs(
         &mut self,
         ctx: FxContext<'_>,
@@ -417,6 +420,7 @@ impl GpuContext {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_metaballs(
         &mut self,
         ctx: FxContext<'_>,
@@ -520,5 +524,5 @@ fn packed_to_vec4(color: PackedRgba) -> [f32; 4] {
 
 #[inline]
 fn div_ceil(value: u32, divisor: u32) -> u32 {
-    (value + divisor - 1) / divisor
+    value.div_ceil(divisor)
 }

@@ -3083,56 +3083,57 @@ impl Screen for VisualEffectsScreen {
             height: area.height.saturating_sub(1),
         };
 
-        let use_backdrop = matches!(self.effect, EffectType::Metaballs | EffectType::Plasma);
-        if use_backdrop {
+        // Reuse cached painter (grow-only) and render all effects at sub-pixel resolution.
+        {
             let area_cells = canvas_area.width as usize * canvas_area.height as usize;
             let quality = FxQuality::from_degradation_with_area(frame.degradation, area_cells);
             let theme_inputs = current_fx_theme();
 
-            let mut backdrop = match self.effect {
-                EffectType::Metaballs => self.metaballs_backdrop.borrow_mut(),
-                EffectType::Plasma => self.plasma_backdrop.borrow_mut(),
-                _ => unreachable!("backdrop only used for metaballs/plasma"),
-            };
-            backdrop.set_theme(theme_inputs);
-            backdrop.set_quality(quality);
-            backdrop.set_time(self.frame, self.time);
-            backdrop.render(canvas_area, frame);
-            self.render_markdown_overlay(frame, canvas_area);
-        } else {
-            // Reuse cached painter (grow-only) and render current effect.
-            {
-                let mut painter = self.painter.borrow_mut();
-                painter.ensure_for_area(canvas_area, Mode::Braille);
-                painter.clear();
-                let (pw, ph) = painter.size();
+            let mut painter = self.painter.borrow_mut();
+            painter.ensure_for_area(canvas_area, Mode::Braille);
+            painter.clear();
+            let (pw, ph) = painter.size();
 
-                match self.effect {
-                    EffectType::Shape3D => self.shape3d.render(&mut painter, pw, ph, self.time),
-                    EffectType::Particles => self.particles.render(&mut painter, pw, ph),
-                    EffectType::Matrix => self.matrix.render(&mut painter, pw, ph),
-                    EffectType::Tunnel => self.tunnel.render(&mut painter, pw, ph),
-                    EffectType::Fire => self.fire.render(&mut painter, pw, ph),
-                    EffectType::ReactionDiffusion => {
-                        self.reaction_diffusion.render(&mut painter, pw, ph)
-                    }
-                    EffectType::StrangeAttractor => self.attractor.render(&mut painter, pw, ph),
-                    EffectType::Mandelbrot => self.mandelbrot.render(&mut painter, pw, ph),
-                    EffectType::Lissajous => self.lissajous.render(&mut painter, pw, ph),
-                    EffectType::FlowField => self.flow_field.render(&mut painter, pw, ph),
-                    EffectType::Julia => self.julia.render(&mut painter, pw, ph),
-                    EffectType::WaveInterference => {
-                        self.wave_interference.render(&mut painter, pw, ph)
-                    }
-                    EffectType::Spiral => self.spiral.render(&mut painter, pw, ph),
-                    EffectType::SpinLattice => self.spin_lattice.render(&mut painter, pw, ph),
-                    EffectType::Metaballs | EffectType::Plasma => {}
+            match self.effect {
+                EffectType::Shape3D => self.shape3d.render(&mut painter, pw, ph, self.time),
+                EffectType::Particles => self.particles.render(&mut painter, pw, ph),
+                EffectType::Matrix => self.matrix.render(&mut painter, pw, ph),
+                EffectType::Tunnel => self.tunnel.render(&mut painter, pw, ph),
+                EffectType::Fire => self.fire.render(&mut painter, pw, ph),
+                EffectType::ReactionDiffusion => {
+                    self.reaction_diffusion.render(&mut painter, pw, ph)
                 }
-
-                // Render canvas to frame without cloning painter buffers.
-                let canvas = CanvasRef::from_painter(&painter);
-                canvas.render(canvas_area, frame);
+                EffectType::StrangeAttractor => self.attractor.render(&mut painter, pw, ph),
+                EffectType::Mandelbrot => self.mandelbrot.render(&mut painter, pw, ph),
+                EffectType::Lissajous => self.lissajous.render(&mut painter, pw, ph),
+                EffectType::FlowField => self.flow_field.render(&mut painter, pw, ph),
+                EffectType::Julia => self.julia.render(&mut painter, pw, ph),
+                EffectType::WaveInterference => {
+                    self.wave_interference.render(&mut painter, pw, ph)
+                }
+                EffectType::Spiral => self.spiral.render(&mut painter, pw, ph),
+                EffectType::SpinLattice => self.spin_lattice.render(&mut painter, pw, ph),
+                // Canvas adapters for metaballs and plasma (bd-l8x9.5.3)
+                EffectType::Metaballs => {
+                    self.metaballs_adapter
+                        .borrow_mut()
+                        .fill_frame(&mut painter, self.time, quality, &theme_inputs);
+                }
+                EffectType::Plasma => {
+                    self.plasma_adapter
+                        .borrow()
+                        .fill(&mut painter, self.time, quality, &theme_inputs);
+                }
             }
+
+            // Render canvas to frame without cloning painter buffers.
+            let canvas = CanvasRef::from_painter(&painter);
+            canvas.render(canvas_area, frame);
+        }
+
+        // Render markdown overlay for metaballs/plasma
+        if matches!(self.effect, EffectType::Metaballs | EffectType::Plasma) {
+            self.render_markdown_overlay(frame, canvas_area);
         }
 
         // Render transition overlay if active
