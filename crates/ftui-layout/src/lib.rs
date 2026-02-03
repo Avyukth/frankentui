@@ -35,11 +35,13 @@ pub mod grid;
 #[cfg(test)]
 mod repro_max_constraint;
 pub mod responsive;
+pub mod responsive_layout;
 
 pub use cache::{CoherenceCache, CoherenceId, LayoutCache, LayoutCacheKey, LayoutCacheStats};
 pub use ftui_core::geometry::{Rect, Sides, Size};
 pub use grid::{Grid, GridArea, GridLayout};
 pub use responsive::Responsive;
+pub use responsive_layout::{ResponsiveLayout, ResponsiveSplit};
 use std::cmp::min;
 
 /// A constraint on the size of a layout area.
@@ -435,6 +437,12 @@ impl Flex {
     pub fn alignment(mut self, alignment: Alignment) -> Self {
         self.alignment = alignment;
         self
+    }
+
+    /// Number of constraints (and thus output rects from [`split`](Self::split)).
+    #[must_use]
+    pub fn constraint_count(&self) -> usize {
+        self.constraints.len()
     }
 
     /// Split the given area into smaller rectangles according to the configuration.
