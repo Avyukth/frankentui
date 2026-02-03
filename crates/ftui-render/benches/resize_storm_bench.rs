@@ -165,7 +165,12 @@ fn bench_oscillate_pattern(c: &mut Criterion) {
         let storm = ResizeStorm::new(config);
         let events = storm.events();
 
-        log_perf_run(&format!("oscillate_{}", cycles), "oscillate", cycles * 2, seed);
+        log_perf_run(
+            &format!("oscillate_{}", cycles),
+            "oscillate",
+            cycles * 2,
+            seed,
+        );
 
         group.bench_with_input(
             BenchmarkId::new("adaptive_buffer", cycles),
@@ -243,7 +248,12 @@ fn bench_pathological_pattern(c: &mut Criterion) {
         let storm = ResizeStorm::new(config);
         let events = storm.events();
 
-        log_perf_run(&format!("pathological_{}", count), "pathological", count, seed);
+        log_perf_run(
+            &format!("pathological_{}", count),
+            "pathological",
+            count,
+            seed,
+        );
 
         group.bench_with_input(
             BenchmarkId::new("adaptive_buffer", count),
