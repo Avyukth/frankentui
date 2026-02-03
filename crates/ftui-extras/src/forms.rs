@@ -1073,14 +1073,7 @@ impl StatefulWidget for Form {
                     unicode_width::UnicodeWidthStr::width(label).min(label_space as usize) as u16;
                 let can_show_required =
                     self.is_required(i) && label_width.saturating_add(2) <= label_space;
-                draw_str(
-                    frame,
-                    area.x,
-                    y,
-                    label,
-                    label_style,
-                    label_space,
-                );
+                draw_str(frame, area.x, y, label, label_style, label_space);
                 if can_show_required {
                     let star_x = area.x.saturating_add(label_width);
                     draw_str(

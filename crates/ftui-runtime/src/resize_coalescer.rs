@@ -184,6 +184,34 @@ impl Regime {
     }
 }
 
+/// Event emitted when a resize operation is applied (bd-bksf.6 stub).
+///
+/// Used by [`ResizeSlaMonitor`](crate::resize_sla::ResizeSlaMonitor) for latency tracking.
+#[derive(Debug, Clone)]
+pub struct ResizeAppliedEvent {
+    /// New terminal size after resize.
+    pub new_size: (u16, u16),
+    /// Previous terminal size.
+    pub old_size: (u16, u16),
+    /// Time elapsed from resize request to apply.
+    pub elapsed: Duration,
+    /// Whether the apply was forced (hard deadline).
+    pub forced: bool,
+}
+
+/// Event emitted when regime changes between Steady and Burst (bd-bksf.6 stub).
+///
+/// Used by SLA monitoring for regime-aware alerting.
+#[derive(Debug, Clone)]
+pub struct RegimeChangeEvent {
+    /// Previous regime.
+    pub from: Regime,
+    /// New regime.
+    pub to: Regime,
+    /// Event index when transition occurred.
+    pub event_idx: u64,
+}
+
 /// Decision log entry for observability.
 #[derive(Debug, Clone)]
 pub struct DecisionLog {

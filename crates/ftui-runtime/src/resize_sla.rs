@@ -47,9 +47,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use crate::conformal_alert::{AlertConfig, AlertDecision, AlertStats, ConformalAlert};
-use crate::resize_coalescer::{
-    DecisionLog, RegimeChangeEvent, ResizeAppliedEvent, TelemetryHooks,
-};
+use crate::resize_coalescer::{DecisionLog, TelemetryHooks};
 
 /// Configuration for resize SLA monitoring.
 #[derive(Debug, Clone)]
@@ -206,10 +204,12 @@ impl ResizeSlaMonitor {
         *self.pending_resize_start.borrow_mut() = Some(Instant::now());
     }
 
-    /// Process a resize apply event and return alert decision.
-    pub fn on_resize_applied(&self, event: &ResizeAppliedEvent) -> Option<AlertDecision> {
-        let latency_ms = event.elapsed.as_secs_f64() * 1000.0;
-        self.process_latency(latency_ms, event.new_size, event.forced)
+    /// Process a resize apply decision log and return alert decision.
+    pub fn on_decision(&self, entry: &DecisionLog) -> Option<AlertDecision> {
+        // Extract latency from coalesce_ms or time_since_render_ms
+        let latency_ms = entry.coalesce_ms.unwrap_or(entry.time_since_render_ms);
+        let applied_size = entry.applied_size.unwrap_or((80, 24));
+        self.process_latency(latency_ms, applied_size, entry.forced)
     }
 
     /// Process a latency observation.
@@ -252,7 +252,11 @@ impl ResizeSlaMonitor {
         if self.config.enable_logging {
             self.logs.borrow_mut().push(SlaLogEntry {
                 event_idx,
-                event_type: if decision.is_alert { "alert" } else { "observe" },
+                event_type: if decision.is_alert {
+                    "alert"
+                } else {
+                    "observe"
+                },
                 latency_ms,
                 target_latency_ms: self.config.target_latency_ms,
                 threshold_ms: decision.evidence.conformal_threshold,
@@ -324,7 +328,11 @@ impl ResizeSlaMonitor {
                 entry.threshold_ms,
                 entry.e_value,
                 entry.is_alert,
-                entry.alert_reason.as_ref().map(|r| format!("\"{}\"", r)).unwrap_or_else(|| "null".to_string()),
+                entry
+                    .alert_reason
+                    .as_ref()
+                    .map(|r| format!("\"{}\"", r))
+                    .unwrap_or_else(|| "null".to_string()),
                 entry.applied_size.0,
                 entry.applied_size.1,
                 entry.forced
@@ -381,18 +389,20 @@ impl ResizeSlaMonitor {
 ///
 /// Returns a tuple of (TelemetryHooks, Rc<ResizeSlaMonitor>) so the monitor
 /// can be queried after hooking into a ResizeCoalescer.
+///
+/// Note: Uses Rc + RefCell internally since TelemetryHooks callbacks are
+/// `Fn` (not `FnMut`) but we need to mutate the monitor state.
 pub fn make_sla_hooks(config: SlaConfig) -> (TelemetryHooks, Rc<ResizeSlaMonitor>) {
     let monitor = Rc::new(ResizeSlaMonitor::new(config));
     let monitor_clone = Rc::clone(&monitor);
 
-    let hooks = TelemetryHooks {
-        on_resize_applied: Some(Box::new(move |event: &ResizeAppliedEvent| {
-            monitor_clone.on_resize_applied(event);
-        })),
-        on_regime_change: None,
-        on_decision: None,
-        emit_tracing: false,
-    };
+    // Hook into on_resize_applied events to track latency
+    let hooks = TelemetryHooks::new().on_resize_applied(move |entry: &DecisionLog| {
+        // Only process apply events (not coalesce)
+        if entry.action == "apply" || entry.action == "apply_forced" {
+            monitor_clone.on_decision(entry);
+        }
+    });
 
     (hooks, monitor)
 }

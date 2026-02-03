@@ -279,22 +279,18 @@ impl FormsInput {
         self.form.set_style(Style::new().fg(theme::fg::PRIMARY));
         self.form
             .set_label_style(Style::new().fg(theme::fg::SECONDARY));
-        self.form
-            .set_focused_style(
-                Style::new()
-                    .fg(theme::fg::PRIMARY)
-                    .bg(theme::alpha::HIGHLIGHT)
-                    .attrs(StyleFlags::BOLD),
-            );
+        self.form.set_focused_style(
+            Style::new()
+                .fg(theme::fg::PRIMARY)
+                .bg(theme::alpha::HIGHLIGHT)
+                .attrs(StyleFlags::BOLD),
+        );
         self.form
             .set_error_style(Style::new().fg(theme::accent::ERROR));
         self.form
             .set_success_style(Style::new().fg(theme::accent::SUCCESS));
-        self.form.set_disabled_style(
-            Style::new()
-                .fg(theme::fg::MUTED)
-                .attrs(StyleFlags::DIM),
-        );
+        self.form
+            .set_disabled_style(Style::new().fg(theme::fg::MUTED).attrs(StyleFlags::DIM));
         self.form
             .set_required_style(Style::new().fg(theme::accent::WARNING));
 

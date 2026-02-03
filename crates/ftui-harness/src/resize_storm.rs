@@ -467,7 +467,7 @@ impl ResizeStorm {
                 0 => (self.config.min_width, self.config.min_height, 0), // Minimum, instant
                 1 => (self.config.max_width, self.config.max_height, 0), // Maximum, instant
                 2 => (1, 1, 1),                                          // Extreme minimum
-                3 => (500, 200, 1),                                       // Large
+                3 => (500, 200, 1),                                      // Large
                 4 => (80, 24, 500),                                      // Normal, long delay
                 5 => {
                     // Random, zero delay

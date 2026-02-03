@@ -299,9 +299,7 @@ impl InputFairnessGuard {
         let jain = self.calculate_jain_index();
 
         // Check pending input latency
-        let pending_latency = self
-            .pending_input_arrival
-            .map(|t| now.duration_since(t));
+        let pending_latency = self.pending_input_arrival.map(|t| now.duration_since(t));
         if let Some(latency) = pending_latency
             && latency > self.stats.max_input_latency
         {
@@ -365,12 +363,14 @@ impl InputFairnessGuard {
         {
             match old.event_type {
                 EventType::Input => {
-                    self.input_time_us =
-                        self.input_time_us.saturating_sub(old.duration.as_micros() as u64);
+                    self.input_time_us = self
+                        .input_time_us
+                        .saturating_sub(old.duration.as_micros() as u64);
                 }
                 EventType::Resize => {
-                    self.resize_time_us =
-                        self.resize_time_us.saturating_sub(old.duration.as_micros() as u64);
+                    self.resize_time_us = self
+                        .resize_time_us
+                        .saturating_sub(old.duration.as_micros() as u64);
                 }
                 EventType::Tick => {}
             }

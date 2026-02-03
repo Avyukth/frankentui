@@ -928,13 +928,25 @@ mod tests {
 
     #[test]
     fn constraint_label_formatting() {
-        assert_eq!(LayoutLab::constraint_label(&Constraint::Fixed(10)), "Fixed(10)");
-        assert_eq!(LayoutLab::constraint_label(&Constraint::Percentage(50.0)), "Pct(50%)");
+        assert_eq!(
+            LayoutLab::constraint_label(&Constraint::Fixed(10)),
+            "Fixed(10)"
+        );
+        assert_eq!(
+            LayoutLab::constraint_label(&Constraint::Percentage(50.0)),
+            "Pct(50%)"
+        );
         assert_eq!(LayoutLab::constraint_label(&Constraint::Min(5)), "Min(5)");
         assert_eq!(LayoutLab::constraint_label(&Constraint::Max(20)), "Max(20)");
-        assert_eq!(LayoutLab::constraint_label(&Constraint::Ratio(1, 3)), "Ratio(1/3)");
+        assert_eq!(
+            LayoutLab::constraint_label(&Constraint::Ratio(1, 3)),
+            "Ratio(1/3)"
+        );
         assert_eq!(LayoutLab::constraint_label(&Constraint::Fill), "Fill");
-        assert_eq!(LayoutLab::constraint_label(&Constraint::FitContent), "FitContent");
+        assert_eq!(
+            LayoutLab::constraint_label(&Constraint::FitContent),
+            "FitContent"
+        );
         assert_eq!(
             LayoutLab::constraint_label(&Constraint::FitContentBounded { min: 5, max: 20 }),
             "FitContent(5..20)"
@@ -999,17 +1011,47 @@ mod tests {
     #[test]
     fn align_position_mapping() {
         // Test all 9 positions
-        assert_eq!(align_position(0), (Alignment::Left, VerticalAlignment::Top, "TopLeft"));
-        assert_eq!(align_position(1), (Alignment::Center, VerticalAlignment::Top, "TopCenter"));
-        assert_eq!(align_position(2), (Alignment::Right, VerticalAlignment::Top, "TopRight"));
-        assert_eq!(align_position(3), (Alignment::Left, VerticalAlignment::Middle, "MidLeft"));
-        assert_eq!(align_position(4), (Alignment::Center, VerticalAlignment::Middle, "Center"));
-        assert_eq!(align_position(5), (Alignment::Right, VerticalAlignment::Middle, "MidRight"));
-        assert_eq!(align_position(6), (Alignment::Left, VerticalAlignment::Bottom, "BotLeft"));
-        assert_eq!(align_position(7), (Alignment::Center, VerticalAlignment::Bottom, "BotCenter"));
-        assert_eq!(align_position(8), (Alignment::Right, VerticalAlignment::Bottom, "BotRight"));
+        assert_eq!(
+            align_position(0),
+            (Alignment::Left, VerticalAlignment::Top, "TopLeft")
+        );
+        assert_eq!(
+            align_position(1),
+            (Alignment::Center, VerticalAlignment::Top, "TopCenter")
+        );
+        assert_eq!(
+            align_position(2),
+            (Alignment::Right, VerticalAlignment::Top, "TopRight")
+        );
+        assert_eq!(
+            align_position(3),
+            (Alignment::Left, VerticalAlignment::Middle, "MidLeft")
+        );
+        assert_eq!(
+            align_position(4),
+            (Alignment::Center, VerticalAlignment::Middle, "Center")
+        );
+        assert_eq!(
+            align_position(5),
+            (Alignment::Right, VerticalAlignment::Middle, "MidRight")
+        );
+        assert_eq!(
+            align_position(6),
+            (Alignment::Left, VerticalAlignment::Bottom, "BotLeft")
+        );
+        assert_eq!(
+            align_position(7),
+            (Alignment::Center, VerticalAlignment::Bottom, "BotCenter")
+        );
+        assert_eq!(
+            align_position(8),
+            (Alignment::Right, VerticalAlignment::Bottom, "BotRight")
+        );
         // Wrap around
-        assert_eq!(align_position(9), (Alignment::Left, VerticalAlignment::Top, "TopLeft"));
+        assert_eq!(
+            align_position(9),
+            (Alignment::Left, VerticalAlignment::Top, "TopLeft")
+        );
     }
 
     #[test]
@@ -1018,7 +1060,11 @@ mod tests {
         let bindings = lab.keybindings();
         assert!(!bindings.is_empty());
         // Should have at least 10 keybindings
-        assert!(bindings.len() >= 10, "Expected at least 10 keybindings, got {}", bindings.len());
+        assert!(
+            bindings.len() >= 10,
+            "Expected at least 10 keybindings, got {}",
+            bindings.len()
+        );
     }
 
     #[test]
@@ -1046,10 +1092,7 @@ mod tests {
     #[test]
     fn layout_tiny_area() {
         let area = Rect::new(0, 0, 2, 2);
-        let constraints = [
-            Constraint::Fixed(5),
-            Constraint::Fixed(5),
-        ];
+        let constraints = [Constraint::Fixed(5), Constraint::Fixed(5)];
         let rects = solve_flex_vertical(area, &constraints);
         assert_eq!(rects.len(), 2);
         // Rects should still be within area even if constraints can't be satisfied
@@ -1081,10 +1124,7 @@ mod tests {
     fn layout_offset_area() {
         // Test with non-zero origin
         let area = Rect::new(50, 100, 80, 40);
-        let constraints = [
-            Constraint::Fixed(10),
-            Constraint::Min(5),
-        ];
+        let constraints = [Constraint::Fixed(10), Constraint::Min(5)];
         let rects = solve_flex_vertical(area, &constraints);
         assert_eq!(rects.len(), 2);
         // First rect should start at area origin
@@ -1104,7 +1144,11 @@ mod tests {
         let area = Rect::new(0, 0, 100, 50);
         let rects = Flex::vertical()
             .gap(5)
-            .constraints([Constraint::Fixed(10), Constraint::Fixed(10), Constraint::Fixed(10)])
+            .constraints([
+                Constraint::Fixed(10),
+                Constraint::Fixed(10),
+                Constraint::Fixed(10),
+            ])
             .split(area);
         assert_eq!(rects.len(), 3);
         // Check that there's a gap between rects
@@ -1192,11 +1236,14 @@ mod tests {
     fn layout_fixed_constraint_exact() {
         // Fixed constraints should produce exact sizes
         let area = Rect::new(0, 0, 100, 100);
-        let rects = solve_flex_vertical(area, &[
-            Constraint::Fixed(10),
-            Constraint::Fixed(20),
-            Constraint::Min(0),
-        ]);
+        let rects = solve_flex_vertical(
+            area,
+            &[
+                Constraint::Fixed(10),
+                Constraint::Fixed(20),
+                Constraint::Min(0),
+            ],
+        );
         assert_eq!(rects[0].height, 10, "Fixed(10) should be exactly 10");
         assert_eq!(rects[1].height, 20, "Fixed(20) should be exactly 20");
     }
@@ -1204,11 +1251,14 @@ mod tests {
     #[test]
     fn layout_ratio_proportional() {
         let area = Rect::new(0, 0, 90, 30);
-        let rects = solve_flex_horizontal(area, &[
-            Constraint::Ratio(1, 3),
-            Constraint::Ratio(1, 3),
-            Constraint::Ratio(1, 3),
-        ]);
+        let rects = solve_flex_horizontal(
+            area,
+            &[
+                Constraint::Ratio(1, 3),
+                Constraint::Ratio(1, 3),
+                Constraint::Ratio(1, 3),
+            ],
+        );
         // Each should be 30 wide (90 / 3)
         for r in &rects {
             assert_eq!(r.width, 30, "Each ratio(1,3) of 90 should be 30");
@@ -1218,10 +1268,10 @@ mod tests {
     #[test]
     fn layout_percentage_proportional() {
         let area = Rect::new(0, 0, 100, 100);
-        let rects = solve_flex_vertical(area, &[
-            Constraint::Percentage(25.0),
-            Constraint::Percentage(75.0),
-        ]);
+        let rects = solve_flex_vertical(
+            area,
+            &[Constraint::Percentage(25.0), Constraint::Percentage(75.0)],
+        );
         assert_eq!(rects[0].height, 25, "25% of 100 should be 25");
         assert_eq!(rects[1].height, 75, "75% of 100 should be 75");
     }
@@ -1238,7 +1288,8 @@ mod proptests {
 
     /// Generate a reasonable Rect for testing
     fn arb_rect() -> impl Strategy<Value = Rect> {
-        (0u16..100, 0u16..100, 10u16..200, 10u16..100).prop_map(|(x, y, w, h)| Rect::new(x, y, w, h))
+        (0u16..100, 0u16..100, 10u16..200, 10u16..100)
+            .prop_map(|(x, y, w, h)| Rect::new(x, y, w, h))
     }
 
     /// Generate a simple constraint

@@ -196,10 +196,7 @@ impl LayoutRecord {
             .map(|c| format!("\"{}\"", Self::format_constraint(c)))
             .collect();
         let sizes_json: Vec<String> = self.computed_sizes.iter().map(|s| s.to_string()).collect();
-        let solve_time_us = self
-            .solve_time
-            .map(|d| d.as_micros() as u64)
-            .unwrap_or(0);
+        let solve_time_us = self.solve_time.map(|d| d.as_micros() as u64).unwrap_or(0);
 
         format!(
             r#"{{"event":"layout_solve","name":"{}","direction":"{:?}","alignment":"{:?}","available_size":{},"gap":{},"margin":{{"top":{},"right":{},"bottom":{},"left":{}}},"constraints":[{}],"computed_sizes":[{}],"utilization":{:.1},"has_overflow":{},"has_underflow":{},"solve_time_us":{}}}"#,
@@ -277,10 +274,7 @@ impl GridLayoutRecord {
         let row_heights_json: Vec<String> =
             self.row_heights.iter().map(|h| h.to_string()).collect();
         let col_widths_json: Vec<String> = self.col_widths.iter().map(|w| w.to_string()).collect();
-        let solve_time_us = self
-            .solve_time
-            .map(|d| d.as_micros() as u64)
-            .unwrap_or(0);
+        let solve_time_us = self.solve_time.map(|d| d.as_micros() as u64).unwrap_or(0);
 
         format!(
             r#"{{"event":"grid_layout_solve","name":"{}","available_width":{},"available_height":{},"row_heights":[{}],"col_widths":[{}],"has_row_overflow":{},"has_col_overflow":{},"solve_time_us":{}}}"#,
@@ -442,9 +436,22 @@ impl std::fmt::Debug for LayoutDebugger {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LayoutDebugger")
             .field("enabled", &self.enabled.load(Ordering::Relaxed))
-            .field("records_count", &self.records.lock().map(|r| r.len()).unwrap_or(0))
-            .field("grid_records_count", &self.grid_records.lock().map(|r| r.len()).unwrap_or(0))
-            .field("has_telemetry_hooks", &self.telemetry_hooks.lock().map(|h| h.is_some()).unwrap_or(false))
+            .field(
+                "records_count",
+                &self.records.lock().map(|r| r.len()).unwrap_or(0),
+            )
+            .field(
+                "grid_records_count",
+                &self.grid_records.lock().map(|r| r.len()).unwrap_or(0),
+            )
+            .field(
+                "has_telemetry_hooks",
+                &self
+                    .telemetry_hooks
+                    .lock()
+                    .map(|h| h.is_some())
+                    .unwrap_or(false),
+            )
             .finish()
     }
 }
@@ -1064,10 +1071,9 @@ mod tests {
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
 
-        let hooks = LayoutTelemetryHooks::new()
-            .on_layout_solve(move |_record| {
-                counter_clone.fetch_add(1, Ordering::SeqCst);
-            });
+        let hooks = LayoutTelemetryHooks::new().on_layout_solve(move |_record| {
+            counter_clone.fetch_add(1, Ordering::SeqCst);
+        });
 
         let debugger = LayoutDebugger::new();
         debugger.set_enabled(true);
@@ -1087,10 +1093,9 @@ mod tests {
         let overflow_counter = Arc::new(AtomicU32::new(0));
         let overflow_clone = overflow_counter.clone();
 
-        let hooks = LayoutTelemetryHooks::new()
-            .on_overflow(move |_record| {
-                overflow_clone.fetch_add(1, Ordering::SeqCst);
-            });
+        let hooks = LayoutTelemetryHooks::new().on_overflow(move |_record| {
+            overflow_clone.fetch_add(1, Ordering::SeqCst);
+        });
 
         let debugger = LayoutDebugger::new();
         debugger.set_enabled(true);
@@ -1118,10 +1123,9 @@ mod tests {
         let underflow_counter = Arc::new(AtomicU32::new(0));
         let underflow_clone = underflow_counter.clone();
 
-        let hooks = LayoutTelemetryHooks::new()
-            .on_underflow(move |_record| {
-                underflow_clone.fetch_add(1, Ordering::SeqCst);
-            });
+        let hooks = LayoutTelemetryHooks::new().on_underflow(move |_record| {
+            underflow_clone.fetch_add(1, Ordering::SeqCst);
+        });
 
         let debugger = LayoutDebugger::new();
         debugger.set_enabled(true);
@@ -1142,10 +1146,9 @@ mod tests {
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
 
-        let hooks = LayoutTelemetryHooks::new()
-            .on_grid_solve(move |_record| {
-                counter_clone.fetch_add(1, Ordering::SeqCst);
-            });
+        let hooks = LayoutTelemetryHooks::new().on_grid_solve(move |_record| {
+            counter_clone.fetch_add(1, Ordering::SeqCst);
+        });
 
         let debugger = LayoutDebugger::new();
         debugger.set_enabled(true);
@@ -1167,10 +1170,9 @@ mod tests {
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
 
-        let hooks = LayoutTelemetryHooks::new()
-            .on_layout_solve(move |_record| {
-                counter_clone.fetch_add(1, Ordering::SeqCst);
-            });
+        let hooks = LayoutTelemetryHooks::new().on_layout_solve(move |_record| {
+            counter_clone.fetch_add(1, Ordering::SeqCst);
+        });
 
         let debugger = LayoutDebugger::new();
         // Note: NOT enabled
@@ -1191,10 +1193,9 @@ mod tests {
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
 
-        let hooks = LayoutTelemetryHooks::new()
-            .on_layout_solve(move |_record| {
-                counter_clone.fetch_add(1, Ordering::SeqCst);
-            });
+        let hooks = LayoutTelemetryHooks::new().on_layout_solve(move |_record| {
+            counter_clone.fetch_add(1, Ordering::SeqCst);
+        });
 
         let debugger = LayoutDebugger::new();
         debugger.set_enabled(true);

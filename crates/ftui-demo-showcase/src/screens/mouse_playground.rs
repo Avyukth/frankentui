@@ -1168,13 +1168,14 @@ impl Screen for MousePlayground {
         let targets_focused = self.focus == Focus::Targets;
         let (targets_border_style, targets_title) = if targets_focused {
             (
-                Style::new()
-                    .fg(theme::accent::PRIMARY.resolve())
-                    .bold(),
+                Style::new().fg(theme::accent::PRIMARY.resolve()).bold(),
                 " ► Hit-Test Targets ",
             )
         } else {
-            (Style::new().fg(theme::fg::MUTED.resolve()), "   Hit-Test Targets ")
+            (
+                Style::new().fg(theme::fg::MUTED.resolve()),
+                "   Hit-Test Targets ",
+            )
         };
         let left_block = Block::new()
             .title(targets_title)
@@ -1201,9 +1202,7 @@ impl Screen for MousePlayground {
         let log_focused = self.focus == Focus::EventLog;
         let (log_border_style, log_title) = if log_focused {
             (
-                Style::new()
-                    .fg(theme::accent::PRIMARY.resolve())
-                    .bold(),
+                Style::new().fg(theme::accent::PRIMARY.resolve()).bold(),
                 " ► Event Log ",
             )
         } else {
@@ -1227,9 +1226,7 @@ impl Screen for MousePlayground {
         let stats_focused = self.focus == Focus::Stats;
         let (stats_border_style, stats_title) = if stats_focused {
             (
-                Style::new()
-                    .fg(theme::accent::PRIMARY.resolve())
-                    .bold(),
+                Style::new().fg(theme::accent::PRIMARY.resolve()).bold(),
                 " ► Stats ",
             )
         } else {
