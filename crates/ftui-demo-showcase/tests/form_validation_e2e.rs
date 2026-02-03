@@ -104,9 +104,10 @@ fn capture_frame_hash(demo: &FormValidationDemo, width: u16, height: u16) -> u64
 }
 
 /// Render the demo and return the frame for inspection.
-fn render_demo(demo: &FormValidationDemo, width: u16, height: u16) -> Frame {
-    let mut pool = GraphemePool::new();
-    let mut frame = Frame::new(width, height, &mut pool);
+fn render_demo(demo: &FormValidationDemo, width: u16, height: u16) -> Frame<'static> {
+    // For tests, leak the pool to satisfy the frame's lifetime.
+    let pool = Box::leak(Box::new(GraphemePool::new()));
+    let mut frame = Frame::new(width, height, pool);
     let area = Rect::new(0, 0, width, height);
     demo.view(&mut frame, area);
     frame
@@ -679,11 +680,16 @@ fn e2e_error_summary_reflects_errors() {
     let frame = render_demo(&demo, 120, 40);
 
     // Check that "Error Summary" appears in the frame
-    let buffer_text: String = (0..40)
-        .flat_map(|y| {
-            (0..120).filter_map(move |x| frame.buffer.get(x, y).and_then(|c| c.content.as_char()))
-        })
-        .collect();
+    let mut buffer_text = String::new();
+    for y in 0..40 {
+        for x in 0..120 {
+            if let Some(cell) = frame.buffer.get(x, y)
+                && let Some(ch) = cell.content.as_char()
+            {
+                buffer_text.push(ch);
+            }
+        }
+    }
 
     assert!(
         buffer_text.contains("Error Summary"),

@@ -16,6 +16,7 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
@@ -23,6 +24,9 @@ use ftui_demo_showcase::app::{AppModel, AppMsg, ScreenId};
 use ftui_render::frame::Frame;
 use ftui_render::grapheme_pool::GraphemePool;
 use ftui_runtime::Model;
+use tracing::field::{Field, Visit};
+use tracing_subscriber::Layer;
+use tracing_subscriber::layer::{Context, SubscriberExt};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -92,6 +96,76 @@ fn chrono_like_timestamp() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("T{n:06}")
+}
+
+// ---------------------------------------------------------------------------
+// Tracing helpers (macro_event capture)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MacroEvent {
+    name: String,
+    reason: Option<String>,
+}
+
+#[derive(Clone, Default)]
+struct MacroEventLog {
+    events: Arc<Mutex<Vec<MacroEvent>>>,
+}
+
+#[derive(Default)]
+struct MacroEventVisitor {
+    name: Option<String>,
+    reason: Option<String>,
+}
+
+impl Visit for MacroEventVisitor {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        match field.name() {
+            "macro_event" => self.name = Some(value.to_string()),
+            "reason" => self.reason = Some(value.to_string()),
+            _ => {}
+        }
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        match field.name() {
+            "macro_event" => {
+                self.name = Some(format!("{value:?}").trim_matches('"').to_string());
+            }
+            "reason" => {
+                self.reason = Some(format!("{value:?}").trim_matches('"').to_string());
+            }
+            _ => {}
+        }
+    }
+}
+
+impl<S> Layer<S> for MacroEventLog
+where
+    S: tracing::Subscriber,
+{
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+        let mut visitor = MacroEventVisitor::default();
+        event.record(&mut visitor);
+        if let Some(name) = visitor.name {
+            self.events.lock().unwrap().push(MacroEvent {
+                name,
+                reason: visitor.reason,
+            });
+        }
+    }
+}
+
+fn capture_macro_events() -> (
+    tracing::dispatcher::DefaultGuard,
+    Arc<Mutex<Vec<MacroEvent>>>,
+) {
+    let log = MacroEventLog::default();
+    let events = log.events.clone();
+    let subscriber = tracing_subscriber::registry().with(log);
+    let guard = tracing::subscriber::set_default(subscriber);
+    (guard, events)
 }
 
 // ===========================================================================
@@ -165,6 +239,7 @@ fn e2e_record_short_macro() {
 #[test]
 fn e2e_record_and_replay() {
     let start = Instant::now();
+    let (_guard, events) = capture_macro_events();
 
     log_jsonl("env", &[("test", "e2e_record_and_replay")]);
 
@@ -224,6 +299,12 @@ fn e2e_record_and_replay() {
             ("frame_hash", &format!("{frame_hash:016x}")),
         ],
     );
+
+    let events = events.lock().unwrap();
+    assert!(events.iter().any(|e| e.name == "recorder_start"));
+    assert!(events.iter().any(|e| e.name == "recorder_stop"));
+    assert!(events.iter().any(|e| e.name == "playback_start"));
+    assert!(events.iter().any(|e| e.name == "playback_stop"));
 }
 
 // ===========================================================================
@@ -290,6 +371,32 @@ fn e2e_speed_adjustment() {
     log_jsonl(
         "low_speed_render",
         &[("frame_hash", &format!("{frame_hash:016x}"))],
+    );
+}
+
+// ===========================================================================
+// Scenario 4: Playback error logging
+// ===========================================================================
+
+#[test]
+fn e2e_playback_error_logs() {
+    let (_guard, events) = capture_macro_events();
+
+    let mut app = AppModel::new();
+    app.update(AppMsg::Resize {
+        width: 120,
+        height: 40,
+    });
+    go_to_macro_recorder(&mut app);
+
+    // Trigger playback with no macro recorded.
+    app.update(AppMsg::ScreenEvent(char_press('p')));
+
+    let events = events.lock().unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|e| e.name == "playback_error" && e.reason.as_deref() == Some("no_macro"))
     );
 }
 

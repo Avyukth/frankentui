@@ -11,10 +11,16 @@
 //!
 //! Run: `cargo test -p ftui-demo-showcase --test macro_recorder_determinism`
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
-use ftui_runtime::input_macro::{InputMacro, MacroMetadata, MacroPlayback, TimedEvent};
+use ftui_runtime::input_macro::{
+    FilteredEventRecorder, InputMacro, MacroMetadata, MacroPlayback, RecordingFilter, TimedEvent,
+};
+use tracing::field::{Field, Visit};
+use tracing_subscriber::Layer;
+use tracing_subscriber::layer::{Context, SubscriberExt};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -76,6 +82,55 @@ fn drain_with_timing(playback: &mut MacroPlayback, step_ms: u64) -> Vec<(Event, 
         }
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// Tracing helpers (macro_event capture)
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Default)]
+struct MacroEventLog {
+    events: Arc<Mutex<Vec<String>>>,
+}
+
+#[derive(Default)]
+struct MacroEventVisitor {
+    event: Option<String>,
+}
+
+impl Visit for MacroEventVisitor {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "macro_event" {
+            self.event = Some(value.to_string());
+        }
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "macro_event" {
+            self.event = Some(format!("{value:?}").trim_matches('"').to_string());
+        }
+    }
+}
+
+impl<S> Layer<S> for MacroEventLog
+where
+    S: tracing::Subscriber,
+{
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+        let mut visitor = MacroEventVisitor::default();
+        event.record(&mut visitor);
+        if let Some(name) = visitor.event {
+            self.events.lock().unwrap().push(name);
+        }
+    }
+}
+
+fn capture_macro_events() -> (tracing::dispatcher::DefaultGuard, Arc<Mutex<Vec<String>>>) {
+    let log = MacroEventLog::default();
+    let events = log.events.clone();
+    let subscriber = tracing_subscriber::registry().with(log);
+    let guard = tracing::subscriber::set_default(subscriber);
+    (guard, events)
 }
 
 // ===========================================================================
@@ -216,6 +271,46 @@ fn timing_drift_within_tolerance() {
             step_ms
         );
     }
+}
+
+// ===========================================================================
+// 10. Diagnostics — tracing event order
+// ===========================================================================
+
+#[test]
+fn tracing_emits_macro_events_in_order() {
+    let (_guard, events) = capture_macro_events();
+
+    let mut recorder = FilteredEventRecorder::new("trace_order", RecordingFilter::keys_only());
+    recorder.start();
+    let event = key('x');
+    recorder.record(&event);
+    let macro_data = recorder.finish();
+
+    let mut playback = MacroPlayback::new(macro_data);
+    let _ = drain_all(&mut playback, 5);
+
+    let events = events.lock().unwrap().clone();
+    let idx_rec_start = events
+        .iter()
+        .position(|e| e == "recorder_start")
+        .expect("recorder_start must be logged");
+    let idx_rec_stop = events
+        .iter()
+        .position(|e| e == "recorder_stop")
+        .expect("recorder_stop must be logged");
+    let idx_play_start = events
+        .iter()
+        .position(|e| e == "playback_start")
+        .expect("playback_start must be logged");
+    let idx_play_stop = events
+        .iter()
+        .position(|e| e == "playback_stop")
+        .expect("playback_stop must be logged");
+
+    assert!(idx_rec_start < idx_rec_stop);
+    assert!(idx_rec_stop < idx_play_start);
+    assert!(idx_play_start < idx_play_stop);
 }
 
 #[test]
