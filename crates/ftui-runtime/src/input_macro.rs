@@ -1661,7 +1661,7 @@ mod tests {
             let mut player = MacroPlayer::new(&m);
             player.replay_all(&mut sim);
 
-            prop_assert_eq!(sim.model().events, expected_events);
+            prop_assert_eq!(sim.model().events.clone(), expected_events);
             prop_assert_eq!(player.elapsed(), total);
         }
     }

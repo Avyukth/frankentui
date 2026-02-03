@@ -205,31 +205,18 @@ Decision remains:
 - If `conf_burst >= tau_burst` OR `p_change >= tau_change` ⇒ regime `B`
 - Else ⇒ regime `S`
 
-### 6.5) BOCPD Evidence Ledger Fields
-Add these fields to the per‑decision log:
-- `r_max`, `p_change`, `top_runlen`, `runlen_entropy`
-- `alpha0`, `beta0`, `lambda_hat`
-- `mean_dv`, `mad_dv`, `b_hat`
-- `mu_v`, `var_v`
-
-### Regime Label + Confidence
-We derive a regime label and confidence from the run-length posterior:
-- **Change probability**: `p_change = P(r_t = 0 | x_1:t)`
-- **Burst confidence**: `conf_burst = P(B | x_1:t)` (from model posterior)
-
-Decision rule:
-- If `conf_burst >= tau_burst` OR `p_change >= tau_change` → label `B`
-- Else → label `S`
-
 Recommended defaults:
 - `tau_burst = 0.70`
 - `tau_change = 0.55`
 
 All thresholds must be logged in the evidence ledger.
 
-### Truncation + Determinism
-We cap run-length support to `R_max` to keep computation bounded.
-Recommended: `R_max = 200` (≈ a few seconds at 60 Hz).
+### 6.5) BOCPD Evidence Ledger Fields
+Add these fields to the per‑decision log:
+- `r_max`, `p_change`, `top_runlen`, `runlen_entropy`
+- `alpha0`, `beta0`, `lambda_hat`
+- `mean_dv`, `mad_dv`, `b_hat`
+- `mu_v`, `var_v`
 
 ---
 
@@ -278,8 +265,9 @@ These are tuning knobs; adjustments must be logged.
 
 ## 8) Anytime-Valid Detection (e-process)
 
-We maintain an e-value to detect storm regimes without invalidating
-stopping rules:
+We maintain an **e-value** to detect storm regimes with **optional stopping**
+guarantees (i.e., we can stop or trigger at any time without inflating
+false‑alarm risk).
 
 ```
 Initialize e_0 = 1
@@ -287,14 +275,81 @@ For each event t:
   update e_t = e_{t-1} * f(x_t) / g(x_t)
 ```
 
-Where `f` is the likelihood under storm, `g` under steady.
-When `e_t >= 1/alpha`, we can safely declare storm mode (optional stopping
-is valid).
+Where `f` is the likelihood under storm, `g` under steady. Under the null
+(steady regime), `E[e_t] <= 1` for all `t`. Thus, **anytime-valid** detection:
+
+```
+Trigger storm if e_t >= 1 / alpha
+```
+
+This yields a false‑alarm bound `<= alpha`, **regardless of stopping time**.
+
+### 8.1) Log‑Space Update (Deterministic + Stable)
+To avoid underflow/overflow, we compute in log‑space:
+
+```
+log_e_0 = 0
+log_lr_t = log f(x_t) - log g(x_t)
+log_e_t = clamp(log_e_{t-1} + log_lr_t, log_e_min, log_e_max)
+e_t = exp(log_e_t)
+```
+
+Where `clamp` is deterministic and `log_e_max` prevents numeric blow‑ups.
+We also **clip likelihoods** to floors:
+
+```
+f(x_t) = max(f(x_t), f_floor)
+g(x_t) = max(g(x_t), g_floor)
+```
+
+This keeps `log_lr_t` bounded and deterministic across platforms.
+
+### 8.2) Decision Rule + Hysteresis
+We treat the e‑value as **sufficient evidence** for storm mode:
+
+- Enter storm if `log_e_t >= log(1/alpha)`.
+- Exit storm only after `log_e_t <= log(e_exit)` for `cooldown_frames`.
+
+We **do not** reset `e_t` on exit. If we want decay, it must be explicit and
+logged as `e_decay_lambda`.
+
+### 8.3) Integration with BOCPD + Posterior
+Storm mode can be triggered by any of:
+
+```
+conf_burst >= tau_burst  OR
+p_change >= tau_change   OR
+log_e_t >= log(1/alpha)
+```
+
+The e‑process provides **anytime validity**, while BOCPD/posterior provide
+model‑based context. If they disagree, the scheduler logs the **evidence
+ledger** fields below to justify the action.
+
+### 8.4) Evidence Ledger Fields (Required)
+Per decision, log:
+
+- `log_e`, `e_value`
+- `log_lr_t`, `f_floor`, `g_floor`
+- `alpha`, `e_exit`, `log_e_max`, `log_e_min`
+- `storm_e_triggered` (bool)
+
+These fields make the decision rule explainable and auditable.
 
 ### Recommended Defaults
 - `alpha = 0.05`
-- `storm_mode` entered when `e_t >= 20`
+- `log_e_max = 20`, `log_e_min = -20`
+- `f_floor = 1e-8`, `g_floor = 1e-8`
+- `storm_mode` entered when `e_t >= 20` (i.e., `log_e >= log(20)`)
 - `storm_mode` exited when `e_t <= 1` for `cooldown_frames`
+
+### 8.5) Tests / Validation (Anytime‑Valid)
+- **Optional stopping**: simulate variable‑length sequences under steady
+  and verify empirical false‑alarm `<= alpha`.
+- **Adversarial orderings**: permute steady sequences; decision must remain
+  bounded and deterministic.
+- **Monotonic evidence**: if `log_lr_t` is consistently positive, `log_e_t`
+  should be non‑decreasing until it hits `log_e_max`.
 
 ---
 
