@@ -59,6 +59,8 @@ pub enum MarkupError {
     EmptyTag { position: usize },
     /// Malformed tag syntax.
     MalformedTag { position: usize },
+    /// Nesting depth limit exceeded.
+    DepthLimitExceeded { position: usize },
 }
 
 impl std::fmt::Display for MarkupError {
@@ -100,6 +102,9 @@ impl std::fmt::Display for MarkupError {
             }
             Self::MalformedTag { position } => {
                 write!(f, "malformed tag at position {}", position)
+            }
+            Self::DepthLimitExceeded { position } => {
+                write!(f, "nesting depth limit exceeded at position {}", position)
             }
         }
     }
@@ -311,6 +316,10 @@ impl MarkupParser {
         value: Option<&str>,
         position: usize,
     ) -> Result<(), MarkupError> {
+        if self.style_stack.len() >= 50 {
+            return Err(MarkupError::DepthLimitExceeded { position });
+        }
+
         // Apply the new style to get the delta
         let style_delta = self.apply_tag(name, value, position)?;
 

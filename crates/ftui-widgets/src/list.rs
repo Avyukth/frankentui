@@ -340,7 +340,8 @@ impl MeasurableWidget for ListItem<'_> {
             .lines()
             .first()
             .map(|line| line.width())
-            .unwrap_or(0) as u16;
+            .unwrap_or(0)
+            .min(u16::MAX as usize) as u16;
 
         let total_width = marker_width
             .saturating_add(space_after_marker)

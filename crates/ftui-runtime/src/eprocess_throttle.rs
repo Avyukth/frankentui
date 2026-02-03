@@ -240,7 +240,7 @@ impl EProcessThrottle {
     /// Create a new throttle at a specific time (for deterministic testing).
     pub fn new_at(config: ThrottleConfig, now: Instant) -> Self {
         let mu_0 = config.mu_0.clamp(MU_0_MIN, MU_0_MAX);
-        let lambda_max = 1.0 / (1.0 - mu_0) - 1e-6;
+        let lambda_max = 1.0 / mu_0 - 1e-6;
         let lambda = config.initial_lambda.clamp(1e-6, lambda_max);
         let threshold = 1.0 / config.alpha.max(1e-12);
 
@@ -363,7 +363,7 @@ impl EProcessThrottle {
     /// different selectivity). Resets the e-process.
     pub fn set_mu_0(&mut self, mu_0: f64) {
         self.mu_0 = mu_0.clamp(MU_0_MIN, MU_0_MAX);
-        self.lambda_max = 1.0 / (1.0 - self.mu_0) - 1e-6;
+        self.lambda_max = 1.0 / self.mu_0 - 1e-6;
         self.lambda = self.lambda.clamp(1e-6, self.lambda_max);
         self.reset();
     }

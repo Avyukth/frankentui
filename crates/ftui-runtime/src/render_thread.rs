@@ -108,7 +108,9 @@ fn render_loop<W: Write + Send>(
     rx: mpsc::Receiver<OutMsg>,
     err_tx: mpsc::SyncSender<io::Error>,
 ) {
+    let mut loop_count: u64 = 0;
     loop {
+        loop_count += 1;
         let first = match rx.recv() {
             Ok(msg) => msg,
             Err(_) => return,
@@ -181,6 +183,11 @@ fn render_loop<W: Write + Send>(
                     return;
                 }
             }
+        }
+
+        // Periodic grapheme pool GC
+        if loop_count % 1000 == 0 {
+            writer.gc();
         }
 
         if shutdown {

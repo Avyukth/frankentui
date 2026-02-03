@@ -140,14 +140,14 @@ impl<'a> Table<'a> {
 
         if let Some(header) = header {
             for (i, cell) in header.cells.iter().enumerate().take(col_count) {
-                let cell_width = cell.width() as u16;
+                let cell_width = cell.width().min(u16::MAX as usize) as u16;
                 col_widths[i] = col_widths[i].max(cell_width);
             }
         }
 
         for row in rows {
             for (i, cell) in row.cells.iter().enumerate().take(col_count) {
-                let cell_width = cell.width() as u16;
+                let cell_width = cell.width().min(u16::MAX as usize) as u16;
                 col_widths[i] = col_widths[i].max(cell_width);
             }
         }
@@ -505,17 +505,8 @@ impl<'a> StatefulWidget for Table<'a> {
         let column_rects = flex.split_with_measurer(
             Rect::new(table_area.x, table_area.y, table_area.width, 1),
             |idx, _| {
-                let mut width = 0;
-                if let Some(header) = &self.header
-                    && let Some(cell) = header.cells.get(idx)
-                {
-                    width = width.max(cell.width() as u16);
-                }
-                for row in &self.rows {
-                    if let Some(cell) = row.cells.get(idx) {
-                        width = width.max(cell.width() as u16);
-                    }
-                }
+                // Use cached intrinsic widths instead of re-iterating rows
+                let width = self.intrinsic_col_widths.get(idx).copied().unwrap_or(0);
                 ftui_layout::LayoutSizeHint::exact(width)
             },
         );

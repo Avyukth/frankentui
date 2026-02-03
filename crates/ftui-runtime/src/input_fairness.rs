@@ -329,7 +329,7 @@ impl InputFairnessGuard {
         }
 
         FairnessDecision {
-            should_process: true,
+            should_process: !yield_to_input,
             pending_input_latency: pending_latency,
             reason,
             yield_to_input,

@@ -314,6 +314,12 @@ fn move_word_left_in_line(text: &str, grapheme_idx: usize) -> usize {
     if pos == 0 {
         return 0;
     }
+    while pos > 0 && grapheme_class(graphemes[pos - 1]) == GraphemeClass::Space {
+        pos = pos.saturating_sub(1);
+    }
+    if pos == 0 {
+        return 0;
+    }
     let target = grapheme_class(graphemes[pos - 1]);
     while pos > 0 && grapheme_class(graphemes[pos - 1]) == target {
         pos = pos.saturating_sub(1);
@@ -328,8 +334,17 @@ fn move_word_right_in_line(text: &str, grapheme_idx: usize) -> usize {
     if pos >= max {
         return max;
     }
+    if grapheme_class(graphemes[pos]) == GraphemeClass::Space {
+        while pos < max && grapheme_class(graphemes[pos]) == GraphemeClass::Space {
+            pos = pos.saturating_add(1);
+        }
+        return pos;
+    }
     let target = grapheme_class(graphemes[pos]);
     while pos < max && grapheme_class(graphemes[pos]) == target {
+        pos = pos.saturating_add(1);
+    }
+    while pos < max && grapheme_class(graphemes[pos]) == GraphemeClass::Space {
         pos = pos.saturating_add(1);
     }
     pos
@@ -687,7 +702,7 @@ mod tests {
         let nav = CursorNavigator::new(&r);
         let pos = nav.from_line_grapheme(0, 0);
         let moved = nav.move_word_right(pos);
-        assert_eq!(moved.grapheme, 5); // end of "hello"
+        assert_eq!(moved.grapheme, 6); // start of "world"
     }
 
     #[test]
