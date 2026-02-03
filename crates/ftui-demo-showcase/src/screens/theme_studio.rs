@@ -1282,8 +1282,8 @@ impl Screen for ThemeStudioDemo {
 mod tests {
     use super::*;
     use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn press(code: KeyCode) -> Event {
         Event::Key(KeyEvent {
@@ -1671,22 +1671,20 @@ mod tests {
 
     #[test]
     fn diagnostic_entry_checksum_deterministic() {
-        let entry1 =
-            DiagnosticEntry::new(DiagnosticEventKind::ThemeExported, 10)
-                .with_focus("presets")
-                .with_preset("Solar")
-                .with_preset_index(2)
-                .with_export_bytes(120)
-                .with_context("json")
-                .with_checksum();
-        let entry2 =
-            DiagnosticEntry::new(DiagnosticEventKind::ThemeExported, 10)
-                .with_focus("presets")
-                .with_preset("Solar")
-                .with_preset_index(2)
-                .with_export_bytes(120)
-                .with_context("json")
-                .with_checksum();
+        let entry1 = DiagnosticEntry::new(DiagnosticEventKind::ThemeExported, 10)
+            .with_focus("presets")
+            .with_preset("Solar")
+            .with_preset_index(2)
+            .with_export_bytes(120)
+            .with_context("json")
+            .with_checksum();
+        let entry2 = DiagnosticEntry::new(DiagnosticEventKind::ThemeExported, 10)
+            .with_focus("presets")
+            .with_preset("Solar")
+            .with_preset_index(2)
+            .with_export_bytes(120)
+            .with_context("json")
+            .with_checksum();
         assert_eq!(entry1.checksum, entry2.checksum);
         assert_ne!(entry1.checksum, 0);
     }
@@ -1698,8 +1696,14 @@ mod tests {
         demo.update(&press(KeyCode::Down));
         let log = demo.diagnostic_log().expect("diagnostic log should exist");
         assert!(!log.entries().is_empty());
-        assert!(!log.entries_of_kind(DiagnosticEventKind::FocusChanged).is_empty());
-        assert!(!log.entries_of_kind(DiagnosticEventKind::TokenChanged).is_empty());
+        assert!(
+            !log.entries_of_kind(DiagnosticEventKind::FocusChanged)
+                .is_empty()
+        );
+        assert!(
+            !log.entries_of_kind(DiagnosticEventKind::TokenChanged)
+                .is_empty()
+        );
     }
 
     #[test]
