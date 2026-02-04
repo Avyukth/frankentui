@@ -72,9 +72,8 @@ use std::borrow::Cow;
 use std::io::{self, Write};
 
 use ftui_style::Style;
-use ftui_text::Segment;
+use ftui_text::{Segment, display_width, grapheme_width};
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 #[cfg(test)]
 use ftui_render::cell::PackedRgba;
@@ -204,7 +203,7 @@ impl CapturedLine {
     /// Get the total display width.
     #[must_use]
     pub fn width(&self) -> usize {
-        self.segments.iter().map(|s| s.text.width()).sum()
+        self.segments.iter().map(|s| display_width(&s.text)).sum()
     }
 }
 
@@ -240,7 +239,7 @@ impl ConsoleBuffer {
     }
 
     fn push(&mut self, text: &str, style: Style) {
-        let width = text.width();
+        let width = display_width(text);
         self.segments.push(BufferSegment {
             text: text.to_string(),
             style,
@@ -418,7 +417,7 @@ impl Console {
                 break;
             }
 
-            let word_width = word.width();
+            let word_width = display_width(word);
 
             if word_width <= remaining_width {
                 // Word fits on current line
@@ -624,7 +623,7 @@ fn split_next_word(text: &str) -> (&str, &str) {
 ///
 /// Returns (fits, overflow) where `fits.width() <= max_width`.
 fn split_at_width(text: &str, max_width: usize) -> (&str, &str) {
-    if text.width() <= max_width {
+    if display_width(text) <= max_width {
         return (text, "");
     }
 
@@ -632,7 +631,7 @@ fn split_at_width(text: &str, max_width: usize) -> (&str, &str) {
     let mut split_idx = 0;
 
     for grapheme in text.graphemes(true) {
-        let g_width = grapheme.width();
+        let g_width = grapheme_width(grapheme);
         if width + g_width > max_width {
             break;
         }

@@ -424,7 +424,7 @@ impl Form {
             .iter()
             .enumerate()
             .map(|(i, f)| {
-                let mut width = unicode_width::UnicodeWidthStr::width(f.label()) as u16;
+                let mut width = display_width(f.label()) as u16;
                 if self.is_required(i) {
                     width = width.saturating_add(2); // " *"
                 }
@@ -1069,8 +1069,7 @@ impl StatefulWidget for Form {
 
                 let label = field.label();
                 let label_space = label_w.saturating_sub(2);
-                let label_width =
-                    unicode_width::UnicodeWidthStr::width(label).min(label_space as usize) as u16;
+                let label_width = display_width(label).min(label_space as usize) as u16;
                 let can_show_required =
                     self.is_required(i) && label_width.saturating_add(2) <= label_space;
                 draw_str(frame, area.x, y, label, label_style, label_space);
@@ -1363,8 +1362,8 @@ impl StatefulWidget for ConfirmDialog {
 
         let yes_str = format!("[ {} ]", self.yes_label);
         let no_str = format!("[ {} ]", self.no_label);
-        let yes_w = unicode_width::UnicodeWidthStr::width(yes_str.as_str());
-        let no_w = unicode_width::UnicodeWidthStr::width(no_str.as_str());
+        let yes_w = display_width(yes_str.as_str());
+        let no_w = display_width(no_str.as_str());
         let total_btn_width = yes_w + 2 + no_w;
         let start_x = area
             .x
@@ -1422,7 +1421,7 @@ fn draw_str(frame: &mut Frame, x: u16, y: u16, s: &str, style: Style, max_width:
         if col >= max_width {
             break;
         }
-        let w = unicode_width::UnicodeWidthStr::width(grapheme) as u16;
+        let w = grapheme_width(grapheme) as u16;
         if w == 0 {
             continue;
         }
@@ -1455,11 +1454,23 @@ fn grapheme_count(s: &str) -> usize {
     unicode_segmentation::UnicodeSegmentation::graphemes(s, true).count()
 }
 
+/// Display width of a single grapheme cluster.
+fn grapheme_width(grapheme: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(grapheme)
+}
+
+/// Display width of a string in terminal cells.
+fn display_width(s: &str) -> usize {
+    unicode_segmentation::UnicodeSegmentation::graphemes(s, true)
+        .map(grapheme_width)
+        .sum()
+}
+
 /// Compute the display width (cells) of the first `grapheme_count` graphemes.
 fn grapheme_display_width(s: &str, grapheme_count: usize) -> usize {
     unicode_segmentation::UnicodeSegmentation::graphemes(s, true)
         .take(grapheme_count)
-        .map(unicode_width::UnicodeWidthStr::width)
+        .map(grapheme_width)
         .sum()
 }
 

@@ -24,7 +24,7 @@ use ftui_render::cell::{Cell, CellContent};
 use ftui_render::frame::Frame;
 use ftui_style::Style;
 use ftui_text::graphemes;
-use unicode_width::UnicodeWidthChar;
+use unicode_width::UnicodeWidthStr;
 
 /// The kind of a file entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -352,11 +352,7 @@ impl FilePicker {
 
 /// Calculate grapheme cluster width in terminal cells.
 fn grapheme_width(grapheme: &str) -> usize {
-    grapheme
-        .chars()
-        .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
-        .max()
-        .unwrap_or(0)
+    UnicodeWidthStr::width(grapheme)
 }
 
 /// Calculate display width for a string using grapheme clusters.

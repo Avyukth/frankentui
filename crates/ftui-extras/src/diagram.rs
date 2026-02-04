@@ -39,7 +39,7 @@
 //! 4. Iterates until alignment converges
 
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 // ---------------------------------------------------------------------------
 // Box-Drawing Character Detection
@@ -132,7 +132,7 @@ pub fn char_width(c: char) -> usize {
 #[inline]
 #[must_use]
 pub fn grapheme_width(grapheme: &str) -> usize {
-    grapheme.chars().map(char_width).max().unwrap_or(0)
+    UnicodeWidthStr::width(grapheme)
 }
 
 /// Calculate the visual width of a string in terminal columns.

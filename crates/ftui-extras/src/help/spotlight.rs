@@ -27,6 +27,14 @@ use ftui_widgets::Widget;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+fn grapheme_width(grapheme: &str) -> usize {
+    UnicodeWidthStr::width(grapheme)
+}
+
+fn display_width(text: &str) -> usize {
+    text.graphemes(true).map(grapheme_width).sum()
+}
+
 /// Spotlight configuration.
 #[derive(Debug, Clone)]
 pub struct SpotlightConfig {
@@ -252,7 +260,7 @@ impl Spotlight {
             let mut current_width: usize = 0;
 
             for word in paragraph.split_whitespace() {
-                let word_width = UnicodeWidthStr::width(word);
+                let word_width = display_width(word);
 
                 if current_width == 0 {
                     current_line = word.to_string();
@@ -300,7 +308,7 @@ impl Spotlight {
         let max_line_width = title_lines
             .iter()
             .chain(content_lines.iter())
-            .map(|l| UnicodeWidthStr::width(l.as_str()))
+            .map(|l| display_width(l.as_str()))
             .max()
             .unwrap_or(0);
 
@@ -505,7 +513,7 @@ impl Spotlight {
         let mut width_used = 0usize;
 
         for grapheme in text.graphemes(true) {
-            let w = UnicodeWidthStr::width(grapheme);
+            let w = grapheme_width(grapheme);
             if w == 0 {
                 continue;
             }
@@ -648,7 +656,7 @@ mod tests {
 
         for line in &lines {
             assert!(
-                UnicodeWidthStr::width(line.as_str()) <= 15,
+                display_width(line.as_str()) <= 15,
                 "Line too wide: {:?}",
                 line
             );

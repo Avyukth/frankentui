@@ -27,6 +27,14 @@ use ftui_widgets::Widget;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+fn grapheme_width(grapheme: &str) -> usize {
+    UnicodeWidthStr::width(grapheme)
+}
+
+fn display_width(text: &str) -> usize {
+    text.graphemes(true).map(grapheme_width).sum()
+}
+
 /// Tooltip positioning strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TooltipPosition {
@@ -174,7 +182,7 @@ impl Tooltip {
             let mut current_width: usize = 0;
 
             for word in paragraph.split_whitespace() {
-                let word_width = UnicodeWidthStr::width(word);
+                let word_width = display_width(word);
 
                 if current_width == 0 {
                     // First word on line
@@ -210,7 +218,7 @@ impl Tooltip {
 
         let max_line_width = lines
             .iter()
-            .map(|l| UnicodeWidthStr::width(l.as_str()))
+            .map(|l| display_width(l.as_str()))
             .max()
             .unwrap_or(0);
 
@@ -330,7 +338,7 @@ impl Widget for Tooltip {
 
             let mut x = content_x;
             for grapheme in line.graphemes(true) {
-                let w = UnicodeWidthStr::width(grapheme);
+                let w = grapheme_width(grapheme);
                 if w == 0 {
                     continue;
                 }
@@ -533,7 +541,7 @@ mod tests {
         let lines = tooltip.wrap_content();
         for line in &lines {
             assert!(
-                UnicodeWidthStr::width(line.as_str()) <= 18, // 20 - 2 padding
+                display_width(line.as_str()) <= 18, // 20 - 2 padding
                 "Line should fit within max_width minus padding: {:?}",
                 line
             );
