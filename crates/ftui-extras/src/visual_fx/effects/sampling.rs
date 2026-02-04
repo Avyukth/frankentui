@@ -463,6 +463,76 @@ impl MetaballFieldSampler {
         Self { balls }
     }
 
+    /// Sample the metaball field from a slice of balls (no allocation).
+    ///
+    /// This is useful for callers that already own a ball buffer and want to
+    /// avoid cloning it just to sample.
+    #[inline]
+    pub fn sample_field_from_slice(
+        balls: &[BallState],
+        x: f64,
+        y: f64,
+        quality: FxQuality,
+    ) -> (f64, f64) {
+        if quality == FxQuality::Off || balls.is_empty() {
+            return (0.0, 0.0);
+        }
+
+        // Determine step based on quality
+        let step = match quality {
+            FxQuality::Full => 1,
+            FxQuality::Reduced => {
+                if balls.len() > 4 {
+                    4
+                } else {
+                    1
+                }
+            }
+            FxQuality::Minimal => {
+                if balls.len() > 2 {
+                    2
+                } else {
+                    1
+                }
+            }
+            FxQuality::Off => return (0.0, 0.0),
+        };
+
+        const EPS: f64 = 1e-8;
+        let mut sum = 0.0;
+        let mut weighted_hue = 0.0;
+        let mut total_weight = 0.0;
+
+        for (i, ball) in balls.iter().enumerate() {
+            if step > 1 && i % step != 0 {
+                continue;
+            }
+
+            let dx = x - ball.x;
+            let dy = y - ball.y;
+            let dist_sq = dx * dx + dy * dy;
+
+            if dist_sq > EPS {
+                let contrib = ball.r2 / dist_sq;
+                sum += contrib;
+                weighted_hue += ball.hue * contrib;
+                total_weight += contrib;
+            } else {
+                sum += 100.0;
+                weighted_hue += ball.hue * 100.0;
+                total_weight += 100.0;
+            }
+        }
+
+        let avg_hue = if total_weight > EPS {
+            weighted_hue / total_weight
+        } else {
+            0.0
+        };
+
+        (sum, avg_hue)
+    }
+
     /// Update the ball states.
     pub fn set_balls(&mut self, balls: Vec<BallState>) {
         self.balls = balls;
@@ -481,65 +551,7 @@ impl MetaballFieldSampler {
     /// - `weighted_hue`: Contribution-weighted average hue
     #[inline]
     pub fn sample_field(&self, x: f64, y: f64, quality: FxQuality) -> (f64, f64) {
-        if quality == FxQuality::Off || self.balls.is_empty() {
-            return (0.0, 0.0);
-        }
-
-        // Determine step based on quality
-        let step = match quality {
-            FxQuality::Full => 1,
-            FxQuality::Reduced => {
-                if self.balls.len() > 4 {
-                    4
-                } else {
-                    1
-                }
-            }
-            FxQuality::Minimal => {
-                if self.balls.len() > 2 {
-                    2
-                } else {
-                    1
-                }
-            }
-            FxQuality::Off => return (0.0, 0.0),
-        };
-
-        const EPS: f64 = 1e-8;
-        let mut sum = 0.0;
-        let mut weighted_hue = 0.0;
-        let mut total_weight = 0.0;
-
-        for (i, ball) in self.balls.iter().enumerate() {
-            // Skip balls based on quality
-            if step > 1 && i % step != 0 {
-                continue;
-            }
-
-            let dx = x - ball.x;
-            let dy = y - ball.y;
-            let dist_sq = dx * dx + dy * dy;
-
-            if dist_sq > EPS {
-                let contrib = ball.r2 / dist_sq;
-                sum += contrib;
-                weighted_hue += ball.hue * contrib;
-                total_weight += contrib;
-            } else {
-                // Near-singularity: high contribution
-                sum += 100.0;
-                weighted_hue += ball.hue * 100.0;
-                total_weight += 100.0;
-            }
-        }
-
-        let avg_hue = if total_weight > EPS {
-            weighted_hue / total_weight
-        } else {
-            0.0
-        };
-
-        (sum, avg_hue)
+        Self::sample_field_from_slice(&self.balls, x, y, quality)
     }
 }
 

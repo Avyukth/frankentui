@@ -135,6 +135,7 @@ else
     run_suite "mouse_sgr"  "$SCRIPT_DIR/test_mouse_sgr.sh"
     run_suite "resize"     "$SCRIPT_DIR/test_resize_scroll_region.sh"
     run_suite "mux"        "$SCRIPT_DIR/test_mux.sh"
+    run_suite "schedule_trace" "$SCRIPT_DIR/test_schedule_trace.sh"
 
     # Demo screen E2E tests (bd-11ck.4)
     if [[ -x "$SCRIPT_DIR/test_action_timeline.sh" ]]; then

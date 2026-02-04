@@ -578,6 +578,8 @@ pub fn accent_for(id: ScreenId) -> theme::ColorToken {
         ScreenId::AccessibilityPanel => theme::screen_accent::ADVANCED,
         ScreenId::WidgetBuilder => theme::screen_accent::WIDGET_GALLERY,
         ScreenId::CommandPaletteLab => theme::screen_accent::ADVANCED,
+        ScreenId::HyperlinkPlayground => theme::screen_accent::ADVANCED,
+        ScreenId::DeterminismLab => theme::screen_accent::PERFORMANCE,
     }
 }
 

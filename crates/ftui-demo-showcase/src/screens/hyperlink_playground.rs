@@ -71,11 +71,11 @@ const LINK_ENTRIES: [LinkEntry; 5] = [
 ];
 
 #[derive(Debug, Clone, Copy)]
-struct LinkLayout {
-    rect: Rect,
-    index: usize,
-    link_id: u32,
-    hit_id: HitId,
+pub struct LinkLayout {
+    pub rect: Rect,
+    pub index: usize,
+    pub link_id: u32,
+    pub hit_id: HitId,
 }
 
 pub struct HyperlinkPlayground {
@@ -191,11 +191,11 @@ impl HyperlinkPlayground {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                if let Some(idx) = self.hit_test(mouse.x, mouse.y) {
-                    if let Some(link) = self.links.get(idx) {
-                        self.last_action = Some(format!("Activated {} (Mouse)", link.label));
-                        self.log_event("mouse_activate", idx, "ok");
-                    }
+                if let Some(idx) = self.hit_test(mouse.x, mouse.y)
+                    && let Some(link) = self.links.get(idx)
+                {
+                    self.last_action = Some(format!("Activated {} (Mouse)", link.label));
+                    self.log_event("mouse_activate", idx, "ok");
                 }
             }
             _ => {}
@@ -376,7 +376,10 @@ impl HyperlinkPlayground {
             ]));
             detail_lines.push(Line::from_spans([
                 Span::styled("Hit: ", theme::muted()),
-                Span::styled(format!("id={hit_id} region=Link data={link_id}"), theme::body()),
+                Span::styled(
+                    format!("id={hit_id} region=Link data={link_id}"),
+                    theme::body(),
+                ),
             ]));
             detail_lines.push(Line::from_spans([
                 Span::styled("OSC 8 open: ", theme::muted()),
@@ -413,9 +416,10 @@ impl HyperlinkPlayground {
             .render(detail_area, frame);
 
         let mut registry_lines = Vec::new();
-        registry_lines.push(Line::from_spans([
-            Span::styled("Registry map", theme::subtitle()),
-        ]));
+        registry_lines.push(Line::from_spans([Span::styled(
+            "Registry map",
+            theme::subtitle(),
+        )]));
         for layout in layouts.iter() {
             if let Some(link) = self.links.get(layout.index) {
                 registry_lines.push(Line::from_spans([
@@ -477,7 +481,7 @@ impl Screen for HyperlinkPlayground {
         }
 
         let cols = Flex::horizontal()
-            .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+            .constraints([Constraint::Percentage(45.0), Constraint::Percentage(55.0)])
             .split(body);
 
         self.render_links(frame, cols[0]);

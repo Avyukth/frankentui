@@ -57,6 +57,7 @@ use crate::input_fairness::{FairnessEventType, InputFairnessGuard};
 use crate::input_macro::{EventRecorder, InputMacro};
 use crate::locale::LocaleContext;
 use crate::queueing_scheduler::{EstimateSource, QueueingScheduler, SchedulerConfig, WeightSource};
+use crate::render_trace::RenderTraceConfig;
 use crate::resize_coalescer::{CoalesceAction, CoalescerConfig, ResizeCoalescer};
 use crate::state_persistence::StateRegistry;
 use crate::subscription::SubscriptionManager;
@@ -573,6 +574,8 @@ pub struct ProgramConfig {
     pub diff_config: RuntimeDiffConfig,
     /// Evidence JSONL sink configuration.
     pub evidence_sink: EvidenceSinkConfig,
+    /// Render-trace recorder configuration.
+    pub render_trace: RenderTraceConfig,
     /// Conformal predictor configuration for frame-time risk gating.
     pub conformal_config: Option<ConformalConfig>,
     /// Locale context used for rendering.
@@ -609,6 +612,7 @@ impl Default for ProgramConfig {
             budget: FrameBudgetConfig::default(),
             diff_config: RuntimeDiffConfig::default(),
             evidence_sink: EvidenceSinkConfig::default(),
+            render_trace: RenderTraceConfig::default(),
             conformal_config: None,
             locale_context: LocaleContext::global(),
             poll_timeout: Duration::from_millis(100),
@@ -676,6 +680,12 @@ impl ProgramConfig {
     /// Set the evidence JSONL sink configuration.
     pub fn with_evidence_sink(mut self, config: EvidenceSinkConfig) -> Self {
         self.evidence_sink = config;
+        self
+    }
+
+    /// Set the render-trace recorder configuration.
+    pub fn with_render_trace(mut self, config: RenderTraceConfig) -> Self {
+        self.render_trace = config;
         self
     }
 
@@ -1487,6 +1497,19 @@ impl<M: Model> Program<M, Stdout> {
         let evidence_sink = EvidenceSink::from_config(&config.evidence_sink)?;
         if let Some(ref sink) = evidence_sink {
             writer = writer.with_evidence_sink(sink.clone());
+        }
+
+        let render_trace = crate::RenderTraceRecorder::from_config(
+            &config.render_trace,
+            crate::RenderTraceContext {
+                capabilities: writer.capabilities(),
+                diff_config: config.diff_config.clone(),
+                resize_config: config.resize_coalescer.clone(),
+                conformal_config: config.conformal_config.clone(),
+            },
+        )?;
+        if let Some(recorder) = render_trace {
+            writer = writer.with_render_trace(recorder);
         }
 
         // Get terminal size for initial frame
@@ -2585,6 +2608,12 @@ impl<M: Model> AppBuilder<M> {
     /// Set the evidence JSONL sink configuration.
     pub fn with_evidence_sink(mut self, config: EvidenceSinkConfig) -> Self {
         self.config.evidence_sink = config;
+        self
+    }
+
+    /// Set the render-trace recorder configuration.
+    pub fn with_render_trace(mut self, config: RenderTraceConfig) -> Self {
+        self.config.render_trace = config;
         self
     }
 

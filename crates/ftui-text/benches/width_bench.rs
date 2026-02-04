@@ -1,10 +1,10 @@
-//! Benchmarks for Unicode width calculation (bd-16k)
+//! Benchmarks for display width calculation (bd-16k)
 //!
 //! Run with: cargo bench -p ftui-text
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use ftui_text::display_width;
 use std::hint::black_box;
-use unicode_width::UnicodeWidthStr;
 
 // =============================================================================
 // Test Data
@@ -71,7 +71,7 @@ fn bench_ascii_width(c: &mut Criterion) {
         let text = ascii_text(len);
         group.throughput(Throughput::Bytes(text.len() as u64));
         group.bench_with_input(BenchmarkId::from_parameter(len), &text, |b, text| {
-            b.iter(|| black_box(text.width()))
+            b.iter(|| black_box(display_width(text)))
         });
     }
 
@@ -85,7 +85,7 @@ fn bench_cjk_width(c: &mut Criterion) {
         let text = cjk_text(len);
         group.throughput(Throughput::Bytes(text.len() as u64));
         group.bench_with_input(BenchmarkId::from_parameter(len), &text, |b, text| {
-            b.iter(|| black_box(text.width()))
+            b.iter(|| black_box(display_width(text)))
         });
     }
 
@@ -99,7 +99,7 @@ fn bench_mixed_width(c: &mut Criterion) {
         let text = mixed_text(len);
         group.throughput(Throughput::Bytes(text.len() as u64));
         group.bench_with_input(BenchmarkId::from_parameter(len), &text, |b, text| {
-            b.iter(|| black_box(text.width()))
+            b.iter(|| black_box(display_width(text)))
         });
     }
 
@@ -113,7 +113,7 @@ fn bench_emoji_width(c: &mut Criterion) {
         let text = emoji_text(len);
         group.throughput(Throughput::Bytes(text.len() as u64));
         group.bench_with_input(BenchmarkId::from_parameter(len), &text, |b, text| {
-            b.iter(|| black_box(text.width()))
+            b.iter(|| black_box(display_width(text)))
         });
     }
 
@@ -127,7 +127,7 @@ fn bench_combining_width(c: &mut Criterion) {
         let text = combining_text(len);
         group.throughput(Throughput::Bytes(text.len() as u64));
         group.bench_with_input(BenchmarkId::from_parameter(len), &text, |b, text| {
-            b.iter(|| black_box(text.width()))
+            b.iter(|| black_box(display_width(text)))
         });
     }
 
@@ -141,7 +141,7 @@ fn bench_zwj_width(c: &mut Criterion) {
         let text = zwj_text(count);
         group.throughput(Throughput::Bytes(text.len() as u64));
         group.bench_with_input(BenchmarkId::from_parameter(count), &text, |b, text| {
-            b.iter(|| black_box(text.width()))
+            b.iter(|| black_box(display_width(text)))
         });
     }
 
@@ -159,7 +159,7 @@ fn bench_cache_vs_direct(c: &mut Criterion) {
     group.bench_function("direct", |b| {
         b.iter(|| {
             for s in &test_strings {
-                black_box(s.width());
+                black_box(display_width(s));
             }
         })
     });

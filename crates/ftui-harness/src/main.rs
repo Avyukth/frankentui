@@ -33,6 +33,7 @@
 
 use std::cell::RefCell;
 use std::io::{self, Read, Write};
+use std::path::Path;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -53,7 +54,7 @@ use ftui_runtime::TelemetryConfig;
 use ftui_runtime::locale::{Locale, LocaleContext, detect_system_locale, set_locale};
 use ftui_runtime::{
     Cmd, ConformalConfig, Every, EvidenceSinkConfig, Model, Program, ProgramConfig, ScreenMode,
-    Subscription,
+    Subscription, TaskSpec,
 };
 use ftui_style::Style;
 use ftui_text::WrapMode;
@@ -118,6 +119,8 @@ struct AgentHarness {
     locale_switch_ticks: Option<u32>,
     /// Target locale to switch to after the countdown.
     locale_switch_target: Option<Locale>,
+    /// Whether effect-queue tasks have been enqueued.
+    effect_queue_seeded: bool,
 }
 
 /// Messages for the agent harness.
@@ -175,6 +178,9 @@ enum HarnessView {
     WidgetInput,
     WidgetInspector,
     WidgetBudget,
+    SpanDiff,
+    #[allow(dead_code)]
+    EffectQueue,
     LocaleContext,
 }
 
@@ -358,6 +364,7 @@ impl AgentHarness {
             locale_override,
             locale_switch_ticks,
             locale_switch_target,
+            effect_queue_seeded: false,
         }
     }
 
@@ -654,7 +661,10 @@ impl Model for AgentHarness {
     type Message = Msg;
 
     fn init(&mut self) -> Cmd<Self::Message> {
-        // No initial commands
+        if matches!(self.view_mode, HarnessView::EffectQueue) && !self.effect_queue_seeded {
+            self.effect_queue_seeded = true;
+            return self.seed_effect_queue_cmd();
+        }
         Cmd::None
     }
 
@@ -786,6 +796,8 @@ impl Model for AgentHarness {
             HarnessView::WidgetInput => self.view_widget_input(frame),
             HarnessView::WidgetInspector => self.view_widget_inspector(frame),
             HarnessView::WidgetBudget => self.view_widget_budget(frame),
+            HarnessView::SpanDiff => self.view_span_diff(frame),
+            HarnessView::EffectQueue => self.view_effect_queue(frame),
             HarnessView::LocaleContext => self.view_locale_context(frame),
         }
     }
@@ -883,6 +895,72 @@ impl AgentHarness {
             let mut spinner_state = self.spinner_state.clone();
             StatefulWidget::render(&spinner, spinner_area, frame, &mut spinner_state);
         }
+    }
+
+    fn span_positions(frame_idx: u16, width: u16, height: u16) -> [(u16, u16); 4] {
+        let w = width.max(1);
+        let h = height.max(1);
+        let band = w.saturating_sub(8).max(1);
+        let base = frame_idx.wrapping_mul(3) % band;
+        let x0 = base.saturating_add(2).min(w.saturating_sub(1));
+        let x1 = x0.saturating_add(3).min(w.saturating_sub(1));
+        let x2 = x0.saturating_add(5).min(w.saturating_sub(1));
+        let row_a = (h / 3).min(h.saturating_sub(1));
+        let row_b = (h.saturating_mul(2) / 3).min(h.saturating_sub(1));
+        [(x0, row_a), (x1, row_a), (x0, row_b), (x2, row_b)]
+    }
+
+    fn view_span_diff(&self, frame: &mut Frame) {
+        self.apply_theme_base(frame);
+        frame.buffer.clear_dirty();
+
+        let width = frame.buffer.width();
+        let height = frame.buffer.height();
+        if width == 0 || height == 0 {
+            return;
+        }
+
+        let frame_idx = self.spinner_state.current_frame as u16;
+        let prev_idx = frame_idx.wrapping_sub(1);
+        let prev_positions = Self::span_positions(prev_idx, width, height);
+        let curr_positions = Self::span_positions(frame_idx, width, height);
+
+        for (x, y) in prev_positions {
+            frame.buffer.set_raw(x, y, Cell::default());
+        }
+
+        for (x, y) in curr_positions {
+            frame.buffer.set_raw(x, y, Cell::from_char('X'));
+        }
+    }
+
+    fn seed_effect_queue_cmd(&self) -> Cmd<Msg> {
+        let jobs = [
+            ("high_weight_short", 5.0_f64, 20.0_f64),
+            ("mid_weight_mid", 2.0_f64, 50.0_f64),
+            ("low_weight_long", 1.0_f64, 120.0_f64),
+            ("high_weight_long", 4.0_f64, 200.0_f64),
+        ];
+
+        let mut cmds = Vec::new();
+        for (name, weight, estimate_ms) in jobs {
+            let spec = TaskSpec::new(weight, estimate_ms).with_name(name);
+            let label = format!("EffectQueue done: {name}");
+            cmds.push(Cmd::task_with_spec(spec, move || Msg::LogLine(label)));
+        }
+
+        Cmd::Batch(cmds)
+    }
+
+    fn view_effect_queue(&self, frame: &mut Frame) {
+        let area = Rect::from_size(frame.buffer.width(), frame.buffer.height());
+        let text = [
+            "Effect Queue Scheduling",
+            "Enqueued tasks: high/medium/low weights",
+            "Check evidence JSONL for effect_queue_select ordering",
+        ]
+        .join("\n");
+        Paragraph::new(text).render(area, frame);
     }
 
     fn render_label_block(&self, frame: &mut Frame, area: Rect, title: &str, body: &str) {
@@ -1520,6 +1598,26 @@ fn main() -> std::io::Result<()> {
         return Ok(());
     }
 
+    if let Ok(trace_path) = std::env::var("FTUI_HARNESS_REPLAY_TRACE") {
+        match ftui_harness::trace_replay::replay_trace(Path::new(&trace_path)) {
+            Ok(summary) => {
+                eprintln!(
+                    "trace replay OK: frames={} last_checksum={}",
+                    summary.frames,
+                    summary
+                        .last_checksum
+                        .map(|v| format!("{v:016x}"))
+                        .unwrap_or_else(|| "none".to_string())
+                );
+                return Ok(());
+            }
+            Err(err) => {
+                eprintln!("trace replay failed: {err}");
+                std::process::exit(2);
+            }
+        }
+    }
+
     let input_mode = std::env::var("FTUI_HARNESS_INPUT_MODE")
         .unwrap_or_else(|_| "runtime".to_string())
         .to_ascii_lowercase();
@@ -1588,6 +1686,7 @@ fn main() -> std::io::Result<()> {
         "widget-input" | "widget_input" | "input" => HarnessView::WidgetInput,
         "widget-inspector" | "widget_inspector" | "inspector" => HarnessView::WidgetInspector,
         "widget-budget" | "widget_budget" | "budget" => HarnessView::WidgetBudget,
+        "span-diff" | "span_diff" | "span" => HarnessView::SpanDiff,
         "locale-context" | "locale_context" | "locale" => HarnessView::LocaleContext,
         _ => HarnessView::Default,
     };

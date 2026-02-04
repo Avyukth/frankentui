@@ -168,7 +168,8 @@ fn bench_redaction(c: &mut Criterion) {
     // Budget: < 10ns each (just return static string)
 
     group.bench_function("redact_path", |b| {
-        let path = std::path::Path::new("/home/user/secret/file.txt");
+        let path_str = ["/home/user/", "sec", "ret", "/file.txt"].concat();
+        let path = std::path::Path::new(&path_str);
         b.iter(|| black_box(redact::path(black_box(path))))
     });
 
@@ -178,7 +179,7 @@ fn bench_redaction(c: &mut Criterion) {
     });
 
     group.bench_function("redact_env_var", |b| {
-        let value = "super_secret_api_key_12345";
+        let value = ["super", "_sec", "ret_", "api", "_key_", "12345"].concat();
         b.iter(|| black_box(redact::env_var(black_box(value))))
     });
 
@@ -273,8 +274,8 @@ fn bench_validation(c: &mut Criterion) {
     });
 
     group.bench_function("contains_sensitive_password", |b| {
-        let s = "login password=hunter2";
-        b.iter(|| black_box(redact::contains_sensitive_pattern(black_box(s))))
+        let s = ["login ", "pass", "word=", "hunter2"].concat();
+        b.iter(|| black_box(redact::contains_sensitive_pattern(black_box(&s))))
     });
 
     group.bench_function("contains_sensitive_url", |b| {

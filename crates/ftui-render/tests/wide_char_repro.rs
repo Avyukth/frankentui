@@ -85,9 +85,7 @@ fn repro_redundant_cup_after_wide_char() {
         found_cup
     };
 
-    if has_cup {
-        panic!("Found redundant CUP sequence: {:?}", output_str);
-    }
+    assert!(!has_cup, "Found redundant CUP sequence: {:?}", output_str);
 
     // Verify 'A' is present in output
     assert!(

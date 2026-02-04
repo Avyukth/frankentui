@@ -150,6 +150,8 @@ struct FpsInputState {
     back: bool,
     strafe_left: bool,
     strafe_right: bool,
+    turn_left: bool,
+    turn_right: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -735,16 +737,18 @@ fn palette_cyberpunk(t: f64) -> PackedRgba {
 fn palette_doom_wall(idx: usize) -> PackedRgba {
     // Muted browns/greys reminiscent of classic Doom E1M1.
     const PALETTE: &[(u8, u8, u8)] = &[
-        (48, 40, 32),
-        (72, 56, 40),
-        (96, 72, 48),
-        (120, 88, 56),
-        (80, 80, 80),
-        (110, 110, 110),
-        (92, 64, 40),
-        (140, 100, 64),
-        (160, 120, 80),
-        (70, 58, 46),
+        (48, 32, 20),
+        (72, 48, 30),
+        (96, 64, 40),
+        (120, 84, 54),
+        (64, 64, 64),
+        (96, 96, 96),
+        (80, 56, 34),
+        (136, 96, 58),
+        (168, 120, 72),
+        (88, 64, 44),
+        (110, 78, 50),
+        (140, 100, 62),
     ];
     let (r, g, b) = PALETTE[idx % PALETTE.len()];
     PackedRgba::rgb(r, g, b)
@@ -752,13 +756,61 @@ fn palette_doom_wall(idx: usize) -> PackedRgba {
 
 fn palette_quake_stone(t: f64) -> PackedRgba {
     let t = t.clamp(0.0, 1.0);
-    // Cool blue-grey stone gradient (Quake-ish).
-    let (r, g, b) = if t < 0.5 {
-        let s = t / 0.5;
-        lerp_rgb((30, 34, 38), (74, 82, 90), s)
+    // Quake palette approximation (muddy browns + stone greys).
+    let c1 = (40, 36, 32);
+    let c2 = (70, 64, 56);
+    let c3 = (108, 100, 90);
+    let c4 = (92, 86, 80);
+
+    let (r, g, b) = if t < 0.33 {
+        let s = t / 0.33;
+        lerp_rgb(c1, c2, s)
+    } else if t < 0.66 {
+        let s = (t - 0.33) / 0.33;
+        lerp_rgb(c2, c3, s)
     } else {
-        let s = (t - 0.5) / 0.5;
-        lerp_rgb((74, 82, 90), (130, 140, 150), s)
+        let s = (t - 0.66) / 0.34;
+        lerp_rgb(c3, c4, s)
+    };
+    PackedRgba::rgb(r, g, b)
+}
+
+fn palette_quake_floor(t: f64) -> PackedRgba {
+    let t = t.clamp(0.0, 1.0);
+    let c1 = (44, 36, 30);
+    let c2 = (72, 60, 48);
+    let c3 = (100, 86, 66);
+    let c4 = (82, 72, 58);
+
+    let (r, g, b) = if t < 0.33 {
+        let s = t / 0.33;
+        lerp_rgb(c1, c2, s)
+    } else if t < 0.66 {
+        let s = (t - 0.33) / 0.33;
+        lerp_rgb(c2, c3, s)
+    } else {
+        let s = (t - 0.66) / 0.34;
+        lerp_rgb(c3, c4, s)
+    };
+    PackedRgba::rgb(r, g, b)
+}
+
+fn palette_quake_ceiling(t: f64) -> PackedRgba {
+    let t = t.clamp(0.0, 1.0);
+    let c1 = (28, 30, 36);
+    let c2 = (50, 54, 62);
+    let c3 = (76, 82, 94);
+    let c4 = (58, 62, 70);
+
+    let (r, g, b) = if t < 0.33 {
+        let s = t / 0.33;
+        lerp_rgb(c1, c2, s)
+    } else if t < 0.66 {
+        let s = (t - 0.33) / 0.33;
+        lerp_rgb(c2, c3, s)
+    } else {
+        let s = (t - 0.66) / 0.34;
+        lerp_rgb(c3, c4, s)
     };
     PackedRgba::rgb(r, g, b)
 }
@@ -2776,11 +2828,12 @@ impl SpinLatticeState {
 
 const DOOM_FOV: f32 = 1.2;
 const DOOM_WALL_HEIGHT: f32 = 128.0;
-const DOOM_GRAVITY: f32 = -4.0;
-const DOOM_JUMP_VELOCITY: f32 = 38.0;
-const DOOM_COLLISION_RADIUS: f32 = 18.0;
-const DOOM_MOVE_STEP: f32 = 14.0;
-const DOOM_STRAFE_STEP: f32 = 12.0;
+const DOOM_GRAVITY: f32 = -4.2;
+const DOOM_JUMP_VELOCITY: f32 = 40.0;
+const DOOM_COLLISION_RADIUS: f32 = 20.0;
+const DOOM_MOVE_STEP: f32 = 2.8;
+const DOOM_STRAFE_STEP: f32 = 2.4;
+const DOOM_TURN_RATE: f32 = 0.07;
 
 #[derive(Debug, Clone)]
 struct DoomPlayer {
@@ -2813,6 +2866,8 @@ struct DoomE1M1State {
     time: f32,
     fire_flash: f32,
     player: DoomPlayer,
+    walk_phase: f32,
+    walk_intensity: f32,
 }
 
 impl Default for DoomE1M1State {
@@ -2821,6 +2876,8 @@ impl Default for DoomE1M1State {
             time: 0.0,
             fire_flash: 0.0,
             player: DoomPlayer::default(),
+            walk_phase: 0.0,
+            walk_intensity: 0.0,
         }
     }
 }
@@ -2846,12 +2903,22 @@ impl DoomE1M1State {
         let dx = amount * self.player.yaw.cos();
         let dy = amount * self.player.yaw.sin();
         self.try_move(dx, dy);
+        let stride = amount.abs();
+        if stride > 0.0 {
+            self.walk_phase += stride * 0.08;
+            self.walk_intensity = (self.walk_intensity + stride * 0.02).min(1.0);
+        }
     }
 
     fn strafe(&mut self, amount: f32) {
         let dx = amount * (self.player.yaw + std::f32::consts::FRAC_PI_2).cos();
         let dy = amount * (self.player.yaw + std::f32::consts::FRAC_PI_2).sin();
         self.try_move(dx, dy);
+        let stride = amount.abs();
+        if stride > 0.0 {
+            self.walk_phase += stride * 0.07;
+            self.walk_intensity = (self.walk_intensity + stride * 0.018).min(1.0);
+        }
     }
 
     fn try_move(&mut self, dx: f32, dy: f32) {
@@ -2891,6 +2958,7 @@ impl DoomE1M1State {
         if self.fire_flash > 0.0 {
             self.fire_flash = (self.fire_flash - 0.12).max(0.0);
         }
+        self.walk_intensity *= 0.88;
         if !self.player.grounded {
             self.player.vel_z += DOOM_GRAVITY * 0.1;
             self.player.jump_z += self.player.vel_z * 0.1;
@@ -2955,10 +3023,39 @@ impl DoomE1M1State {
         let w = width as f32;
         let h = height as f32;
         let half_h = h * 0.5;
-        let pitch_offset = -self.player.pitch * (h * 0.35);
+        let pitch_offset = -self.player.pitch * (h * 0.4);
         let jump_offset = self.player.jump_z * 0.2;
-        let center_y = half_h + pitch_offset + jump_offset;
-        let proj_scale = h * 0.9;
+        let bob = (self.walk_phase).sin() * (2.0 + self.walk_intensity * 3.2);
+        let mut center_y = half_h + pitch_offset + jump_offset + bob;
+        center_y = center_y.clamp(0.0, (height.saturating_sub(1)) as f32);
+        let proj_scale = h * 0.95;
+
+        // Paint a subtle Doom-like sky/floor gradient under the walls.
+        let horizon = center_y.round() as i32;
+        let max_y = height as i32 - 1;
+        let sky_top = (16, 18, 26);
+        let sky_bottom = (52, 46, 58);
+        let floor_top = (42, 30, 22);
+        let floor_bottom = (12, 10, 8);
+        for py in (0..=max_y).step_by(2) {
+            let (r, g, b) = if py <= horizon {
+                let denom = horizon.max(1) as f64;
+                let t = (py as f64 / denom).clamp(0.0, 1.0);
+                lerp_rgb(sky_top, sky_bottom, t)
+            } else {
+                let denom = (max_y - horizon).max(1) as f64;
+                let t = ((py - horizon) as f64 / denom).clamp(0.0, 1.0);
+                lerp_rgb(floor_top, floor_bottom, t)
+            };
+            for px in (0..width as i32).step_by(2) {
+                let jitter = ((px + py + frame as i32) & 3) as f32;
+                let shade = 0.88 + jitter * 0.03;
+                let rr = (r as f32 * shade).clamp(0.0, 255.0) as u8;
+                let gg = (g as f32 * shade).clamp(0.0, 255.0) as u8;
+                let bb = (b as f32 * shade).clamp(0.0, 255.0) as u8;
+                painter.point_colored(px, py, PackedRgba::rgb(rr, gg, bb));
+            }
+        }
 
         for px in (0..width as usize).step_by(stride) {
             let x = px as f32;
@@ -2990,14 +3087,19 @@ impl DoomE1M1State {
                 brightness = (brightness + self.fire_flash * 0.35).min(1.3);
             }
 
-            let stripe = ((hit_u * 16.0).floor() as i32 & 1) as f32;
-            let stripe_boost = if stripe == 0.0 { 0.9 } else { 1.08 };
+            let tex_band = ((hit_u * 32.0).floor() as i32) & 3;
+            let tex_boost = match tex_band {
+                0 => 0.86,
+                1 => 0.98,
+                2 => 1.06,
+                _ => 1.14,
+            };
 
             let grain =
                 (((px as u64).wrapping_mul(113) ^ (frame.wrapping_mul(131)) ^ hit_idx as u64) & 7)
                     as f32
-                    / 90.0;
-            brightness = (brightness * stripe_boost + grain).clamp(0.08, 1.25);
+                    / 80.0;
+            brightness = (brightness * tex_boost + grain).clamp(0.08, 1.3);
 
             let r = (base.r() as f32 * brightness).min(255.0) as u8;
             let g = (base.g() as f32 * brightness).min(255.0) as u8;
@@ -3052,6 +3154,21 @@ impl DoomE1M1State {
         let cross_color = PackedRgba::rgb(cross_r, 240, 240);
         painter.line_colored(cx - 3, cy, cx + 3, cy, Some(cross_color));
         painter.line_colored(cx, cy - 2, cx, cy + 2, Some(cross_color));
+
+        // Simple weapon silhouette at the bottom to sell the FPS vibe.
+        if height > 6 {
+            let gun_y = height as i32 - 3;
+            let gun_x = cx - 8;
+            let gun_color = PackedRgba::rgb(70, 54, 38);
+            let gun_high = PackedRgba::rgb(110, 90, 60);
+            painter.line_colored(gun_x, gun_y, gun_x + 16, gun_y, Some(gun_color));
+            painter.line_colored(gun_x + 3, gun_y - 1, gun_x + 13, gun_y - 1, Some(gun_high));
+            painter.line_colored(gun_x + 5, gun_y - 2, gun_x + 11, gun_y - 2, Some(gun_color));
+            if flash > 0.0 {
+                let flash_color = PackedRgba::rgb((240.0 * flash + 120.0) as u8, 200, 120);
+                painter.line_colored(cx - 1, gun_y - 4, cx + 1, gun_y - 4, Some(flash_color));
+            }
+        }
     }
 }
 
@@ -3119,11 +3236,13 @@ impl core::ops::Mul<f32> for Vec3 {
 }
 
 const QUAKE_EYE_HEIGHT: f32 = 0.18;
-const QUAKE_GRAVITY: f32 = -0.28;
-const QUAKE_JUMP_VELOCITY: f32 = 0.22;
-const QUAKE_COLLISION_RADIUS: f32 = 0.06;
-const QUAKE_MOVE_STEP: f32 = 0.07;
-const QUAKE_STRAFE_STEP: f32 = 0.06;
+const QUAKE_GRAVITY: f32 = -0.34;
+const QUAKE_JUMP_VELOCITY: f32 = 0.24;
+const QUAKE_COLLISION_RADIUS: f32 = 0.075;
+const QUAKE_FOV: f32 = 1.5;
+const QUAKE_MOVE_STEP: f32 = 0.012;
+const QUAKE_STRAFE_STEP: f32 = 0.01;
+const QUAKE_TURN_RATE: f32 = 0.055;
 
 #[derive(Debug, Clone, Copy)]
 struct WallSeg {
@@ -3200,6 +3319,8 @@ struct QuakeE1M1State {
     depth: Vec<f32>,
     depth_w: u16,
     depth_h: u16,
+    walk_phase: f32,
+    walk_intensity: f32,
 }
 
 impl Default for QuakeE1M1State {
@@ -3219,6 +3340,8 @@ impl Default for QuakeE1M1State {
             depth: Vec::new(),
             depth_w: 0,
             depth_h: 0,
+            walk_phase: 0.0,
+            walk_intensity: 0.0,
         };
         state.player.pos = state.pick_spawn();
         state
@@ -3402,6 +3525,11 @@ impl QuakeE1M1State {
         let dx = cy * amount;
         let dy = sy * amount;
         self.try_move(dx, dy);
+        let stride = amount.abs();
+        if stride > 0.0 {
+            self.walk_phase += stride * 7.0;
+            self.walk_intensity = (self.walk_intensity + stride * 0.6).min(1.0);
+        }
     }
 
     fn strafe(&mut self, amount: f32) {
@@ -3409,6 +3537,11 @@ impl QuakeE1M1State {
         let dx = -sy * amount;
         let dy = cy * amount;
         self.try_move(dx, dy);
+        let stride = amount.abs();
+        if stride > 0.0 {
+            self.walk_phase += stride * 6.0;
+            self.walk_intensity = (self.walk_intensity + stride * 0.5).min(1.0);
+        }
     }
 
     fn try_move(&mut self, dx: f32, dy: f32) {
@@ -3452,6 +3585,7 @@ impl QuakeE1M1State {
         if self.fire_flash > 0.0 {
             self.fire_flash = (self.fire_flash - 0.1).max(0.0);
         }
+        self.walk_intensity *= 0.86;
 
         let ground = self.ground_eye_height(self.player.pos.x, self.player.pos.y);
         if self.player.grounded {
@@ -3512,7 +3646,12 @@ impl QuakeE1M1State {
         let w = width as f32;
         let h = height as f32;
         let center = Vec3::new(w * 0.5, h * 0.5, 0.0);
-        let eye = self.player.pos;
+        let bob = (self.walk_phase).sin() * (0.015 + self.walk_intensity * 0.025);
+        let eye = Vec3::new(
+            self.player.pos.x,
+            self.player.pos.y,
+            self.player.pos.z + bob,
+        );
 
         let (sy, cy) = self.player.yaw.sin_cos();
         let (sp, cp) = self.player.pitch.sin_cos();
@@ -3522,10 +3661,38 @@ impl QuakeE1M1State {
 
         let light_dir = Vec3::new(0.3, -0.45, 0.85).normalized();
 
-        let proj_scale = w.min(h) * 0.78;
-        let near = 0.06f32;
-        let far = 5.0f32;
+        let proj_scale = (w.min(h) * 0.5) / (QUAKE_FOV * 0.5).tan();
+        let near = 0.04f32;
+        let far = 6.0f32;
         let fog_color = PackedRgba::rgb(18, 20, 24);
+
+        let horizon = (h * 0.5 - self.player.pitch * (h * 0.35) + bob * proj_scale * 0.8)
+            .clamp(0.0, h - 1.0)
+            .round() as i32;
+        let max_y = height as i32 - 1;
+        let sky_top = (12, 14, 20);
+        let sky_bottom = (30, 34, 46);
+        let floor_top = (44, 38, 30);
+        let floor_bottom = (16, 12, 10);
+        for py in (0..=max_y).step_by(2) {
+            let (r, g, b) = if py <= horizon {
+                let denom = horizon.max(1) as f64;
+                let t = (py as f64 / denom).clamp(0.0, 1.0);
+                lerp_rgb(sky_top, sky_bottom, t)
+            } else {
+                let denom = (max_y - horizon).max(1) as f64;
+                let t = ((py - horizon) as f64 / denom).clamp(0.0, 1.0);
+                lerp_rgb(floor_top, floor_bottom, t)
+            };
+            for px in (0..width as i32).step_by(2) {
+                let jitter = ((px * 3 + py * 5 + frame as i32) & 3) as f32;
+                let shade = 0.86 + jitter * 0.04;
+                let rr = (r as f32 * shade).clamp(0.0, 255.0) as u8;
+                let gg = (g as f32 * shade).clamp(0.0, 255.0) as u8;
+                let bb = (b as f32 * shade).clamp(0.0, 255.0) as u8;
+                painter.point_colored(px, py, PackedRgba::rgb(rr, gg, bb));
+            }
+        }
 
         let inv_scale = 1.0 / 1024.0;
         let tri_step = match quality {
@@ -3571,9 +3738,24 @@ impl QuakeE1M1State {
 
             let height_span = (self.bounds_max.z - self.bounds_min.z).max(0.001);
             let height_t = ((w0.z - self.bounds_min.z) / height_span).clamp(0.0, 1.0);
-            let base = palette_quake_stone(height_t as f64);
-            let ambient = 0.2f32;
-            let light = (ambient + diffuse * 0.9 + rim).clamp(0.0, 1.2);
+            let is_floor = n.z > 0.55;
+            let is_ceiling = n.z < -0.55;
+            let base = if is_floor {
+                palette_quake_floor(height_t as f64)
+            } else if is_ceiling {
+                palette_quake_ceiling(height_t as f64)
+            } else {
+                palette_quake_stone(height_t as f64)
+            };
+            let ambient = if is_floor {
+                0.28
+            } else if is_ceiling {
+                0.18
+            } else {
+                0.22
+            };
+            let diffuse_scale = if is_floor || is_ceiling { 0.75 } else { 0.9 };
+            let light = (ambient + diffuse * diffuse_scale + rim).clamp(0.0, 1.2);
 
             let cam0 = Vec3::new(
                 (w0 - eye).dot(right),
@@ -3645,14 +3827,31 @@ impl QuakeE1M1State {
                         }
                         self.depth[idx] = z;
 
+                        let wx = w0.x * b0 + w1.x * b1 + w2.x * b2;
+                        let wy = w0.y * b0 + w1.y * b1 + w2.y * b2;
+                        let wz = w0.z * b0 + w1.z * b1 + w2.z * b2;
+
                         let fog = ((z - near) / (far - near)).clamp(0.0, 1.0);
                         let fade = (1.0 - fog).powf(1.55);
+                        let pattern = if is_floor {
+                            let tile =
+                                ((wx / 0.35).floor() as i32 + (wy / 0.35).floor() as i32) & 1;
+                            if tile == 0 { 0.92 } else { 1.05 }
+                        } else if is_ceiling {
+                            let tile =
+                                ((wx / 0.45).floor() as i32 + (wy / 0.45).floor() as i32) & 1;
+                            if tile == 0 { 0.95 } else { 1.03 }
+                        } else {
+                            let stripe =
+                                ((wx / 0.25).floor() as i32 + (wz / 0.18).floor() as i32) & 1;
+                            if stripe == 0 { 0.9 } else { 1.08 }
+                        };
                         let grain = (((px as u64).wrapping_mul(73856093)
                             ^ (py as u64).wrapping_mul(19349663)
                             ^ frame)
                             & 3) as f32
                             / 22.0;
-                        let mut brightness = (light * fade + grain).clamp(0.0, 1.0);
+                        let mut brightness = (light * fade * pattern + grain).clamp(0.0, 1.0);
                         if self.fire_flash > 0.0 {
                             brightness = (brightness + self.fire_flash * 0.35).min(1.25);
                         }
@@ -3719,6 +3918,20 @@ impl QuakeE1M1State {
         let cross = PackedRgba::rgb(cross_r, 240, 240);
         painter.line_colored(cx - 3, cy, cx + 3, cy, Some(cross));
         painter.line_colored(cx, cy - 2, cx, cy + 2, Some(cross));
+
+        if height > 7 {
+            let gun_y = height as i32 - 3;
+            let gun_x = cx - 9;
+            let gun_dark = PackedRgba::rgb(58, 54, 52);
+            let gun_mid = PackedRgba::rgb(92, 84, 76);
+            painter.line_colored(gun_x, gun_y, gun_x + 18, gun_y, Some(gun_dark));
+            painter.line_colored(gun_x + 2, gun_y - 1, gun_x + 16, gun_y - 1, Some(gun_mid));
+            painter.line_colored(gun_x + 6, gun_y - 2, gun_x + 12, gun_y - 2, Some(gun_dark));
+            if flash > 0.0 {
+                let flash_color = PackedRgba::rgb((240.0 * flash + 100.0) as u8, 210, 140);
+                painter.line_colored(cx - 2, gun_y - 4, cx + 2, gun_y - 4, Some(flash_color));
+            }
+        }
     }
 }
 
@@ -3875,7 +4088,7 @@ impl Default for VisualEffectsScreen {
             markdown_panel,
             fps_input: FpsInputState::default(),
             fps_last_mouse: None,
-            fps_mouse_sensitivity: 0.018,
+            fps_mouse_sensitivity: 0.014,
         }
     }
 }
@@ -3924,9 +4137,7 @@ impl VisualEffectsScreen {
         let mut forward = (self.fps_input.forward as i8 - self.fps_input.back as i8) as f32;
         let mut strafe =
             (self.fps_input.strafe_right as i8 - self.fps_input.strafe_left as i8) as f32;
-        if forward == 0.0 && strafe == 0.0 {
-            return;
-        }
+        let turn = (self.fps_input.turn_right as i8 - self.fps_input.turn_left as i8) as f32;
 
         let mag = (forward * forward + strafe * strafe).sqrt();
         if mag > 1.0 {
@@ -3942,6 +4153,9 @@ impl VisualEffectsScreen {
                 if strafe != 0.0 {
                     self.doom_e1m1.strafe(strafe * DOOM_STRAFE_STEP);
                 }
+                if turn != 0.0 {
+                    self.doom_e1m1.look(turn * DOOM_TURN_RATE, 0.0);
+                }
             }
             EffectType::QuakeE1M1 => {
                 let mut quake = self.quake_e1m1.borrow_mut();
@@ -3950,6 +4164,9 @@ impl VisualEffectsScreen {
                 }
                 if strafe != 0.0 {
                     quake.strafe(strafe * QUAKE_STRAFE_STEP);
+                }
+                if turn != 0.0 {
+                    quake.look(turn * QUAKE_TURN_RATE, 0.0);
                 }
             }
             _ => {}
@@ -3968,19 +4185,11 @@ impl VisualEffectsScreen {
                 EffectType::QuakeE1M1 => self.quake_e1m1.borrow_mut().jump(),
                 _ => {}
             },
-            KeyCode::Left => {
+            KeyCode::Char('[') | KeyCode::Left => {
                 let effect = self.effect.prev();
                 self.switch_effect(effect);
             }
-            KeyCode::Right => {
-                let effect = self.effect.next();
-                self.switch_effect(effect);
-            }
-            KeyCode::Char('[') => {
-                let effect = self.effect.prev();
-                self.switch_effect(effect);
-            }
-            KeyCode::Char(']') => {
+            KeyCode::Char(']') | KeyCode::Right => {
                 let effect = self.effect.next();
                 self.switch_effect(effect);
             }
@@ -4569,7 +4778,7 @@ impl Screen for VisualEffectsScreen {
         );
         let header_text = if self.is_fps_effect() {
             format!(
-                " {} │ WASD move │ Mouse look │ Space jump │ Click fire │ ←/→ switch │ [t] Text FX{}",
+                " {} │ WASD move │ Mouse look │ Space jump │ Click fire │ ←/→ Switch │ [t] Text FX{}",
                 self.effect.name(),
                 fps_stats
             )
@@ -4596,7 +4805,11 @@ impl Screen for VisualEffectsScreen {
         // Reuse cached painter (grow-only) and render all effects at sub-pixel resolution.
         {
             let area_cells = canvas_area.width as usize * canvas_area.height as usize;
-            let quality = FxQuality::from_degradation_with_area(frame.degradation, area_cells);
+            let mut quality = FxQuality::from_degradation_with_area(frame.degradation, area_cells);
+            if self.is_fps_effect() && matches!(quality, FxQuality::Off) {
+                // FPS effects are the main attraction here; never drop to Off.
+                quality = FxQuality::Minimal;
+            }
             self.last_quality.set(quality);
             let theme_inputs = current_fx_theme();
 
@@ -4651,7 +4864,7 @@ impl Screen for VisualEffectsScreen {
                         );
                     }
                     EffectType::Plasma => {
-                        self.plasma_adapter.borrow().fill(
+                        self.plasma_adapter.borrow_mut().fill(
                             &mut painter,
                             self.time,
                             quality,

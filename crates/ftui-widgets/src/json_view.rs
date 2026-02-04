@@ -234,8 +234,8 @@ impl JsonView {
                 }
                 _ => {
                     // Number, boolean, null, or error
-                    let token = read_literal(&mut chars);
-                    let tok = classify_literal(&token);
+                    let literal = read_literal(&mut chars);
+                    let tok = classify_literal(&literal);
                     current_line.push(tok);
                     // Check for comma
                     skip_ws(&mut chars);

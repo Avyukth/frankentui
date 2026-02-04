@@ -41,7 +41,7 @@
 //! // Observe latency deviations
 //! let decision = detector.observe(latency_deviation);
 //! if decision.is_flaky {
-//!     panic!("Flaky test detected!");
+//!     eprintln!("Flaky test detected");
 //! }
 //! ```
 

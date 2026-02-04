@@ -43,8 +43,15 @@ const CHANNEL_CAPACITY: usize = 256;
 #[derive(Debug)]
 pub enum OutMsg {
     Log(Vec<u8>),
-    Render(Buffer),
-    Resize { w: u16, h: u16 },
+    Render {
+        buffer: Buffer,
+        cursor: Option<(u16, u16)>,
+        cursor_visible: bool,
+    },
+    Resize {
+        w: u16,
+        h: u16,
+    },
     SetMode(ScreenMode),
     Shutdown,
 }
@@ -117,7 +124,7 @@ fn render_loop<W: Write + Send>(
         };
 
         let mut logs: Vec<Vec<u8>> = Vec::new();
-        let mut latest_render: Option<Buffer> = None;
+        let mut latest_render: Option<(Buffer, Option<(u16, u16)>, bool)> = None;
         let mut shutdown = false;
 
         process_msg(
@@ -152,8 +159,8 @@ fn render_loop<W: Write + Send>(
         // 3. If we have no logs but have a render, present it.
 
         if logs.is_empty() {
-            if let Some(buffer) = &latest_render
-                && let Err(e) = writer.present_ui(buffer, None, true)
+            if let Some((buffer, cursor, cursor_visible)) = &latest_render
+                && let Err(e) = writer.present_ui(buffer, *cursor, *cursor_visible)
             {
                 let _ = err_tx.try_send(e);
                 return;
@@ -176,8 +183,8 @@ fn render_loop<W: Write + Send>(
                 }
 
                 // Interleaved render
-                if let Some(buffer) = &latest_render
-                    && let Err(e) = writer.present_ui(buffer, None, true)
+                if let Some((buffer, cursor, cursor_visible)) = &latest_render
+                    && let Err(e) = writer.present_ui(buffer, *cursor, *cursor_visible)
                 {
                     let _ = err_tx.try_send(e);
                     return;
@@ -200,7 +207,7 @@ fn render_loop<W: Write + Send>(
 fn process_msg<W: Write>(
     msg: OutMsg,
     logs: &mut Vec<Vec<u8>>,
-    latest_render: &mut Option<Buffer>,
+    latest_render: &mut Option<(Buffer, Option<(u16, u16)>, bool)>,
     writer: &mut TerminalWriter<W>,
     shutdown: &mut bool,
     _err_tx: &mpsc::SyncSender<io::Error>,
@@ -209,8 +216,12 @@ fn process_msg<W: Write>(
         OutMsg::Log(bytes) => {
             logs.push(bytes);
         }
-        OutMsg::Render(buffer) => {
-            *latest_render = Some(buffer);
+        OutMsg::Render {
+            buffer,
+            cursor,
+            cursor_visible,
+        } => {
+            *latest_render = Some((buffer, cursor, cursor_visible));
         }
         OutMsg::Resize { w, h } => {
             writer.set_size(w, h);
@@ -316,7 +327,12 @@ mod tests {
         for msg in logs {
             rt.send(msg).unwrap();
         }
-        rt.send(OutMsg::Render(buf)).unwrap();
+        rt.send(OutMsg::Render {
+            buffer: buf,
+            cursor: None,
+            cursor_visible: true,
+        })
+        .unwrap();
 
         std::thread::sleep(Duration::from_millis(200));
         rt.shutdown();

@@ -691,21 +691,39 @@ fn compare_buffers(expected: &Buffer, actual: &Buffer) -> Option<MismatchInfo> {
 }
 
 fn checksum_buffer(buf: &Buffer) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
+    let mut hash = FNV_OFFSET_BASIS;
     for y in 0..buf.height() {
         for x in 0..buf.width() {
             if let Some(cell) = buf.get(x, y) {
-                cell.content.hash(&mut hasher);
-                cell.fg.hash(&mut hasher);
-                cell.bg.hash(&mut hasher);
-                cell.attrs.hash(&mut hasher);
+                hash = fnv1a64_u32(hash, cell.content.raw());
+                hash = fnv1a64_u32(hash, cell.fg.0);
+                hash = fnv1a64_u32(hash, cell.bg.0);
+                hash = fnv1a64_u32(hash, pack_attrs(cell.attrs));
             }
         }
     }
-    hasher.finish()
+    hash
+}
+
+const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x100000001b3;
+
+fn fnv1a64_u32(hash: u64, v: u32) -> u64 {
+    fnv1a64_bytes(hash, &v.to_le_bytes())
+}
+
+fn fnv1a64_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
+fn pack_attrs(attrs: ftui_render::cell::CellAttrs) -> u32 {
+    let flags = attrs.flags().bits() as u32;
+    let link = attrs.link_id() & 0x00FF_FFFF;
+    (flags << 24) | link
 }
 
 fn push_history(history: &mut VecDeque<u64>, checksum: u64) {

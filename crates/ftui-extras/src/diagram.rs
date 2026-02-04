@@ -38,8 +38,8 @@
 //! 3. Pads shorter lines to align with the longest
 //! 4. Iterates until alignment converges
 
+use unicode_display_width::width as unicode_display_width;
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 // ---------------------------------------------------------------------------
 // Box-Drawing Character Detection
@@ -114,25 +114,53 @@ pub fn is_border_char(c: char) -> bool {
 // Character Width Calculation
 // ---------------------------------------------------------------------------
 
+#[inline]
+fn ascii_display_width(text: &str) -> usize {
+    let mut width = 0;
+    for b in text.bytes() {
+        match b {
+            b'\t' | b'\n' | b'\r' => width += 1,
+            0x20..=0x7E => width += 1,
+            _ => {}
+        }
+    }
+    width
+}
+
 /// Calculate the visual width of a single character in terminal columns.
 ///
-/// Uses the Unicode width standard via the `unicode-width` crate.
+/// Uses Unicode display width via the `unicode-display-width` crate.
 /// Zero-width characters (combining marks, etc.) return 0.
 #[inline]
 #[must_use]
 pub fn char_width(c: char) -> usize {
-    c.width().unwrap_or(0)
+    if matches!(c, '\t' | '\n' | '\r') {
+        return 1;
+    }
+    if is_zero_width_codepoint(c) {
+        return 0;
+    }
+    let mut buf = [0u8; 4];
+    usize::try_from(unicode_display_width(c.encode_utf8(&mut buf)))
+        .expect("unicode display width should fit in usize")
 }
 
 /// Calculate the visual width of a single grapheme cluster.
 ///
 /// Grapheme clusters can contain multiple code points (emoji sequences,
 /// combining marks, etc.). We treat the cluster as a single terminal glyph
-/// whose width is the maximum width of its constituent code points.
+/// using Unicode display width rules.
 #[inline]
 #[must_use]
 pub fn grapheme_width(grapheme: &str) -> usize {
-    UnicodeWidthStr::width(grapheme)
+    if grapheme.is_ascii() {
+        return ascii_display_width(grapheme);
+    }
+    if grapheme.chars().all(is_zero_width_codepoint) {
+        return 0;
+    }
+    usize::try_from(unicode_display_width(grapheme))
+        .expect("unicode display width should fit in usize")
 }
 
 /// Calculate the visual width of a string in terminal columns.
@@ -143,11 +171,32 @@ pub fn grapheme_width(grapheme: &str) -> usize {
 /// - Emoji ZWJ/flag sequences: 2 columns (cluster width, not sum of code points)
 #[must_use]
 pub fn visual_width(s: &str) -> usize {
-    if s.is_ascii() {
+    if s.is_ascii() && s.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
         return s.len();
     }
+    if s.is_ascii() {
+        return ascii_display_width(s);
+    }
 
+    if !s.chars().any(is_zero_width_codepoint) {
+        return usize::try_from(unicode_display_width(s))
+            .expect("unicode display width should fit in usize");
+    }
     s.graphemes(true).map(grapheme_width).sum()
+}
+
+#[inline]
+fn is_zero_width_codepoint(c: char) -> bool {
+    let u = c as u32;
+    matches!(u, 0x0000..=0x001F | 0x007F..=0x009F)
+        || matches!(u, 0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF)
+        || matches!(u, 0xFE20..=0xFE2F)
+        || matches!(u, 0xFE00..=0xFE0F | 0xE0100..=0xE01EF)
+        || matches!(
+            u,
+            0x00AD | 0x034F | 0x180E | 0x200B | 0x200C | 0x200D | 0x200E | 0x200F | 0x2060 | 0xFEFF
+        )
+        || matches!(u, 0x202A..=0x202E | 0x2066..=0x2069 | 0x206A..=0x206F)
 }
 
 // ---------------------------------------------------------------------------

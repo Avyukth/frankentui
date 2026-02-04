@@ -111,7 +111,7 @@ impl WidthCache {
     /// Get cached width or compute and cache it.
     ///
     /// If the text is in the cache, returns the cached width.
-    /// Otherwise, computes the width using `unicode_width` and caches it.
+    /// Otherwise, computes the width using `display_width` and caches it.
     #[inline]
     pub fn get_or_compute(&mut self, text: &str) -> usize {
         self.get_or_compute_with(text, crate::display_width)
@@ -1196,14 +1196,13 @@ impl TinyLfuWidthCache {
 mod proptests {
     use super::*;
     use proptest::prelude::*;
-    use unicode_width::UnicodeWidthStr;
 
     proptest! {
         #[test]
         fn cached_width_matches_direct(s in "[a-zA-Z0-9 ]{1,50}") {
             let mut cache = WidthCache::new(100);
             let cached = cache.get_or_compute(&s);
-            let direct = s.width();
+            let direct = crate::display_width(&s);
             prop_assert_eq!(cached, direct);
         }
 
@@ -1810,16 +1809,15 @@ impl Lcg {
 mod property_cache_equivalence {
     use super::*;
     use proptest::prelude::*;
-    use unicode_width::UnicodeWidthStr;
 
     proptest! {
         #[test]
         fn tinylfu_cached_equals_computed(s in "[a-zA-Z0-9 ]{1,80}") {
             let mut cache = TinyLfuWidthCache::new(200);
             let cached = cache.get_or_compute(&s);
-            let direct = s.width();
+            let direct = crate::display_width(&s);
             prop_assert_eq!(cached, direct,
-                "TinyLFU returned {} but UnicodeWidthStr says {} for {:?}", cached, direct, s);
+                "TinyLFU returned {} but display_width says {} for {:?}", cached, direct, s);
         }
 
         #[test]

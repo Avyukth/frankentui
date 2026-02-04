@@ -73,29 +73,31 @@ fn scan_row_changes_range(
     // Process full blocks
     for block_idx in 0..blocks {
         let base = block_idx * BLOCK_SIZE;
+        let base_x = x_offset + base as u16;
         let old_block = &old_row[base..base + BLOCK_SIZE];
         let new_block = &new_row[base..base + BLOCK_SIZE];
 
         // Compare each cell and push changes directly (unrolled for BLOCK_SIZE=4).
         if !old_block[0].bits_eq(&new_block[0]) {
-            changes.push((x_offset + base as u16, y));
+            changes.push((base_x, y));
         }
         if !old_block[1].bits_eq(&new_block[1]) {
-            changes.push((x_offset + base as u16 + 1, y));
+            changes.push((base_x + 1, y));
         }
         if !old_block[2].bits_eq(&new_block[2]) {
-            changes.push((x_offset + base as u16 + 2, y));
+            changes.push((base_x + 2, y));
         }
         if !old_block[3].bits_eq(&new_block[3]) {
-            changes.push((x_offset + base as u16 + 3, y));
+            changes.push((base_x + 3, y));
         }
     }
 
     // Process remainder cells
     let rem_base = blocks * BLOCK_SIZE;
+    let rem_base_x = x_offset + rem_base as u16;
     for i in 0..remainder {
         if !old_row[rem_base + i].bits_eq(&new_row[rem_base + i]) {
-            changes.push((x_offset + (rem_base + i) as u16, y));
+            changes.push((rem_base_x + i as u16, y));
         }
     }
 }
@@ -1974,6 +1976,135 @@ mod tests {
             stats.fallback.is_none(),
             "tile path should be used for sparse tiles"
         );
+    }
+
+    fn lcg_next(state: &mut u64) -> u64 {
+        *state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        *state
+    }
+
+    fn apply_random_changes(buf: &mut Buffer, seed: u64, count: usize) {
+        let width = buf.width().max(1) as u64;
+        let height = buf.height().max(1) as u64;
+        let mut state = seed;
+        for i in 0..count {
+            let v = lcg_next(&mut state);
+            let x = (v % width) as u16;
+            let y = ((v >> 32) % height) as u16;
+            let ch = char::from_u32(('A' as u32) + ((i as u32) % 26)).unwrap();
+            buf.set_raw(x, y, Cell::from_char(ch));
+        }
+    }
+
+    fn tile_diag(stats: &TileDiffStats) -> String {
+        let tile_size = stats.tile_w as usize * stats.tile_h as usize;
+        format!(
+            "tile_size={tile_size}, dirty_tiles={}, skipped_tiles={}, dirty_cells={}, dirty_tile_ratio={:.3}, dirty_cell_ratio={:.3}, scanned_tiles={}, fallback={:?}",
+            stats.dirty_tiles,
+            stats.skipped_tiles,
+            stats.dirty_cells,
+            stats.dirty_tile_ratio,
+            stats.dirty_cell_ratio,
+            stats.scanned_tiles,
+            stats.fallback
+        )
+    }
+
+    fn diff_with_forced_tiles(old: &Buffer, new: &Buffer) -> (BufferDiff, TileDiffStats) {
+        let mut diff = BufferDiff::new();
+        {
+            let config = diff.tile_config_mut();
+            config.enabled = true;
+            config.tile_w = 8;
+            config.tile_h = 8;
+            config.min_cells_for_tiles = 0;
+            config.dense_cell_ratio = 1.1;
+            config.dense_tile_ratio = 1.1;
+            config.max_tiles = usize::MAX / 4;
+        }
+        diff.compute_dirty_into(old, new);
+        let stats = diff
+            .last_tile_stats()
+            .expect("tile stats should be recorded");
+        (diff, stats)
+    }
+
+    fn assert_tile_diff_equivalence(old: &Buffer, new: &Buffer, label: &str) {
+        let full = BufferDiff::compute(old, new);
+        let (dirty, stats) = diff_with_forced_tiles(old, new);
+        let diag = tile_diag(&stats);
+        assert!(
+            stats.fallback.is_none(),
+            "tile diff fallback ({label}) {w}x{h}: {diag}",
+            w = old.width(),
+            h = old.height()
+        );
+        assert!(
+            full.changes() == dirty.changes(),
+            "tile diff mismatch ({label}) {w}x{h}: {diag}",
+            w = old.width(),
+            h = old.height()
+        );
+    }
+
+    #[test]
+    fn tile_diff_equivalence_small_and_odd_sizes() {
+        let cases: &[(u16, u16, usize)] = &[
+            (1, 1, 1),
+            (2, 1, 1),
+            (1, 2, 1),
+            (5, 3, 4),
+            (7, 13, 12),
+            (15, 9, 20),
+            (31, 5, 12),
+        ];
+
+        for (idx, &(width, height, changes)) in cases.iter().enumerate() {
+            let old = Buffer::new(width, height);
+            let mut new = old.clone();
+            new.clear_dirty();
+            apply_random_changes(&mut new, 0xC0FFEE_u64 + idx as u64, changes);
+            assert_tile_diff_equivalence(&old, &new, "small_odd");
+        }
+    }
+
+    #[test]
+    fn tile_diff_equivalence_large_sparse_random() {
+        let cases: &[(u16, u16)] = &[(200, 60), (240, 80)];
+        for (idx, &(width, height)) in cases.iter().enumerate() {
+            let old = Buffer::new(width, height);
+            let mut new = old.clone();
+            new.clear_dirty();
+            let total = width as usize * height as usize;
+            let changes = (total / 100).max(1);
+            apply_random_changes(&mut new, 0xDEADBEEF_u64 + idx as u64, changes);
+            assert_tile_diff_equivalence(&old, &new, "large_sparse");
+        }
+    }
+
+    #[test]
+    fn tile_diff_equivalence_row_and_full_buffer() {
+        let width = 200u16;
+        let height = 60u16;
+        let old = Buffer::new(width, height);
+
+        let mut row = old.clone();
+        row.clear_dirty();
+        for x in 0..width {
+            row.set_raw(x, 0, Cell::from_char('R'));
+        }
+        assert_tile_diff_equivalence(&old, &row, "single_row");
+
+        let mut full = old.clone();
+        full.clear_dirty();
+        for y in 0..height {
+            for x in 0..width {
+                full.set_raw(x, y, Cell::from_char('F'));
+            }
+        }
+        assert_tile_diff_equivalence(&old, &full, "full_buffer");
     }
 }
 

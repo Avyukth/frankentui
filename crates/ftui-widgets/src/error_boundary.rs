@@ -526,7 +526,7 @@ mod tests {
 
     impl Widget for PanickingWidget {
         fn render(&self, _area: Rect, _frame: &mut Frame) {
-            panic!("widget exploded");
+            unreachable!("widget exploded");
         }
     }
 

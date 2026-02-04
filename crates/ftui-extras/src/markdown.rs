@@ -1340,6 +1340,8 @@ impl<'t> RenderState<'t> {
             return;
         }
 
+        self.push_blockquote_prefix_if_needed();
+
         // Handle deferred list item prefix
         // Task markers take precedence over bullet points
         if self.pending_list_prefix {
@@ -1377,27 +1379,7 @@ impl<'t> RenderState<'t> {
 
         let style = self.current_style();
         let link = self.current_link();
-        let content = if self.blockquote_depth > 0 {
-            let bar_style = self
-                .current_admonition
-                .map(|adm| self.admonition_style(adm))
-                .unwrap_or(self.theme.blockquote);
-            let prefix = if self.current_admonition.is_some() {
-                "┃ ".repeat(self.blockquote_depth as usize)
-            } else {
-                "│ ".repeat(self.blockquote_depth as usize)
-            };
-            // Use styled prefix for admonitions
-            if self.current_admonition.is_some() {
-                self.current_spans
-                    .push(Span::styled(prefix, bar_style.dim()));
-                text.to_string()
-            } else {
-                format!("{prefix}{text}")
-            }
-        } else {
-            text.to_string()
-        };
+        let content = text.to_string();
 
         let mut span = match style {
             Some(s) => Span::styled(content, s),
@@ -1409,6 +1391,23 @@ impl<'t> RenderState<'t> {
         }
 
         self.current_spans.push(span);
+    }
+
+    fn push_blockquote_prefix_if_needed(&mut self) {
+        if self.blockquote_depth == 0 || !self.current_spans.is_empty() {
+            return;
+        }
+        let bar_style = self
+            .current_admonition
+            .map(|adm| self.admonition_style(adm))
+            .unwrap_or(self.theme.blockquote);
+        let prefix = if self.current_admonition.is_some() {
+            "┃ ".repeat(self.blockquote_depth as usize)
+        } else {
+            "│ ".repeat(self.blockquote_depth as usize)
+        };
+        self.current_spans
+            .push(Span::styled(prefix, bar_style.dim()));
     }
 
     fn inline_code(&mut self, code: &str) {
@@ -2204,6 +2203,14 @@ mod tests {
         let text = render_markdown("> quoted");
         let content = plain(&text);
         assert!(content.contains("│"));
+    }
+
+    #[test]
+    fn blockquote_prefix_not_repeated_with_inline_formatting() {
+        let text = render_markdown("> **Bold** text");
+        let line = text.lines().first().expect("blockquote line");
+        let plain = line.to_plain_text();
+        assert_eq!(plain.matches('│').count(), 1);
     }
 
     // =========================================================================

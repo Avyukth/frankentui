@@ -40,6 +40,11 @@ LOG_LEVEL="${LOG_LEVEL:-INFO}"
 GOLDEN_DIR="$PROJECT_ROOT/tests/golden/schedule_trace"
 GOLDEN_FILE="$GOLDEN_DIR/schedule_trace.golden"
 TRACE_OUTPUT_DIR="${E2E_RESULTS_DIR:-/tmp/ftui_schedule_trace_e2e}"
+EFFECT_QUEUE_DIR="$TRACE_OUTPUT_DIR/effect_queue"
+EFFECT_RUN1_RAW="$EFFECT_QUEUE_DIR/effect_queue_run1.txt"
+EFFECT_RUN2_RAW="$EFFECT_QUEUE_DIR/effect_queue_run2.txt"
+EFFECT_RUN1_JSONL="$EFFECT_QUEUE_DIR/effect_queue_run1.jsonl"
+EFFECT_RUN2_JSONL="$EFFECT_QUEUE_DIR/effect_queue_run2.jsonl"
 
 # Known golden checksum (update with --update-golden)
 # This is the checksum for the canonical test workload
@@ -99,7 +104,7 @@ log_fail() {
 # Setup
 # =============================================================================
 
-mkdir -p "$TRACE_OUTPUT_DIR" "$GOLDEN_DIR"
+mkdir -p "$TRACE_OUTPUT_DIR" "$GOLDEN_DIR" "$EFFECT_QUEUE_DIR"
 
 START_TS="$(date +%s%3N)"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
@@ -231,15 +236,61 @@ log_info "Verifying trace stability..."
 # Run the hash stability test twice and compare
 RUN1_OUTPUT="$TRACE_OUTPUT_DIR/run1.txt"
 RUN2_OUTPUT="$TRACE_OUTPUT_DIR/run2.txt"
+RUN1_FILTERED="$TRACE_OUTPUT_DIR/run1.filtered"
+RUN2_FILTERED="$TRACE_OUTPUT_DIR/run2.filtered"
 
 cargo test -p ftui-runtime schedule_trace::tests::unit_trace_hash_stable -- --nocapture > "$RUN1_OUTPUT" 2>&1 || true
 cargo test -p ftui-runtime schedule_trace::tests::unit_trace_hash_stable -- --nocapture > "$RUN2_OUTPUT" 2>&1 || true
 
-if diff -q "$RUN1_OUTPUT" "$RUN2_OUTPUT" > /dev/null 2>&1; then
+if command -v rg >/dev/null 2>&1; then
+    rg '^test schedule_trace::tests::unit_trace_hash_stable' "$RUN1_OUTPUT" > "$RUN1_FILTERED" || true
+    rg '^test schedule_trace::tests::unit_trace_hash_stable' "$RUN2_OUTPUT" > "$RUN2_FILTERED" || true
+else
+    grep -E '^test schedule_trace::tests::unit_trace_hash_stable' "$RUN1_OUTPUT" > "$RUN1_FILTERED" || true
+    grep -E '^test schedule_trace::tests::unit_trace_hash_stable' "$RUN2_OUTPUT" > "$RUN2_FILTERED" || true
+fi
+
+if diff -q "$RUN1_FILTERED" "$RUN2_FILTERED" > /dev/null 2>&1; then
     log_success "Trace checksum is stable across runs"
 else
     log_fail "Trace checksum differs between runs!"
-    diff "$RUN1_OUTPUT" "$RUN2_OUTPUT" || true
+    diff -u "$RUN1_FILTERED" "$RUN2_FILTERED" || true
+    exit 1
+fi
+
+# =============================================================================
+# Effect queue scheduling determinism
+# =============================================================================
+
+log_info "Verifying effect queue scheduling determinism..."
+
+if cargo test -p ftui-runtime queueing_scheduler::tests::effect_queue_trace_is_deterministic -- --nocapture > "$EFFECT_RUN1_RAW" 2>&1; then
+    log_debug "Effect queue run 1 completed"
+else
+    log_error "Effect queue run 1 failed"
+    exit 2
+fi
+
+if cargo test -p ftui-runtime queueing_scheduler::tests::effect_queue_trace_is_deterministic -- --nocapture > "$EFFECT_RUN2_RAW" 2>&1; then
+    log_debug "Effect queue run 2 completed"
+else
+    log_error "Effect queue run 2 failed"
+    exit 2
+fi
+
+if command -v rg >/dev/null 2>&1; then
+    rg '^\{' "$EFFECT_RUN1_RAW" > "$EFFECT_RUN1_JSONL" || true
+    rg '^\{' "$EFFECT_RUN2_RAW" > "$EFFECT_RUN2_JSONL" || true
+else
+    grep -E '^\{' "$EFFECT_RUN1_RAW" > "$EFFECT_RUN1_JSONL" || true
+    grep -E '^\{' "$EFFECT_RUN2_RAW" > "$EFFECT_RUN2_JSONL" || true
+fi
+
+if diff -q "$EFFECT_RUN1_JSONL" "$EFFECT_RUN2_JSONL" > /dev/null 2>&1; then
+    log_success "Effect queue trace is stable across runs"
+else
+    log_fail "Effect queue trace differs between runs!"
+    diff -u "$EFFECT_RUN1_JSONL" "$EFFECT_RUN2_JSONL" || true
     exit 1
 fi
 
@@ -269,6 +320,7 @@ TOTAL_MS=$((END_TS - START_TS))
 cat > "$TRACE_OUTPUT_DIR/results_${TIMESTAMP}.jsonl" <<EOF
 {"event":"test_complete","status":"pass","total_ms":$TOTAL_MS,"build_ms":$BUILD_MS,"test_ms":$TEST_MS}
 {"event":"checksums","stable":true}
+{"event":"effect_queue_trace","stable":true,"run1_jsonl":"$EFFECT_RUN1_JSONL","run2_jsonl":"$EFFECT_RUN2_JSONL"}
 EOF
 
 log_info "================================================"

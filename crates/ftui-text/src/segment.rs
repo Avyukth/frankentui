@@ -1361,9 +1361,9 @@ mod proptests {
         }
 
         #[test]
-        fn cell_length_matches_unicode_width(s in "[a-zA-Z0-9 ]{1,100}") {
+        fn cell_length_matches_display_width(s in "[a-zA-Z0-9 ]{1,100}") {
             let seg = Segment::text(s.clone());
-            let expected = unicode_width::UnicodeWidthStr::width(s.as_str());
+            let expected = crate::display_width(s.as_str());
             prop_assert_eq!(seg.cell_length(), expected);
         }
 

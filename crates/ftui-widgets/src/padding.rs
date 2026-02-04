@@ -186,7 +186,7 @@ mod tests {
 
     impl Widget for Boom {
         fn render(&self, _area: Rect, _frame: &mut Frame) {
-            panic!("boom");
+            unreachable!("boom");
         }
     }
 

@@ -26,6 +26,8 @@ use ftui_render::cell::Cell;
 use ftui_render::cell::PackedRgba;
 use ftui_render::frame::Frame;
 use ftui_style::Style;
+use unicode_display_width::width as unicode_display_width;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// A single traceback frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -214,14 +216,7 @@ impl Traceback {
         // Title line
         if y < max_y {
             let title_line = format!("── {} ──", self.title);
-            draw_line(
-                &mut frame.buffer,
-                area.x,
-                y,
-                &title_line,
-                self.style.title,
-                width,
-            );
+            draw_line(frame, area.x, y, &title_line, self.style.title, width);
             y += 1;
         }
 
@@ -233,14 +228,7 @@ impl Traceback {
 
             // Location line
             let location = format_location(f);
-            draw_line(
-                &mut frame.buffer,
-                area.x,
-                y,
-                &location,
-                self.style.filename,
-                width,
-            );
+            draw_line(frame, area.x, y, &location, self.style.filename, width);
             y += 1;
 
             // Source context
@@ -268,7 +256,7 @@ impl Traceback {
                         self.style.source
                     };
 
-                    draw_line(&mut frame.buffer, area.x, y, &formatted, line_style, width);
+                    draw_line(frame, area.x, y, &formatted, line_style, width);
 
                     // Draw indicator in its own style if error line
                     if is_error_line {
@@ -290,10 +278,9 @@ impl Traceback {
         if y < max_y {
             let exception = format!("{}: {}", self.exception_type, self.exception_message);
             // Draw type in exception_type style, message in exception_message style
-            let type_end =
-                unicode_width::UnicodeWidthStr::width(self.exception_type.as_str()).min(width);
+            let type_end = display_width(self.exception_type.as_str()).min(width);
             draw_line(
-                &mut frame.buffer,
+                frame,
                 area.x,
                 y,
                 &exception,
@@ -302,7 +289,7 @@ impl Traceback {
             );
             // Overlay the type portion with exception_type style
             draw_line_partial(
-                &mut frame.buffer,
+                frame,
                 area.x,
                 y,
                 &self.exception_type,
@@ -348,48 +335,123 @@ fn digit_count(n: usize) -> usize {
     count
 }
 
+#[inline]
+fn ascii_display_width(text: &str) -> usize {
+    let mut width = 0;
+    for b in text.bytes() {
+        match b {
+            b'\t' | b'\n' | b'\r' => width += 1,
+            0x20..=0x7E => width += 1,
+            _ => {}
+        }
+    }
+    width
+}
+
+#[inline]
+fn is_zero_width_codepoint(c: char) -> bool {
+    let u = c as u32;
+    matches!(u, 0x0000..=0x001F | 0x007F..=0x009F)
+        || matches!(u, 0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF)
+        || matches!(u, 0xFE20..=0xFE2F)
+        || matches!(u, 0xFE00..=0xFE0F | 0xE0100..=0xE01EF)
+        || matches!(
+            u,
+            0x00AD | 0x034F | 0x180E | 0x200B | 0x200C | 0x200D | 0x200E | 0x200F | 0x2060 | 0xFEFF
+        )
+        || matches!(u, 0x202A..=0x202E | 0x2066..=0x2069 | 0x206A..=0x206F)
+}
+
+#[inline]
+fn grapheme_width(grapheme: &str) -> usize {
+    if grapheme.is_ascii() {
+        return ascii_display_width(grapheme);
+    }
+    if grapheme.chars().all(is_zero_width_codepoint) {
+        return 0;
+    }
+    usize::try_from(unicode_display_width(grapheme)).unwrap_or(0)
+}
+
+#[inline]
+fn display_width(text: &str) -> usize {
+    if text.is_ascii() && text.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
+        return text.len();
+    }
+    if text.is_ascii() {
+        return ascii_display_width(text);
+    }
+    if !text.chars().any(is_zero_width_codepoint) {
+        return usize::try_from(unicode_display_width(text)).unwrap_or(0);
+    }
+    text.graphemes(true).map(grapheme_width).sum()
+}
+
 /// Draw a single line of text into the buffer, truncating and padding to width.
-fn draw_line(buffer: &mut Buffer, x: u16, y: u16, text: &str, style: Style, width: usize) {
+fn draw_line(frame: &mut Frame, x: u16, y: u16, text: &str, style: Style, width: usize) {
     let mut col = 0;
-    for ch in text.chars() {
+    for grapheme in text.graphemes(true) {
         if col >= width {
             break;
         }
+        let g_width = grapheme_width(grapheme);
+        if g_width == 0 {
+            continue;
+        }
+        if col + g_width > width {
+            break;
+        }
         let cell_x = x.saturating_add(col as u16);
-        let mut cell = Cell::from_char(ch);
+        let content = if g_width > 1 || grapheme.chars().count() > 1 {
+            let id = frame.intern_with_width(grapheme, u8::try_from(g_width).unwrap_or(u8::MAX));
+            ftui_render::cell::CellContent::from_grapheme(id)
+        } else if let Some(c) = grapheme.chars().next() {
+            ftui_render::cell::CellContent::from_char(c)
+        } else {
+            continue;
+        };
+        let mut cell = Cell::new(content);
         apply_style(&mut cell, style);
-        buffer.set(cell_x, y, cell);
-        col += unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+        frame.buffer.set(cell_x, y, cell);
+        col = col.saturating_add(g_width);
     }
     // Fill remaining with spaces
     while col < width {
         let cell_x = x.saturating_add(col as u16);
         let mut cell = Cell::from_char(' ');
         apply_style(&mut cell, style);
-        buffer.set(cell_x, y, cell);
+        frame.buffer.set(cell_x, y, cell);
         col += 1;
     }
 }
 
 /// Draw a partial line (for overlaying styled substrings).
-fn draw_line_partial(
-    buffer: &mut Buffer,
-    x: u16,
-    y: u16,
-    text: &str,
-    style: Style,
-    max_col: usize,
-) {
+fn draw_line_partial(frame: &mut Frame, x: u16, y: u16, text: &str, style: Style, max_col: usize) {
     let mut col = 0;
-    for ch in text.chars() {
+    for grapheme in text.graphemes(true) {
         if col >= max_col {
             break;
         }
+        let g_width = grapheme_width(grapheme);
+        if g_width == 0 {
+            continue;
+        }
+        if col + g_width > max_col {
+            break;
+        }
         let cell_x = x.saturating_add(col as u16);
-        let mut cell = Cell::from_char(ch);
+        let content = if g_width > 1 || grapheme.chars().count() > 1 {
+            let id = frame.intern_with_width(grapheme, u8::try_from(g_width).unwrap_or(u8::MAX));
+            ftui_render::cell::CellContent::from_grapheme(id)
+        } else if let Some(c) = grapheme.chars().next() {
+            ftui_render::cell::CellContent::from_char(c)
+        } else {
+            continue;
+        };
+        let mut cell = Cell::new(content);
         apply_style(&mut cell, style);
-        buffer.set(cell_x, y, cell);
-        col += unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+        frame.buffer.set(cell_x, y, cell);
+        col = col.saturating_add(g_width);
     }
 }
 

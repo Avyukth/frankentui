@@ -764,9 +764,10 @@ mod tests {
         for input in inputs {
             let result = sanitize(input);
             for b in result.as_bytes() {
-                if is_forbidden_c0(*b) {
-                    panic!("Output contains forbidden C0 0x{b:02X} for input: {input:?}");
-                }
+                assert!(
+                    !is_forbidden_c0(*b),
+                    "Output contains forbidden C0 0x{b:02X} for input: {input:?}"
+                );
             }
         }
     }

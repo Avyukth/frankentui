@@ -1033,6 +1033,7 @@ mod tests {
         let mut t = EProcessThrottle::new_at(cfg, base);
 
         // Drive to recompute
+        let mut triggered = false;
         for i in 1..=100 {
             let d = t.observe_at(true, base + Duration::from_millis(i));
             if d.should_recompute && !d.forced_by_deadline {
@@ -1042,10 +1043,14 @@ mod tests {
                     "Wealth should reset to 1.0 after recompute, got {}",
                     t.wealth()
                 );
-                return;
+                triggered = true;
+                break;
             }
         }
-        panic!("Should have triggered at least one e-process recompute");
+        assert!(
+            triggered,
+            "Should have triggered at least one e-process recompute"
+        );
     }
 
     #[test]

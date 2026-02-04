@@ -30,6 +30,7 @@
 //! println!("Visible: {}..{}", range.start, range.end);
 //! ```
 
+use std::cell::Cell as StdCell;
 use std::collections::VecDeque;
 use std::ops::Range;
 use std::time::Duration;
@@ -63,7 +64,7 @@ pub struct Virtualized<T> {
     /// Current scroll offset (in items).
     scroll_offset: usize,
     /// Number of visible items (cached from last render).
-    visible_count: usize,
+    visible_count: StdCell<usize>,
     /// Overscan: extra items rendered above/below visible.
     overscan: usize,
     /// Height calculation strategy.
@@ -123,7 +124,7 @@ impl<T> Virtualized<T> {
         Self {
             storage: VirtualizedStorage::Owned(VecDeque::with_capacity(capacity.min(1024))),
             scroll_offset: 0,
-            visible_count: 0,
+            visible_count: StdCell::new(0),
             overscan: 2,
             item_height: ItemHeight::Fixed(1),
             follow_mode: false,
@@ -140,7 +141,7 @@ impl<T> Virtualized<T> {
                 cache_capacity,
             },
             scroll_offset: 0,
-            visible_count: 0,
+            visible_count: StdCell::new(0),
             overscan: 2,
             item_height: ItemHeight::Fixed(1),
             follow_mode: false,
@@ -211,7 +212,7 @@ impl<T> Virtualized<T> {
     /// Get current visible count (from last render).
     #[must_use]
     pub fn visible_count(&self) -> usize {
-        self.visible_count
+        self.visible_count.get()
     }
 
     /// Check if follow mode is enabled.
@@ -224,6 +225,7 @@ impl<T> Virtualized<T> {
     #[must_use]
     pub fn visible_range(&self, viewport_height: u16) -> Range<usize> {
         if self.is_empty() || viewport_height == 0 {
+            self.visible_count.set(0);
             return 0..0;
         }
 
@@ -254,6 +256,7 @@ impl<T> Virtualized<T> {
 
         let start = self.scroll_offset;
         let end = (start + items_visible).min(self.len());
+        self.visible_count.set(items_visible);
         start..end
     }
 
@@ -271,8 +274,9 @@ impl<T> Virtualized<T> {
         if self.is_empty() {
             return;
         }
-        let max_offset = if self.visible_count > 0 {
-            self.len().saturating_sub(self.visible_count)
+        let visible_count = self.visible_count.get();
+        let max_offset = if visible_count > 0 {
+            self.len().saturating_sub(visible_count)
         } else {
             self.len().saturating_sub(1)
         };
@@ -295,8 +299,9 @@ impl<T> Virtualized<T> {
 
     /// Scroll to bottom.
     pub fn scroll_to_bottom(&mut self) {
-        if self.len() > self.visible_count && self.visible_count > 0 {
-            self.scroll_offset = self.len() - self.visible_count;
+        let visible_count = self.visible_count.get();
+        if self.len() > visible_count && visible_count > 0 {
+            self.scroll_offset = self.len() - visible_count;
         } else {
             self.scroll_offset = 0;
         }
@@ -321,15 +326,17 @@ impl<T> Virtualized<T> {
 
     /// Page up (scroll by visible count).
     pub fn page_up(&mut self) {
-        if self.visible_count > 0 {
-            self.scroll(-(self.visible_count as i32));
+        let visible_count = self.visible_count.get();
+        if visible_count > 0 {
+            self.scroll(-(visible_count as i32));
         }
     }
 
     /// Page down (scroll by visible count).
     pub fn page_down(&mut self) {
-        if self.visible_count > 0 {
-            self.scroll(self.visible_count as i32);
+        let visible_count = self.visible_count.get();
+        if visible_count > 0 {
+            self.scroll(visible_count as i32);
         }
     }
 
@@ -344,10 +351,11 @@ impl<T> Virtualized<T> {
     /// Check if scrolled to bottom.
     #[must_use]
     pub fn is_at_bottom(&self) -> bool {
-        if self.len() <= self.visible_count {
+        let visible_count = self.visible_count.get();
+        if self.len() <= visible_count {
             true
         } else {
-            self.scroll_offset >= self.len() - self.visible_count
+            self.scroll_offset >= self.len() - visible_count
         }
     }
 
@@ -372,7 +380,7 @@ impl<T> Virtualized<T> {
 
     /// Update visible count (called during render).
     pub fn set_visible_count(&mut self, count: usize) {
-        self.visible_count = count;
+        self.visible_count.set(count);
     }
 }
 

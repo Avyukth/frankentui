@@ -50,6 +50,9 @@
 use std::io::{self, BufWriter, Write};
 
 use crate::evidence_sink::EvidenceSink;
+use crate::render_trace::{
+    RenderTraceFrame, RenderTraceRecorder, build_diff_runs_payload, build_full_buffer_payload,
+};
 use ftui_core::inline_mode::InlineStrategy;
 use ftui_core::terminal_capabilities::TerminalCapabilities;
 use ftui_render::buffer::{Buffer, DirtySpanConfig, DirtySpanStats};
@@ -81,8 +84,84 @@ const ERASE_LINE: &[u8] = b"\x1b[2K";
 #[allow(dead_code)] // API for future diff strategy integration
 const FULL_REDRAW_PROBE_INTERVAL: u64 = 60;
 
+/// Writer wrapper that can count bytes written when enabled.
+struct CountingWriter<W: Write> {
+    inner: W,
+    count_enabled: bool,
+    bytes_written: u64,
+}
+
+impl<W: Write> CountingWriter<W> {
+    fn new(inner: W) -> Self {
+        Self {
+            inner,
+            count_enabled: false,
+            bytes_written: 0,
+        }
+    }
+
+    #[allow(dead_code)]
+    fn enable_counting(&mut self) {
+        self.count_enabled = true;
+        self.bytes_written = 0;
+    }
+
+    #[allow(dead_code)]
+    fn disable_counting(&mut self) {
+        self.count_enabled = false;
+    }
+
+    #[allow(dead_code)]
+    fn take_count(&mut self) -> u64 {
+        let count = self.bytes_written;
+        self.bytes_written = 0;
+        count
+    }
+
+    fn into_inner(self) -> W {
+        self.inner
+    }
+}
+
+impl<W: Write> Write for CountingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(buf)?;
+        if self.count_enabled {
+            self.bytes_written = self.bytes_written.saturating_add(written as u64);
+        }
+        Ok(written)
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+        self.inner.write_all(buf)?;
+        if self.count_enabled {
+            self.bytes_written = self.bytes_written.saturating_add(buf.len() as u64);
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 fn default_diff_run_id() -> String {
     format!("diff-{}", std::process::id())
+}
+
+fn diff_strategy_str(strategy: DiffStrategy) -> &'static str {
+    match strategy {
+        DiffStrategy::Full => "full",
+        DiffStrategy::DirtyRows => "dirty",
+        DiffStrategy::FullRedraw => "redraw",
+    }
+}
+
+fn ui_anchor_str(anchor: UiAnchor) -> &'static str {
+    match anchor {
+        UiAnchor::Bottom => "bottom",
+        UiAnchor::Top => "top",
+    }
 }
 
 #[allow(dead_code)]
@@ -172,6 +251,22 @@ struct DiffDecision {
     #[allow(dead_code)] // reserved for future diff strategy introspection
     strategy: DiffStrategy,
     has_diff: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+struct EmitStats {
+    diff_cells: usize,
+    diff_runs: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+struct FrameEmitStats {
+    diff_strategy: DiffStrategy,
+    diff_cells: usize,
+    diff_runs: usize,
+    ui_height: u16,
 }
 
 // =============================================================================
@@ -318,7 +413,7 @@ impl RuntimeDiffConfig {
 /// All terminal output should go through this struct.
 pub struct TerminalWriter<W: Write> {
     /// Buffered writer for efficient output. Option allows moving out for into_inner().
-    writer: Option<BufWriter<W>>,
+    writer: Option<CountingWriter<BufWriter<W>>>,
     /// Current screen mode.
     screen_mode: ScreenMode,
     /// Last computed auto UI height (inline auto mode only).
@@ -370,6 +465,8 @@ pub struct TerminalWriter<W: Write> {
     diff_evidence_idx: u64,
     /// Last diff strategy selected during present.
     last_diff_strategy: Option<DiffStrategy>,
+    /// Render-trace recorder (optional).
+    render_trace: Option<RenderTraceRecorder>,
 }
 
 impl<W: Write> TerminalWriter<W> {
@@ -435,7 +532,10 @@ impl<W: Write> TerminalWriter<W> {
         let auto_ui_height = None;
         let diff_strategy = DiffStrategySelector::new(diff_config.strategy_config.clone());
         Self {
-            writer: Some(BufWriter::with_capacity(BUFFER_CAPACITY, writer)),
+            writer: Some(CountingWriter::new(BufWriter::with_capacity(
+                BUFFER_CAPACITY,
+                writer,
+            ))),
             screen_mode,
             auto_ui_height,
             ui_anchor,
@@ -460,6 +560,7 @@ impl<W: Write> TerminalWriter<W> {
             diff_evidence_run_id: default_diff_run_id(),
             diff_evidence_idx: 0,
             last_diff_strategy: None,
+            render_trace: None,
         }
     }
 
@@ -469,7 +570,7 @@ impl<W: Write> TerminalWriter<W> {
     ///
     /// Panics if the writer has been taken (via `into_inner`).
     #[inline]
-    fn writer(&mut self) -> &mut BufWriter<W> {
+    fn writer(&mut self) -> &mut CountingWriter<BufWriter<W>> {
         self.writer.as_mut().expect("writer has been consumed")
     }
 
@@ -507,6 +608,18 @@ impl<W: Write> TerminalWriter<W> {
     /// Set the evidence JSONL sink for diff decision logging.
     pub fn set_evidence_sink(&mut self, sink: Option<EvidenceSink>) {
         self.evidence_sink = sink;
+    }
+
+    /// Attach a render-trace recorder.
+    #[must_use]
+    pub fn with_render_trace(mut self, recorder: RenderTraceRecorder) -> Self {
+        self.render_trace = Some(recorder);
+        self
+    }
+
+    /// Set the render-trace recorder.
+    pub fn set_render_trace(&mut self, recorder: Option<RenderTraceRecorder>) {
+        self.render_trace = recorder;
     }
 
     /// Get mutable access to the diff strategy selector.
@@ -830,6 +943,15 @@ impl<W: Write> TerminalWriter<W> {
             ScreenMode::InlineAuto { .. } => "inline_auto",
             ScreenMode::AltScreen => "altscreen",
         };
+        let trace_enabled = self.render_trace.is_some();
+        if trace_enabled {
+            self.writer().enable_counting();
+        }
+        let present_start = if trace_enabled {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
         let _span = info_span!(
             "ftui.render.present",
             mode = mode_str,
@@ -849,11 +971,61 @@ impl<W: Write> TerminalWriter<W> {
             ScreenMode::AltScreen => self.present_altscreen(buffer, cursor, cursor_visible),
         };
 
-        if result.is_ok() {
+        let present_us = present_start.map(|start| start.elapsed().as_micros() as u64);
+        let present_bytes = if trace_enabled {
+            Some(self.writer().take_count())
+        } else {
+            None
+        };
+        if trace_enabled {
+            self.writer().disable_counting();
+        }
+
+        if let Ok(stats) = result {
             self.spare_buffer = self.prev_buffer.take();
             self.prev_buffer = Some(buffer.clone());
+
+            if let Some(ref mut trace) = self.render_trace {
+                let payload_info = match stats.diff_strategy {
+                    DiffStrategy::FullRedraw => {
+                        let payload = build_full_buffer_payload(buffer, &self.pool);
+                        trace.write_payload(&payload).ok()
+                    }
+                    _ => {
+                        let payload =
+                            build_diff_runs_payload(buffer, &self.diff_scratch, &self.pool);
+                        trace.write_payload(&payload).ok()
+                    }
+                };
+                let (payload_kind, payload_path) = match payload_info {
+                    Some(info) => (info.kind, Some(info.path)),
+                    None => ("none", None),
+                };
+                let payload_path_ref = payload_path.as_deref();
+                let diff_strategy = diff_strategy_str(stats.diff_strategy);
+                let ui_anchor = ui_anchor_str(self.ui_anchor);
+                let frame = RenderTraceFrame {
+                    cols: buffer.width(),
+                    rows: buffer.height(),
+                    mode: mode_str,
+                    ui_height: stats.ui_height,
+                    ui_anchor,
+                    diff_strategy,
+                    diff_cells: stats.diff_cells,
+                    diff_runs: stats.diff_runs,
+                    present_bytes: present_bytes.unwrap_or(0),
+                    render_us: None,
+                    present_us,
+                    payload_kind,
+                    payload_path: payload_path_ref,
+                    trace_us: None,
+                };
+                let _ = trace.record_frame(frame, buffer, &self.pool);
+            }
+            return Ok(());
         }
-        result
+
+        result.map(|_| ())
     }
 
     /// Present a UI frame, taking ownership of the buffer (O(1) — no clone).
@@ -870,6 +1042,15 @@ impl<W: Write> TerminalWriter<W> {
             ScreenMode::Inline { .. } => "inline",
             ScreenMode::InlineAuto { .. } => "inline_auto",
             ScreenMode::AltScreen => "altscreen",
+        };
+        let trace_enabled = self.render_trace.is_some();
+        if trace_enabled {
+            self.writer().enable_counting();
+        }
+        let present_start = if trace_enabled {
+            Some(std::time::Instant::now())
+        } else {
+            None
         };
         let _span = info_span!(
             "ftui.render.present",
@@ -890,11 +1071,61 @@ impl<W: Write> TerminalWriter<W> {
             ScreenMode::AltScreen => self.present_altscreen(&buffer, cursor, cursor_visible),
         };
 
-        if result.is_ok() {
+        let present_us = present_start.map(|start| start.elapsed().as_micros() as u64);
+        let present_bytes = if trace_enabled {
+            Some(self.writer().take_count())
+        } else {
+            None
+        };
+        if trace_enabled {
+            self.writer().disable_counting();
+        }
+
+        if let Ok(stats) = result {
+            if let Some(ref mut trace) = self.render_trace {
+                let payload_info = match stats.diff_strategy {
+                    DiffStrategy::FullRedraw => {
+                        let payload = build_full_buffer_payload(&buffer, &self.pool);
+                        trace.write_payload(&payload).ok()
+                    }
+                    _ => {
+                        let payload =
+                            build_diff_runs_payload(&buffer, &self.diff_scratch, &self.pool);
+                        trace.write_payload(&payload).ok()
+                    }
+                };
+                let (payload_kind, payload_path) = match payload_info {
+                    Some(info) => (info.kind, Some(info.path)),
+                    None => ("none", None),
+                };
+                let payload_path_ref = payload_path.as_deref();
+                let diff_strategy = diff_strategy_str(stats.diff_strategy);
+                let ui_anchor = ui_anchor_str(self.ui_anchor);
+                let frame = RenderTraceFrame {
+                    cols: buffer.width(),
+                    rows: buffer.height(),
+                    mode: mode_str,
+                    ui_height: stats.ui_height,
+                    ui_anchor,
+                    diff_strategy,
+                    diff_cells: stats.diff_cells,
+                    diff_runs: stats.diff_runs,
+                    present_bytes: present_bytes.unwrap_or(0),
+                    render_us: None,
+                    present_us,
+                    payload_kind,
+                    payload_path: payload_path_ref,
+                    trace_us: None,
+                };
+                let _ = trace.record_frame(frame, &buffer, &self.pool);
+            }
+
             self.spare_buffer = self.prev_buffer.take();
             self.prev_buffer = Some(buffer);
+            return Ok(());
         }
-        result
+
+        result.map(|_| ())
     }
 
     fn decide_diff(&mut self, buffer: &Buffer) -> DiffDecision {
@@ -1073,7 +1304,7 @@ impl<W: Write> TerminalWriter<W> {
             );
             if let Some(ref sink) = self.evidence_sink {
                 let line = format!(
-                    r#"{{"event":"diff_decision","run_id":"{}","event_idx":{},"strategy":"{}","cost_full":{:.6},"cost_dirty":{:.6},"cost_redraw":{:.6},"posterior_mean":{:.6},"posterior_variance":{:.6},"alpha":{:.6},"beta":{:.6},"dirty_rows":{},"total_rows":{},"total_cells":{},"span_count":{},"span_coverage_pct":{:.6},"max_span_len":{},"fallback_reason":"{}","scan_cost_estimate":{},"tile_used":{},"tile_fallback":"{}","tile_w":{},"tile_h":{},"tile_size":{},"tiles_x":{},"tiles_y":{},"dirty_tiles":{},"dirty_tile_count":{},"dirty_cells":{},"dirty_tile_ratio":{:.6},"dirty_cell_ratio":{:.6},"scanned_tiles":{},"skipped_tiles":{},"skipped_tile_count":{},"tile_scan_cells_estimate":{},"sat_build_cost_est":{},"bayesian_enabled":{},"dirty_rows_enabled":{}}}"#,
+                    r#"{{"event":"diff_decision","run_id":"{}","event_idx":{},"strategy":"{}","cost_full":{:.6},"cost_dirty":{:.6},"cost_redraw":{:.6},"posterior_mean":{:.6},"posterior_variance":{:.6},"alpha":{:.6},"beta":{:.6},"guard_reason":"{}","hysteresis_applied":{},"hysteresis_ratio":{:.6},"dirty_rows":{},"total_rows":{},"total_cells":{},"span_count":{},"span_coverage_pct":{:.6},"max_span_len":{},"fallback_reason":"{}","scan_cost_estimate":{},"tile_used":{},"tile_fallback":"{}","tile_w":{},"tile_h":{},"tile_size":{},"tiles_x":{},"tiles_y":{},"dirty_tiles":{},"dirty_tile_count":{},"dirty_cells":{},"dirty_tile_ratio":{:.6},"dirty_cell_ratio":{:.6},"scanned_tiles":{},"skipped_tiles":{},"skipped_tile_count":{},"tile_scan_cells_estimate":{},"sat_build_cost_est":{},"bayesian_enabled":{},"dirty_rows_enabled":{}}}"#,
                     self.diff_evidence_run_id,
                     event_idx,
                     strategy,
@@ -1084,6 +1315,9 @@ impl<W: Write> TerminalWriter<W> {
                     evidence.posterior_variance,
                     evidence.alpha,
                     evidence.beta,
+                    evidence.guard_reason,
+                    evidence.hysteresis_applied,
+                    evidence.hysteresis_ratio,
                     evidence.dirty_rows,
                     evidence.total_rows,
                     evidence.total_cells,
@@ -1131,7 +1365,7 @@ impl<W: Write> TerminalWriter<W> {
         ui_height: u16,
         cursor: Option<(u16, u16)>,
         cursor_visible: bool,
-    ) -> io::Result<()> {
+    ) -> io::Result<FrameEmitStats> {
         let visible_height = ui_height.min(self.term_height);
         let ui_y_start = self.ui_start_row();
         let current_region = InlineRegion {
@@ -1169,6 +1403,12 @@ impl<W: Write> TerminalWriter<W> {
 
         self.clear_inline_region_diff(current_region)?;
 
+        let mut diff_strategy = DiffStrategy::FullRedraw;
+        let mut emit_stats = EmitStats {
+            diff_cells: 0,
+            diff_runs: 0,
+        };
+
         if visible_height > 0 {
             // If this is a full redraw (no previous buffer), we must clear the
             // entire UI region first to ensure we aren't diffing against garbage.
@@ -1190,6 +1430,7 @@ impl<W: Write> TerminalWriter<W> {
                 let _span = debug_span!("ftui.render.diff_compute").entered();
                 self.decide_diff(buffer)
             };
+            diff_strategy = decision.strategy;
 
             // Emit diff
             {
@@ -1198,9 +1439,9 @@ impl<W: Write> TerminalWriter<W> {
                     let diff = std::mem::take(&mut self.diff_scratch);
                     let result = self.emit_diff(buffer, &diff, Some(visible_height), ui_y_start);
                     self.diff_scratch = diff;
-                    result?;
+                    emit_stats = result?;
                 } else {
-                    self.emit_full_redraw(buffer, Some(visible_height), ui_y_start)?;
+                    emit_stats = self.emit_full_redraw(buffer, Some(visible_height), ui_y_start)?;
                 }
             }
         }
@@ -1244,7 +1485,12 @@ impl<W: Write> TerminalWriter<W> {
             None
         };
 
-        Ok(())
+        Ok(FrameEmitStats {
+            diff_strategy,
+            diff_cells: emit_stats.diff_cells,
+            diff_runs: emit_stats.diff_runs,
+            ui_height: visible_height,
+        })
     }
 
     /// Present UI in alternate screen mode (simpler, no cursor gymnastics).
@@ -1253,7 +1499,7 @@ impl<W: Write> TerminalWriter<W> {
         buffer: &Buffer,
         cursor: Option<(u16, u16)>,
         cursor_visible: bool,
-    ) -> io::Result<()> {
+    ) -> io::Result<FrameEmitStats> {
         let decision = {
             let _span = debug_span!("ftui.render.diff_compute").entered();
             self.decide_diff(buffer)
@@ -1264,17 +1510,17 @@ impl<W: Write> TerminalWriter<W> {
             self.writer().write_all(SYNC_BEGIN)?;
         }
 
-        {
+        let emit_stats = {
             let _span = debug_span!("ftui.render.emit").entered();
             if decision.has_diff {
                 let diff = std::mem::take(&mut self.diff_scratch);
                 let result = self.emit_diff(buffer, &diff, None, 0);
                 self.diff_scratch = diff;
-                result?;
+                result?
             } else {
-                self.emit_full_redraw(buffer, None, 0)?;
+                self.emit_full_redraw(buffer, None, 0)?
             }
-        }
+        };
 
         // Reset style at end
         self.writer().write_all(b"\x1b[0m")?;
@@ -1300,7 +1546,12 @@ impl<W: Write> TerminalWriter<W> {
 
         self.writer().flush()?;
 
-        Ok(())
+        Ok(FrameEmitStats {
+            diff_strategy: decision.strategy,
+            diff_cells: emit_stats.diff_cells,
+            diff_runs: emit_stats.diff_runs,
+            ui_height: 0,
+        })
     }
 
     /// Emit a diff directly to the writer.
@@ -1310,10 +1561,12 @@ impl<W: Write> TerminalWriter<W> {
         diff: &BufferDiff,
         max_height: Option<u16>,
         ui_y_start: u16,
-    ) -> io::Result<()> {
-        use ftui_render::cell::{CellAttrs, StyleFlags};
+    ) -> io::Result<EmitStats> {
+        use ftui_render::cell::{Cell, CellAttrs, StyleFlags};
 
         let runs = diff.runs();
+        let diff_runs = runs.len();
+        let diff_cells = diff.len();
         let _span = debug_span!("ftui.render.emit_diff", run_count = runs.len()).entered();
 
         let mut current_style: Option<(
@@ -1322,6 +1575,7 @@ impl<W: Write> TerminalWriter<W> {
             StyleFlags,
         )> = None;
         let mut current_link: Option<u32> = None;
+        let default_cell = Cell::default();
 
         // Borrow writer once
         let writer = self.writer.as_mut().expect("writer has been consumed");
@@ -1341,16 +1595,23 @@ impl<W: Write> TerminalWriter<W> {
             )?;
 
             // Emit cells in the run
+            let mut cursor_x = run.x0;
             for x in run.x0..=run.x1 {
                 let cell = buffer.get_unchecked(x, run.y);
 
-                // Skip continuation cells
-                if cell.is_continuation() {
+                // Skip continuation cells unless they are orphaned.
+                let is_orphan = cell.is_continuation() && cursor_x <= x;
+                if cell.is_continuation() && !is_orphan {
                     continue;
                 }
+                let effective_cell = if is_orphan { &default_cell } else { cell };
 
                 // Check if style changed
-                let cell_style = (cell.fg, cell.bg, cell.attrs.flags());
+                let cell_style = (
+                    effective_cell.fg,
+                    effective_cell.bg,
+                    effective_cell.attrs.flags(),
+                );
                 if current_style != Some(cell_style) {
                     // Reset and apply new style
                     writer.write_all(b"\x1b[0m")?;
@@ -1384,7 +1645,7 @@ impl<W: Write> TerminalWriter<W> {
                 }
 
                 // Check if link changed
-                let raw_link_id = cell.attrs.link_id();
+                let raw_link_id = effective_cell.attrs.link_id();
                 let new_link = if raw_link_id == CellAttrs::LINK_ID_NONE {
                     None
                 } else {
@@ -1405,12 +1666,19 @@ impl<W: Write> TerminalWriter<W> {
                     current_link = new_link;
                 }
 
+                let raw_width = effective_cell.content.width();
+                let is_zero_width_content = raw_width == 0
+                    && !effective_cell.is_empty()
+                    && !effective_cell.is_continuation();
+
                 // Emit content
-                if let Some(ch) = cell.content.as_char() {
+                if is_zero_width_content {
+                    writer.write_all(b"\xEF\xBF\xBD")?;
+                } else if let Some(ch) = effective_cell.content.as_char() {
                     let mut buf = [0u8; 4];
                     let encoded = ch.encode_utf8(&mut buf);
                     writer.write_all(encoded.as_bytes())?;
-                } else if let Some(gid) = cell.content.grapheme_id() {
+                } else if let Some(gid) = effective_cell.content.grapheme_id() {
                     // Use pool directly with writer (no clone needed)
                     if let Some(text) = self.pool.get(gid) {
                         writer.write_all(text.as_bytes())?;
@@ -1420,6 +1688,13 @@ impl<W: Write> TerminalWriter<W> {
                 } else {
                     writer.write_all(b" ")?;
                 }
+
+                let advance = if effective_cell.is_empty() || is_zero_width_content {
+                    1
+                } else {
+                    raw_width.max(1)
+                };
+                cursor_x = cursor_x.saturating_add(advance as u16);
             }
         }
 
@@ -1432,7 +1707,10 @@ impl<W: Write> TerminalWriter<W> {
         }
 
         trace!("emit_diff complete");
-        Ok(())
+        Ok(EmitStats {
+            diff_cells,
+            diff_runs,
+        })
     }
 
     /// Emit a full redraw without computing a diff.
@@ -1441,11 +1719,13 @@ impl<W: Write> TerminalWriter<W> {
         buffer: &Buffer,
         max_height: Option<u16>,
         ui_y_start: u16,
-    ) -> io::Result<()> {
-        use ftui_render::cell::{CellAttrs, StyleFlags};
+    ) -> io::Result<EmitStats> {
+        use ftui_render::cell::{Cell, CellAttrs, StyleFlags};
 
         let height = max_height.unwrap_or(buffer.height()).min(buffer.height());
         let width = buffer.width();
+        let diff_cells = width as usize * height as usize;
+        let diff_runs = height as usize;
 
         let _span = debug_span!("ftui.render.emit_full_redraw").entered();
 
@@ -1455,6 +1735,7 @@ impl<W: Write> TerminalWriter<W> {
             StyleFlags,
         )> = None;
         let mut current_link: Option<u32> = None;
+        let default_cell = Cell::default();
 
         // Borrow writer once
         let writer = self.writer.as_mut().expect("writer has been consumed");
@@ -1467,16 +1748,23 @@ impl<W: Write> TerminalWriter<W> {
                 1
             )?;
 
+            let mut cursor_x = 0u16;
             for x in 0..width {
                 let cell = buffer.get_unchecked(x, y);
 
-                // Skip continuation cells
-                if cell.is_continuation() {
+                // Skip continuation cells unless they are orphaned.
+                let is_orphan = cell.is_continuation() && cursor_x <= x;
+                if cell.is_continuation() && !is_orphan {
                     continue;
                 }
+                let effective_cell = if is_orphan { &default_cell } else { cell };
 
                 // Check if style changed
-                let cell_style = (cell.fg, cell.bg, cell.attrs.flags());
+                let cell_style = (
+                    effective_cell.fg,
+                    effective_cell.bg,
+                    effective_cell.attrs.flags(),
+                );
                 if current_style != Some(cell_style) {
                     // Reset and apply new style
                     writer.write_all(b"\x1b[0m")?;
@@ -1510,7 +1798,7 @@ impl<W: Write> TerminalWriter<W> {
                 }
 
                 // Check if link changed
-                let raw_link_id = cell.attrs.link_id();
+                let raw_link_id = effective_cell.attrs.link_id();
                 let new_link = if raw_link_id == CellAttrs::LINK_ID_NONE {
                     None
                 } else {
@@ -1531,12 +1819,19 @@ impl<W: Write> TerminalWriter<W> {
                     current_link = new_link;
                 }
 
+                let raw_width = effective_cell.content.width();
+                let is_zero_width_content = raw_width == 0
+                    && !effective_cell.is_empty()
+                    && !effective_cell.is_continuation();
+
                 // Emit content
-                if let Some(ch) = cell.content.as_char() {
+                if is_zero_width_content {
+                    writer.write_all(b"\xEF\xBF\xBD")?;
+                } else if let Some(ch) = effective_cell.content.as_char() {
                     let mut buf = [0u8; 4];
                     let encoded = ch.encode_utf8(&mut buf);
                     writer.write_all(encoded.as_bytes())?;
-                } else if let Some(gid) = cell.content.grapheme_id() {
+                } else if let Some(gid) = effective_cell.content.grapheme_id() {
                     // Use pool directly with writer (no clone needed)
                     if let Some(text) = self.pool.get(gid) {
                         writer.write_all(text.as_bytes())?;
@@ -1546,6 +1841,13 @@ impl<W: Write> TerminalWriter<W> {
                 } else {
                     writer.write_all(b" ")?;
                 }
+
+                let advance = if effective_cell.is_empty() || is_zero_width_content {
+                    1
+                } else {
+                    raw_width.max(1)
+                };
+                cursor_x = cursor_x.saturating_add(advance as u16);
             }
         }
 
@@ -1558,7 +1860,10 @@ impl<W: Write> TerminalWriter<W> {
         }
 
         trace!("emit_full_redraw complete");
-        Ok(())
+        Ok(EmitStats {
+            diff_cells,
+            diff_runs,
+        })
     }
 
     /// Emit SGR flags.
@@ -1764,7 +2069,7 @@ impl<W: Write> TerminalWriter<W> {
     pub fn into_inner(mut self) -> Option<W> {
         self.cleanup();
         // Take the writer before Drop runs (Drop will see None and skip cleanup)
-        self.writer.take()?.into_inner().ok()
+        self.writer.take()?.into_inner().into_inner().ok()
     }
 
     /// Perform garbage collection on the grapheme pool.
@@ -1814,6 +2119,10 @@ impl<W: Write> TerminalWriter<W> {
 
         // Flush
         let _ = writer.flush();
+
+        if let Some(ref mut trace) = self.render_trace {
+            let _ = trace.finish(None);
+        }
     }
 }
 

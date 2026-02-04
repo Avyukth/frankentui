@@ -6,7 +6,7 @@ use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, 
 use ftui_core::geometry::Rect;
 use ftui_render::buffer::Buffer;
 use ftui_render::cell::{Cell, CellAttrs, PackedRgba, StyleFlags};
-use ftui_render::diff::BufferDiff;
+use ftui_render::diff::{BufferDiff, TileDiffStats};
 use ftui_render::diff_strategy::{DiffStrategy, DiffStrategySelector};
 use std::hint::black_box;
 use std::time::{Duration, Instant};
@@ -67,6 +67,41 @@ fn measure_diff_stats(iters: u64, old: &Buffer, new: &Buffer, diff_fn: DiffFn) -
         p95_us: times[p95_idx],
         total_us,
     }
+}
+
+fn measure_diff_stats_dirty(
+    iters: u64,
+    old: &Buffer,
+    new: &Buffer,
+    diff: &mut BufferDiff,
+) -> (DiffStats, Option<TileDiffStats>) {
+    let mut times = Vec::with_capacity(iters as usize);
+    let mut total_us: u128 = 0;
+    let mut last_tile_stats = None;
+
+    for _ in 0..iters {
+        let start = Instant::now();
+        diff.compute_dirty_into(old, new);
+        black_box(diff.len());
+        let elapsed = start.elapsed().as_micros() as u64;
+        total_us += elapsed as u128;
+        times.push(elapsed);
+        last_tile_stats = diff.last_tile_stats();
+    }
+
+    times.sort_unstable();
+    let len = times.len().max(1);
+    let p50_idx = len / 2;
+    let p95_idx = ((len as f64 * 0.95) as usize).min(len.saturating_sub(1));
+
+    (
+        DiffStats {
+            p50_us: times[p50_idx],
+            p95_us: times[p95_idx],
+            total_us,
+        },
+        last_tile_stats,
+    )
 }
 
 fn bench_diff_identical(c: &mut Criterion) {
@@ -415,6 +450,138 @@ fn bench_diff_span_dense_regression(c: &mut Criterion) {
     group.finish();
 }
 
+// ============================================================================
+// Tile-skip large-screen stats + dense regression gate (bd-3e1t.7.5)
+// ============================================================================
+
+fn bench_diff_tile_sparse_stats(c: &mut Criterion) {
+    let mut group = c.benchmark_group("diff/tile_sparse_stats");
+
+    for (w, h) in [(320u16, 90u16), (400u16, 100u16)] {
+        let cells = w as u64 * h as u64;
+        group.throughput(Throughput::Elements(cells));
+
+        for pct in [1.0f64, 2.0f64] {
+            let (old, new) = make_pair(w, h, pct);
+            let label = format!("{w}x{h}@{pct}%");
+
+            group.bench_with_input(BenchmarkId::new("compute", &label), &(&old, &new), |b, (old, new)| {
+                b.iter_custom(|iters| {
+                    let stats = measure_diff_stats(iters, old, new, BufferDiff::compute);
+                    let throughput = if stats.total_us > 0 {
+                        (cells as f64 * iters as f64) / (stats.total_us as f64 / 1_000_000.0)
+                    } else {
+                        0.0
+                    };
+                    eprintln!(
+                        "{{\"event\":\"diff_tile_sparse_bench\",\"method\":\"compute\",\"width\":{w},\"height\":{h},\"pct\":{pct},\"iters\":{iters},\"p50_us\":{},\"p95_us\":{},\"throughput_cells_per_s\":{:.2}}}",
+                        stats.p50_us,
+                        stats.p95_us,
+                        throughput
+                    );
+                    let total_us = stats.total_us.min(u128::from(u64::MAX)) as u64;
+                    Duration::from_micros(total_us)
+                })
+            });
+
+            group.bench_with_input(
+                BenchmarkId::new("compute_dirty", &label),
+                &(&old, &new),
+                |b, (old, new)| {
+                    b.iter_custom(|iters| {
+                        let mut diff = BufferDiff::new();
+                        let (stats, tile_stats) = measure_diff_stats_dirty(iters, old, new, &mut diff);
+                        let throughput = if stats.total_us > 0 {
+                            (cells as f64 * iters as f64) / (stats.total_us as f64 / 1_000_000.0)
+                        } else {
+                            0.0
+                        };
+                        let (tile_w, tile_h, tiles_x, tiles_y, dirty_tiles, skipped_tiles, dirty_tile_ratio, fallback) =
+                            if let Some(tile_stats) = tile_stats {
+                                (
+                                    tile_stats.tile_w,
+                                    tile_stats.tile_h,
+                                    tile_stats.tiles_x,
+                                    tile_stats.tiles_y,
+                                    tile_stats.dirty_tiles,
+                                    tile_stats.skipped_tiles,
+                                    tile_stats.dirty_tile_ratio,
+                                    tile_stats
+                                        .fallback
+                                        .map(|reason| reason.as_str())
+                                        .unwrap_or("none"),
+                                )
+                            } else {
+                                (0, 0, 0, 0, 0, 0, 0.0, "none")
+                            };
+                        eprintln!(
+                            "{{\"event\":\"diff_tile_sparse_bench\",\"method\":\"compute_dirty\",\"width\":{w},\"height\":{h},\"pct\":{pct},\"iters\":{iters},\"p50_us\":{},\"p95_us\":{},\"throughput_cells_per_s\":{:.2},\"tile_w\":{tile_w},\"tile_h\":{tile_h},\"tiles_x\":{tiles_x},\"tiles_y\":{tiles_y},\"dirty_tiles\":{dirty_tiles},\"skipped_tiles\":{skipped_tiles},\"dirty_tile_ratio\":{dirty_tile_ratio:.4},\"fallback\":\"{fallback}\"}}",
+                            stats.p50_us,
+                            stats.p95_us,
+                            throughput
+                        );
+                        let total_us = stats.total_us.min(u128::from(u64::MAX)) as u64;
+                        Duration::from_micros(total_us)
+                    })
+                },
+            );
+        }
+    }
+
+    group.finish();
+}
+
+fn bench_diff_tile_dense_regression(c: &mut Criterion) {
+    let max_overhead = std::env::var("FTUI_TILE_DENSE_MAX_OVERHEAD")
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(1.02);
+
+    let mut group = c.benchmark_group("diff/tile_dense_regression");
+
+    for (w, h) in [(320u16, 90u16), (400u16, 100u16)] {
+        let cells = w as u64 * h as u64;
+        group.throughput(Throughput::Elements(cells));
+        let (old, new) = make_pair(w, h, 50.0);
+
+        group.bench_with_input(
+            BenchmarkId::new("dense_gate", format!("{w}x{h}@50%")),
+            &(&old, &new),
+            |b, (old, new)| {
+                b.iter_custom(|iters| {
+                    let full_stats = measure_diff_stats(iters, old, new, BufferDiff::compute);
+                    let mut diff = BufferDiff::new();
+                    let (dirty_stats, tile_stats) = measure_diff_stats_dirty(iters, old, new, &mut diff);
+
+                    let denom = full_stats.p50_us.max(1) as f64;
+                    let ratio = dirty_stats.p50_us as f64 / denom;
+                    let fallback = tile_stats
+                        .and_then(|stats| stats.fallback.map(|reason| reason.as_str()))
+                        .unwrap_or("none");
+
+                    eprintln!(
+                        "{{\"event\":\"diff_tile_dense_gate\",\"width\":{w},\"height\":{h},\"iters\":{iters},\"full_p50_us\":{},\"dirty_p50_us\":{},\"ratio\":{ratio:.3},\"max_overhead\":{max_overhead:.3},\"fallback\":\"{fallback}\"}}",
+                        full_stats.p50_us,
+                        dirty_stats.p50_us
+                    );
+
+                    assert!(
+                        ratio <= max_overhead,
+                        "tile dirty diff regression: {w}x{h} dense ratio {ratio:.3} exceeds {max_overhead:.3}"
+                    );
+
+                    let total_us =
+                        (full_stats.total_us + dirty_stats.total_us).min(u128::from(u64::MAX))
+                            as u64;
+                    Duration::from_micros(total_us)
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
 /// Large screen benchmarks for regression detection.
 fn bench_diff_large_screen(c: &mut Criterion) {
     let mut group = c.benchmark_group("diff/large_screen");
@@ -633,34 +800,38 @@ fn bench_buffer_scissor(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    // Diff benchmarks
-    bench_diff_identical,
-    bench_diff_sparse,
-    bench_diff_heavy,
-    bench_diff_full,
-    bench_diff_runs,
-    // Full vs dirty comparison (bd-3e1t.1.6)
-    bench_full_vs_dirty,
-    // Selector overhead + selector vs fixed (bd-3e1t.8.4)
-    bench_selector_overhead,
-    bench_selector_vs_fixed,
-    bench_diff_span_sparse_stats,
-    bench_diff_span_dense_regression,
-    bench_diff_large_screen,
-    // Cell benchmarks
-    bench_bits_eq,
-    bench_cell_from_char,
-    bench_packed_rgba,
-    // Buffer benchmarks
-    bench_row_cells,
-    bench_buffer_new,
-    bench_buffer_clone,
-    bench_buffer_fill,
-    bench_buffer_clear,
-    bench_buffer_set,
-    bench_buffer_scissor,
-);
+criterion_group! {
+    name = benches;
+    config = Criterion::default().without_plots();
+    targets =
+        // Diff benchmarks
+        bench_diff_identical,
+        bench_diff_sparse,
+        bench_diff_heavy,
+        bench_diff_full,
+        bench_diff_runs,
+        // Full vs dirty comparison (bd-3e1t.1.6)
+        bench_full_vs_dirty,
+        // Selector overhead + selector vs fixed (bd-3e1t.8.4)
+        bench_selector_overhead,
+        bench_selector_vs_fixed,
+        bench_diff_span_sparse_stats,
+        bench_diff_span_dense_regression,
+        bench_diff_tile_sparse_stats,
+        bench_diff_tile_dense_regression,
+        bench_diff_large_screen,
+        // Cell benchmarks
+        bench_bits_eq,
+        bench_cell_from_char,
+        bench_packed_rgba,
+        // Buffer benchmarks
+        bench_row_cells,
+        bench_buffer_new,
+        bench_buffer_clone,
+        bench_buffer_fill,
+        bench_buffer_clear,
+        bench_buffer_set,
+        bench_buffer_scissor,
+}
 
 criterion_main!(benches);

@@ -863,11 +863,12 @@ mod tests {
         let result = compare_golden(&trace, 0xDEADBEEF);
         assert!(!result.is_match());
 
-        if let GoldenCompareResult::Mismatch { expected, actual } = result {
-            assert_eq!(expected, 0xDEADBEEF);
-            assert_ne!(actual, 0xDEADBEEF);
-        } else {
-            panic!("Expected mismatch");
+        match result {
+            GoldenCompareResult::Mismatch { expected, actual } => {
+                assert_eq!(expected, 0xDEADBEEF);
+                assert_ne!(actual, 0xDEADBEEF);
+            }
+            _ => unreachable!("Expected mismatch"),
         }
     }
 

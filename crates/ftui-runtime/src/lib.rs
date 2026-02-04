@@ -32,6 +32,7 @@ pub mod program;
 pub mod queueing_scheduler;
 #[cfg(feature = "render-thread")]
 pub mod render_thread;
+pub mod render_trace;
 pub mod resize_coalescer;
 pub mod resize_sla;
 pub mod simulator;
@@ -64,6 +65,9 @@ pub use log_sink::LogSink;
 pub use program::{
     App, AppBuilder, BatchController, Cmd, EffectQueueConfig, InlineAutoRemeasureConfig, Model,
     PersistenceConfig, Program, ProgramConfig, ResizeBehavior, TaskSpec, WidgetRefreshConfig,
+};
+pub use render_trace::{
+    RenderTraceConfig, RenderTraceContext, RenderTraceFrame, RenderTraceRecorder,
 };
 pub use simulator::ProgramSimulator;
 pub use string_model::{StringModel, StringModelAdapter};

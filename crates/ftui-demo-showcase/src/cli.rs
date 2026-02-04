@@ -53,7 +53,7 @@ SCREENS:
    24  Virtualized Search Fuzzy search in 100K+ items demo
    25  Async Tasks        Async task manager and queue diagnostics
    26  Theme Studio       Live palette editor and theme inspector
-   27  Snapshot Player    Time-travel playback of recorded UI snapshots
+   27  Time-Travel Studio A/B compare + diff heatmap of recorded snapshots
    28  Performance HUD    Real-time render budget and frame diagnostics
    29  i18n Stress Lab    Unicode width, RTL, emoji, and truncation
    30  VOI Overlay        Galaxy-Brain VOI debug overlay
@@ -61,6 +61,8 @@ SCREENS:
    32  Accessibility      Accessibility control panel + contrast checks
    33  Widget Builder     Interactive widget composition sandbox
    34  Palette Evidence   Command palette evidence lab
+   35  Determinism Lab    Checksum equivalence + determinism proofs
+   36  Links              OSC-8 hyperlink playground + hit regions
 
 KEYBINDINGS:
     1-9, 0          Switch to screens 1-10 by number

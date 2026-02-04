@@ -366,7 +366,7 @@ impl LogViewer {
                         search.context_expanded = Some(expand_context(
                             &search.matches,
                             search.config.context_lines,
-                            self.max_lines.min(self.virt.len() + 1),
+                            self.virt.len(),
                         ));
                     }
                 }

@@ -1,5 +1,51 @@
 # Session TODO List
 
+## Current Session (LilacOwl) — bd-iuvb.16 Navigation IA (2026-02-04)
+- [x] Re-read `AGENTS.md` + `README.md`
+- [x] Run `bv --robot-triage` to identify top-impact beads
+- [x] Review open bd-iuvb tasks (`br show bd-iuvb.1/.4/.15/.16`)
+- [x] Claim bead: `br update bd-iuvb.16 --claim`
+- [x] Register Agent Mail session (LilacOwl)
+- [x] Reserve files for navigation IA:
+- [x] `crates/ftui-demo-showcase/src/screens/mod.rs`
+- [x] `crates/ftui-demo-showcase/src/screens/*.rs`
+- [x] `crates/ftui-demo-showcase/src/chrome.rs`
+- [ ] Resolve `app.rs` reservation conflict (CrimsonSparrow + FoggyBridge)
+- [x] Code investigation: locate ScreenId usage + palette/tab/navigation flow
+- [ ] Design Screen Registry schema (category, order, tags, blurb, hotkey)
+- [ ] Implement `ScreenCategory` enum with order + accent mapping
+- [ ] Implement `ScreenMeta` struct + registry list for all screens
+- [ ] Replace `ScreenId::ALL` usage with registry-driven ordering
+- [ ] Update `ScreenId` helpers to use registry (title/tab_label/index/category)
+- [ ] Update `chrome` tab bar to render category tabs + per-category screens
+- [ ] Add category navigation: Shift+Left/Right jumps categories
+- [ ] Update command palette to use registry metadata (category, tags, blurb)
+- [ ] Implement screen palette filters + favorites (session-scoped)
+- [ ] Add palette UI hints for category filter + favorites
+- [ ] Update help overlay with category legend + palette hotkeys
+- [ ] Update CLI/default screen resolution to use registry list
+- [ ] Update tests for tab cycling + palette counts + number-key mapping
+- [ ] Add unit tests for registry ordering + palette ranking
+- [ ] Add snapshot tests for palette (empty/filtered/favorites) at 80x24 + 120x40
+- [ ] Add E2E scenario in `scripts/e2e_demo_showcase.sh` with JSONL logs
+- [ ] Run quality gates (`cargo fmt --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`)
+- [ ] Post Agent Mail progress update in thread `bd-iuvb.16`
+- [ ] Release file reservations after completion
+
+## Current Session (DustyLake) — Code Review Sweep + Bug Fixes (2026-02-04)
+- [x] Re-read `AGENTS.md` + `README.md`
+- [x] Run UBS diff scan (`UBS_MAX_DIR_SIZE_MB=0 ubs --diff`) to surface findings (summary only)
+- [x] Fix render-thread cursor handling by carrying cursor + visibility in `OutMsg::Render`
+- [x] Clean up `unicode_display_width` conversions in text/render width helpers
+- [x] Resolve fmt deltas (`cargo fmt --check`)
+- [x] Run `cargo check --all-targets`
+- [x] Run `cargo clippy --all-targets -- -D warnings`
+- [x] Close bead `bd-xwhz` (code review sweep)
+- [x] Fix Determinism Lab checksum determinism (`bd-14ow`)
+- [x] Resolve snapshot player compile/clippy issues (missing `reset_compare_indices`, heatmap key overlap, clippy cleanup)
+- [ ] Get actionable UBS findings (run with a format that emits per-finding details)
+- [ ] Triage UBS criticals once detailed output is available
+
 ## Current Session (RoseValley) — bd-3e1t.8.3 Strategy Selector + Evidence Log (2026-02-04)
 - [x] Re-read all of `AGENTS.md` and `README.md`
 - [x] Load skills: `extreme-software-optimization`, `beads-bv`, `agent-mail`
@@ -60,14 +106,14 @@
 - [x] Register screen metadata (ScreenId/title/tab label)
 - [x] Add unit tests for checksum equivalence across strategies and seeds
 - [x] Add snapshot tests for match + mismatch UI states (80x24, 120x40)
-- [ ] Generate snapshot baselines for determinism lab (`BLESS=1 cargo test -p ftui-demo-showcase determinism_lab_*`) once snapshot reservations are available
+- [x] Generate snapshot baselines for determinism lab (`BLESS=1 cargo test -p ftui-demo-showcase determinism_lab_*`)
 - [x] Extend `scripts/demo_showcase_e2e.sh` with determinism lab scenario
-- [ ] Run quality gates after code changes:
+- [x] Run quality gates after code changes:
 - [x] `cargo fmt --check`
 - [x] `cargo check --all-targets`
 - [x] `cargo clippy --all-targets -- -D warnings`
-- [ ] Update bead status (`br close bd-iuvb.2 --reason "Completed"`)
-- [ ] Post completion message in Agent Mail thread `[bd-iuvb.2]` (send_message timeouts)
+- [x] Update bead status (`br close bd-iuvb.2 --reason "Completed"`)
+- [x] Post completion message in Agent Mail thread `[bd-iuvb.2]`
 - [x] Release file reservations
 
 ## Current Session (StormyEagle) — bd-3e1t.8.3 Strategy Selector + Evidence Log (2026-02-04)

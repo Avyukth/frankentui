@@ -23,6 +23,13 @@ a.out
 # perf profiling data
 perf.data
 perf.data.*
+perf_*.data
+
+# NFS temporary files
+.nfs*
+
+# macOS resource fork files
+._*
 
 # Flamegraph output
 flamegraph*.svg

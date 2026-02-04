@@ -17,10 +17,12 @@
 
 use ftui_core::geometry::Rect;
 use ftui_render::buffer::Buffer;
-use ftui_render::cell::{Cell, PackedRgba};
+use ftui_render::cell::{Cell, CellContent, PackedRgba};
 use ftui_render::frame::Frame;
 use ftui_style::Style;
 use ftui_widgets::Widget;
+use unicode_display_width::width as unicode_display_width;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::canvas::{Mode, Painter};
 
@@ -28,6 +30,60 @@ use crate::canvas::{Mode, Painter};
 
 /// Bar characters for sparkline/vertical-bar rendering (9 levels: empty through full).
 const BAR_CHARS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+#[inline]
+fn ascii_display_width(text: &str) -> usize {
+    let mut width = 0;
+    for b in text.bytes() {
+        match b {
+            b'\t' | b'\n' | b'\r' => width += 1,
+            0x20..=0x7E => width += 1,
+            _ => {}
+        }
+    }
+    width
+}
+
+#[inline]
+fn is_zero_width_codepoint(c: char) -> bool {
+    let u = c as u32;
+    matches!(u, 0x0000..=0x001F | 0x007F..=0x009F)
+        || matches!(u, 0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF)
+        || matches!(u, 0xFE20..=0xFE2F)
+        || matches!(u, 0xFE00..=0xFE0F | 0xE0100..=0xE01EF)
+        || matches!(
+            u,
+            0x00AD | 0x034F | 0x180E | 0x200B | 0x200C | 0x200D | 0x200E | 0x200F | 0x2060 | 0xFEFF
+        )
+        || matches!(u, 0x202A..=0x202E | 0x2066..=0x2069 | 0x206A..=0x206F)
+}
+
+#[inline]
+fn grapheme_width(grapheme: &str) -> usize {
+    if grapheme.is_ascii() {
+        return ascii_display_width(grapheme);
+    }
+    if grapheme.chars().all(is_zero_width_codepoint) {
+        return 0;
+    }
+    usize::try_from(unicode_display_width(grapheme))
+        .expect("unicode display width should fit in usize")
+}
+
+#[inline]
+fn display_width(text: &str) -> usize {
+    if text.is_ascii() && text.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
+        return text.len();
+    }
+    if text.is_ascii() {
+        return ascii_display_width(text);
+    }
+    if !text.chars().any(is_zero_width_codepoint) {
+        return usize::try_from(unicode_display_width(text))
+            .expect("unicode display width should fit in usize");
+    }
+    text.graphemes(true).map(grapheme_width).sum()
+}
 
 /// Linearly interpolate between two colors.
 fn lerp_color(a: PackedRgba, b: PackedRgba, t: f64) -> PackedRgba {
@@ -670,7 +726,7 @@ impl Widget for LineChart<'_> {
         } else {
             self.y_labels
                 .iter()
-                .map(|l| unicode_width::UnicodeWidthStr::width(*l))
+                .map(|l| display_width(l))
                 .max()
                 .unwrap_or(0) as u16
                 + 1
@@ -788,20 +844,32 @@ impl Widget for LineChart<'_> {
                             / (n as u32 - 1).max(1)) as u16
                 };
                 let max_len = y_axis_width.saturating_sub(1) as usize;
-                let label_width = unicode_width::UnicodeWidthStr::width(*label).min(max_len);
+                let label_width = display_width(label).min(max_len);
                 let start_x = area.x.saturating_add(
                     (y_axis_width.saturating_sub(1)).saturating_sub(label_width as u16),
                 );
                 let mut col = 0u16;
-                for ch in label.chars() {
-                    let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-                    if col as usize + ch_width > max_len {
+                for grapheme in label.graphemes(true) {
+                    let g_width = grapheme_width(grapheme);
+                    if g_width == 0 {
+                        continue;
+                    }
+                    if col as usize + g_width > max_len {
                         break;
                     }
-                    let mut cell = Cell::from_char(ch);
+                    let content = if g_width > 1 || grapheme.chars().count() > 1 {
+                        let id = frame
+                            .intern_with_width(grapheme, u8::try_from(g_width).unwrap_or(u8::MAX));
+                        CellContent::from_grapheme(id)
+                    } else if let Some(c) = grapheme.chars().next() {
+                        CellContent::from_char(c)
+                    } else {
+                        continue;
+                    };
+                    let mut cell = Cell::new(content);
                     style_cell(&mut cell, self.style);
                     frame.buffer.set(start_x.saturating_add(col), y, cell);
-                    col += ch_width as u16;
+                    col = col.saturating_add(u16::try_from(g_width).unwrap_or(u16::MAX));
                 }
             }
         }
@@ -820,16 +888,28 @@ impl Widget for LineChart<'_> {
                     )
                 };
                 let mut col = 0u16;
-                for ch in label.chars() {
+                for grapheme in label.graphemes(true) {
                     let lx = x.saturating_add(col);
-                    let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-                    if lx >= area.right() {
+                    let g_width = grapheme_width(grapheme);
+                    if g_width == 0 {
+                        continue;
+                    }
+                    if lx as u32 + g_width as u32 > area.right() as u32 {
                         break;
                     }
-                    let mut cell = Cell::from_char(ch);
+                    let content = if g_width > 1 || grapheme.chars().count() > 1 {
+                        let id = frame
+                            .intern_with_width(grapheme, u8::try_from(g_width).unwrap_or(u8::MAX));
+                        CellContent::from_grapheme(id)
+                    } else if let Some(c) = grapheme.chars().next() {
+                        CellContent::from_char(c)
+                    } else {
+                        continue;
+                    };
+                    let mut cell = Cell::new(content);
                     style_cell(&mut cell, self.style);
                     frame.buffer.set(lx, text_y, cell);
-                    col += ch_width as u16;
+                    col = col.saturating_add(u16::try_from(g_width).unwrap_or(u16::MAX));
                 }
             }
         }
@@ -839,7 +919,7 @@ impl Widget for LineChart<'_> {
             let max_name = self
                 .series
                 .iter()
-                .map(|s| unicode_width::UnicodeWidthStr::width(s.name))
+                .map(|s| display_width(s.name))
                 .max()
                 .unwrap_or(0);
             let legend_width = (max_name as u16).saturating_add(3); // "■ name"
@@ -855,16 +935,28 @@ impl Widget for LineChart<'_> {
                 frame.buffer.set(legend_x, y, marker);
 
                 let mut col = 0u16;
-                for ch in series.name.chars() {
+                for grapheme in series.name.graphemes(true) {
                     let x = legend_x.saturating_add(2).saturating_add(col);
-                    let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-                    if x >= area.right() {
+                    let g_width = grapheme_width(grapheme);
+                    if g_width == 0 {
+                        continue;
+                    }
+                    if x as u32 + g_width as u32 > area.right() as u32 {
                         break;
                     }
-                    let mut cell = Cell::from_char(ch);
+                    let content = if g_width > 1 || grapheme.chars().count() > 1 {
+                        let id = frame
+                            .intern_with_width(grapheme, u8::try_from(g_width).unwrap_or(u8::MAX));
+                        CellContent::from_grapheme(id)
+                    } else if let Some(c) = grapheme.chars().next() {
+                        CellContent::from_char(c)
+                    } else {
+                        continue;
+                    };
+                    let mut cell = Cell::new(content);
                     style_cell(&mut cell, self.style);
                     frame.buffer.set(x, y, cell);
-                    col += ch_width as u16;
+                    col = col.saturating_add(u16::try_from(g_width).unwrap_or(u16::MAX));
                 }
             }
         }

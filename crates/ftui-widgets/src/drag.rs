@@ -1090,7 +1090,7 @@ mod tests {
         assert!(!r.is_accepted());
         match r {
             DropResult::Rejected { reason } => assert_eq!(reason, "type mismatch"),
-            _ => panic!("expected Rejected"),
+            _ => unreachable!("expected Rejected"),
         }
     }
 

@@ -16,6 +16,7 @@ VERBOSE=false
 QUICK=false
 RUN_LARGE=true
 RUN_BUDGETED=true
+RUN_SPAN=true
 ARGS=()
 
 for arg in "$@"; do
@@ -33,6 +34,9 @@ for arg in "$@"; do
         --no-budget)
             RUN_BUDGETED=false
             ;;
+        --no-span)
+            RUN_SPAN=false
+            ;;
         --help|-h)
             echo "Usage: $0 [--verbose] [--quick] [--no-large] [--no-budget]"
             echo ""
@@ -41,6 +45,7 @@ for arg in "$@"; do
             echo "  --quick, -q     Run only core tests (inline + cleanup)"
             echo "  --no-large      Skip large-screen scenarios"
             echo "  --no-budget     Skip budgeted refresh scenario"
+            echo "  --no-span       Skip span-diff scenario"
             echo "  --help, -h      Show this help"
             exit 0
             ;;
@@ -51,6 +56,7 @@ done
 if $QUICK; then
     RUN_LARGE=false
     RUN_BUDGETED=false
+    RUN_SPAN=false
 fi
 
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
@@ -181,6 +187,49 @@ annotate_evidence_run_id() {
     ' "$source" > "$dest"
 }
 
+TRACE_REPLAY_ERR=""
+
+run_trace_replay() {
+    local case_name="$1"
+    local trace_jsonl="$2"
+    local replay_log="$3"
+    TRACE_REPLAY_ERR=""
+
+    if [[ ! -s "$trace_jsonl" ]]; then
+        TRACE_REPLAY_ERR="missing render trace jsonl"
+        log_test_fail "$case_name" "$TRACE_REPLAY_ERR"
+        return 1
+    fi
+
+    local output
+    local status
+    set +e
+    output=$(FTUI_HARNESS_REPLAY_TRACE="$trace_jsonl" "$E2E_HARNESS_BIN" 2>&1)
+    status=$?
+    set -e
+
+    printf '%s\n' "$output" > "$replay_log"
+
+    if [[ "$status" -ne 0 ]]; then
+        local err_line=""
+        if command -v rg >/dev/null 2>&1; then
+            err_line=$(printf '%s\n' "$output" | rg -m1 'checksum mismatch|unsupported payload|payload_path missing|invalid' || true)
+        else
+            err_line=$(printf '%s\n' "$output" | grep -E -m1 'checksum mismatch|unsupported payload|payload_path missing|invalid' || true)
+        fi
+        if [[ -z "$err_line" ]]; then
+            err_line=$(printf '%s\n' "$output" | tail -1)
+        fi
+        TRACE_REPLAY_ERR="$err_line"
+        log_test_fail "$case_name" "trace replay failed"
+        log_error "  Replay output: $err_line"
+        return 1
+    fi
+
+    log_debug "Trace replay OK: $(printf '%s\n' "$output" | tail -1)"
+    return 0
+}
+
 check_policy_evidence() {
     local evidence_jsonl="$1"
     local case_name="$2"
@@ -274,6 +323,109 @@ write_budget_case_meta() {
     fi
 }
 
+span_diff_hash() {
+    local evidence_jsonl="$1"
+    local hash_cmd=""
+    if command -v sha256sum >/dev/null 2>&1; then
+        hash_cmd="sha256sum"
+    elif command -v shasum >/dev/null 2>&1; then
+        hash_cmd="shasum -a 256"
+    else
+        hash_cmd=""
+    fi
+
+    if [[ -n "$hash_cmd" ]]; then
+        rg '"event":"diff_decision"' "$evidence_jsonl" \
+            | eval "$hash_cmd" \
+            | awk '{print $1}'
+    else
+        rg '"event":"diff_decision"' "$evidence_jsonl" | cksum | awk '{print $1}'
+    fi
+}
+
+extract_diff_decision_lines() {
+    local source="$1"
+    local dest="$2"
+    rg '"event":"diff_decision"' "$source" > "$dest" || true
+}
+
+check_span_evidence() {
+    local evidence_jsonl="$1"
+    local case_name="$2"
+    local missing=0
+
+    if ! rg -q '"event":"diff_decision"' "$evidence_jsonl"; then
+        log_test_fail "$case_name" "missing diff_decision evidence"
+        missing=1
+    fi
+
+    if command -v jq >/dev/null 2>&1; then
+        if ! jq -e -s 'map(select(.event=="diff_decision") | .span_count) | any(. > 0)' \
+            "$evidence_jsonl" >/dev/null; then
+            log_test_fail "$case_name" "span_count never positive"
+            missing=1
+        fi
+        if ! jq -e -s 'map(select(.event=="diff_decision") | .span_coverage_pct) | any(. < 100)' \
+            "$evidence_jsonl" >/dev/null; then
+            log_test_fail "$case_name" "span_coverage_pct never below 100"
+            missing=1
+        fi
+    else
+        if ! rg -q '"span_count":' "$evidence_jsonl"; then
+            log_test_fail "$case_name" "missing span_count field"
+            missing=1
+        fi
+        if ! rg -q '"span_coverage_pct":' "$evidence_jsonl"; then
+            log_test_fail "$case_name" "missing span_coverage_pct field"
+            missing=1
+        fi
+    fi
+
+    if [[ "$missing" -eq 0 ]]; then
+        return 0
+    fi
+    return 1
+}
+
+write_span_case_meta() {
+    local jsonl="$1"
+    local case_name="$2"
+    local status="$3"
+    local seed="$4"
+    local screen_mode="$5"
+    local cols="$6"
+    local rows="$7"
+    local evidence_jsonl="$8"
+    local pty_out="$9"
+    local duration_ms="${10}"
+    local run_id="${11}"
+    local diff_hash="${12}"
+
+    if command -v jq >/dev/null 2>&1; then
+        jq -nc \
+            --arg case "$case_name" \
+            --arg status "$status" \
+            --arg timestamp "$(date -Iseconds)" \
+            --arg run_id "$run_id" \
+            --argjson seed "$seed" \
+            --arg screen_mode "$screen_mode" \
+            --argjson cols "$cols" \
+            --argjson rows "$rows" \
+            --arg evidence_jsonl "$evidence_jsonl" \
+            --arg pty_output "$pty_out" \
+            --argjson duration_ms "$duration_ms" \
+            --arg diff_hash "$diff_hash" \
+            '{event:"span_diff_case",case:$case,status:$status,timestamp:$timestamp,run_id:$run_id,seed:$seed,screen_mode:$screen_mode,cols:$cols,rows:$rows,evidence_jsonl:$evidence_jsonl,pty_output:$pty_output,duration_ms:$duration_ms,diff_hash:$diff_hash}' \
+            >> "$jsonl"
+    else
+        printf '{"event":"span_diff_case","case":"%s","status":"%s","timestamp":"%s","run_id":"%s","seed":%s,"screen_mode":"%s","cols":%s,"rows":%s,"evidence_jsonl":"%s","pty_output":"%s","duration_ms":%s,"diff_hash":"%s"}\n' \
+            "$(escape_json "$case_name")" "$(escape_json "$status")" "$(date -Iseconds)" "$(escape_json "$run_id")" \
+            "$seed" "$(escape_json "$screen_mode")" "$cols" "$rows" \
+            "$(escape_json "$evidence_jsonl")" "$(escape_json "$pty_out")" "$duration_ms" "$(escape_json "$diff_hash")" \
+            >> "$jsonl"
+    fi
+}
+
 run_large_case() {
     local case_name="$1"
     local screen_mode="$2"
@@ -291,6 +443,8 @@ run_large_case() {
     local output_file="$E2E_LOG_DIR/${case_name}.pty"
     local evidence_jsonl_raw="$E2E_LOG_DIR/${case_name}_evidence_raw.jsonl"
     local evidence_jsonl="$E2E_LOG_DIR/${case_name}_evidence.jsonl"
+    local trace_jsonl="$E2E_LOG_DIR/${case_name}_trace.jsonl"
+    local trace_replay_log="$E2E_LOG_DIR/${case_name}_trace_replay.log"
     local caps_file="$E2E_LOG_DIR/${case_name}_caps.log"
 
     log_test_start "$case_name"
@@ -309,6 +463,10 @@ run_large_case() {
     FTUI_HARNESS_BOCPD="$bocpd" \
     FTUI_HARNESS_CONFORMAL="$conformal" \
     FTUI_HARNESS_EVIDENCE_JSONL="$evidence_jsonl_raw" \
+    FTUI_HARNESS_RENDER_TRACE_JSONL="$trace_jsonl" \
+    FTUI_HARNESS_RENDER_TRACE_RUN_ID="${run_id}_${case_name}" \
+    FTUI_HARNESS_RENDER_TRACE_SEED="$seed" \
+    FTUI_HARNESS_RENDER_TRACE_MODULE="$case_name" \
     PTY_COLS="$cols" \
     PTY_ROWS="$rows" \
     PTY_TIMEOUT=6 \
@@ -338,6 +496,13 @@ run_large_case() {
 
     annotate_evidence_run_id "$evidence_jsonl_raw" "$evidence_jsonl" "$run_id"
 
+    if [[ ! -s "$trace_jsonl" ]]; then
+        log_test_fail "$case_name" "missing render trace"
+        record_result "$case_name" "failed" "$duration_ms" "$LOG_FILE" "missing render trace"
+        write_large_case_meta "$jsonl" "$case_name" "failed" "$seed" "$screen_mode" "$cols" "$rows" "$ui_height" "$diff_bayes" "$bocpd" "$conformal" "$evidence_jsonl" "$output_file" "$caps_file" "$duration_ms" "$run_id"
+        return 1
+    fi
+
     if [[ "$diff_bayes" == "1" && "$bocpd" == "1" && "$conformal" == "1" ]]; then
         if ! check_policy_evidence "$evidence_jsonl" "$case_name"; then
             record_result "$case_name" "failed" "$duration_ms" "$LOG_FILE" "missing policy evidence"
@@ -346,9 +511,100 @@ run_large_case() {
         fi
     fi
 
+    if ! run_trace_replay "$case_name" "$trace_jsonl" "$trace_replay_log"; then
+        record_result "$case_name" "failed" "$duration_ms" "$LOG_FILE" "${TRACE_REPLAY_ERR:-trace replay failed}"
+        write_large_case_meta "$jsonl" "$case_name" "failed" "$seed" "$screen_mode" "$cols" "$rows" "$ui_height" "$diff_bayes" "$bocpd" "$conformal" "$evidence_jsonl" "$output_file" "$caps_file" "$duration_ms" "$run_id"
+        return 1
+    fi
+
     log_test_pass "$case_name"
     record_result "$case_name" "passed" "$duration_ms" "$LOG_FILE"
     write_large_case_meta "$jsonl" "$case_name" "passed" "$seed" "$screen_mode" "$cols" "$rows" "$ui_height" "$diff_bayes" "$bocpd" "$conformal" "$evidence_jsonl" "$output_file" "$caps_file" "$duration_ms" "$run_id"
+}
+
+run_span_case() {
+    local case_name="$1"
+    local screen_mode="$2"
+    local cols="$3"
+    local rows="$4"
+    local seed="$5"
+    local jsonl="$6"
+    local run_id="$7"
+
+    LOG_FILE="$E2E_LOG_DIR/${case_name}.log"
+    local output_file="$E2E_LOG_DIR/${case_name}.pty"
+    local evidence_jsonl="$E2E_LOG_DIR/${case_name}_evidence.jsonl"
+    local trace_jsonl="$E2E_LOG_DIR/${case_name}_trace.jsonl"
+    local trace_replay_log="$E2E_LOG_DIR/${case_name}_trace_replay.log"
+
+    log_test_start "$case_name"
+
+    local start_ms
+    start_ms="$(date +%s%3N)"
+
+    FTUI_HARNESS_SCREEN_MODE="$screen_mode" \
+    FTUI_HARNESS_VIEW="span-diff" \
+    FTUI_HARNESS_EXIT_AFTER_MS=1200 \
+    FTUI_HARNESS_LOG_LINES=0 \
+    FTUI_HARNESS_SUPPRESS_WELCOME=1 \
+    FTUI_HARNESS_SEED="$seed" \
+    FTUI_HARNESS_EVIDENCE_JSONL="$evidence_jsonl" \
+    FTUI_HARNESS_RENDER_TRACE_JSONL="$trace_jsonl" \
+    FTUI_HARNESS_RENDER_TRACE_RUN_ID="${run_id}_${case_name}" \
+    FTUI_HARNESS_RENDER_TRACE_SEED="$seed" \
+    FTUI_HARNESS_RENDER_TRACE_MODULE="$case_name" \
+    PTY_COLS="$cols" \
+    PTY_ROWS="$rows" \
+    PTY_TIMEOUT=6 \
+    PTY_CANONICALIZE=1 \
+    PTY_TEST_NAME="$case_name" \
+        pty_run "$output_file" "$E2E_HARNESS_BIN"
+
+    local end_ms
+    end_ms="$(date +%s%3N)"
+    local duration_ms=$((end_ms - start_ms))
+
+    local size
+    size=$(wc -c < "$output_file" | tr -d ' ')
+    if [[ "$size" -lt 800 ]]; then
+        log_test_fail "$case_name" "insufficient PTY output ($size bytes)"
+        record_result "$case_name" "failed" "$duration_ms" "$LOG_FILE" "insufficient output"
+        write_span_case_meta "$jsonl" "$case_name" "failed" "$seed" "$screen_mode" "$cols" "$rows" "$evidence_jsonl" "$output_file" "$duration_ms" "$run_id" ""
+        return 1
+    fi
+
+    if [[ ! -s "$evidence_jsonl" ]]; then
+        log_test_fail "$case_name" "missing evidence log"
+        record_result "$case_name" "failed" "$duration_ms" "$LOG_FILE" "missing evidence log"
+        write_span_case_meta "$jsonl" "$case_name" "failed" "$seed" "$screen_mode" "$cols" "$rows" "$evidence_jsonl" "$output_file" "$duration_ms" "$run_id" ""
+        return 1
+    fi
+
+    if [[ ! -s "$trace_jsonl" ]]; then
+        log_test_fail "$case_name" "missing render trace"
+        record_result "$case_name" "failed" "$duration_ms" "$LOG_FILE" "missing render trace"
+        write_span_case_meta "$jsonl" "$case_name" "failed" "$seed" "$screen_mode" "$cols" "$rows" "$evidence_jsonl" "$output_file" "$duration_ms" "$run_id" ""
+        return 1
+    fi
+
+    if ! check_span_evidence "$evidence_jsonl" "$case_name"; then
+        record_result "$case_name" "failed" "$duration_ms" "$LOG_FILE" "missing span evidence"
+        write_span_case_meta "$jsonl" "$case_name" "failed" "$seed" "$screen_mode" "$cols" "$rows" "$evidence_jsonl" "$output_file" "$duration_ms" "$run_id" ""
+        return 1
+    fi
+
+    if ! run_trace_replay "$case_name" "$trace_jsonl" "$trace_replay_log"; then
+        record_result "$case_name" "failed" "$duration_ms" "$LOG_FILE" "${TRACE_REPLAY_ERR:-trace replay failed}"
+        write_span_case_meta "$jsonl" "$case_name" "failed" "$seed" "$screen_mode" "$cols" "$rows" "$evidence_jsonl" "$output_file" "$duration_ms" "$run_id" ""
+        return 1
+    fi
+
+    local diff_hash
+    diff_hash="$(span_diff_hash "$evidence_jsonl")"
+
+    log_test_pass "$case_name"
+    record_result "$case_name" "passed" "$duration_ms" "$LOG_FILE"
+    write_span_case_meta "$jsonl" "$case_name" "passed" "$seed" "$screen_mode" "$cols" "$rows" "$evidence_jsonl" "$output_file" "$duration_ms" "$run_id" "$diff_hash"
 }
 
 run_budget_case() {
@@ -365,6 +621,8 @@ run_budget_case() {
     LOG_FILE="$E2E_LOG_DIR/${case_name}.log"
     local output_file="$E2E_LOG_DIR/${case_name}.pty"
     local evidence_jsonl="$E2E_LOG_DIR/${case_name}_evidence.jsonl"
+    local trace_jsonl="$E2E_LOG_DIR/${case_name}_trace.jsonl"
+    local trace_replay_log="$E2E_LOG_DIR/${case_name}_trace_replay.log"
 
     log_test_start "$case_name"
 
@@ -380,6 +638,10 @@ run_budget_case() {
     FTUI_HARNESS_FRAME_BUDGET_US="$frame_budget_us" \
     FTUI_HARNESS_RENDER_BUDGET_US="$render_budget_us" \
     FTUI_HARNESS_EVIDENCE_JSONL="$evidence_jsonl" \
+    FTUI_HARNESS_RENDER_TRACE_JSONL="$trace_jsonl" \
+    FTUI_HARNESS_RENDER_TRACE_RUN_ID="${run_id}_${case_name}" \
+    FTUI_HARNESS_RENDER_TRACE_SEED="$seed" \
+    FTUI_HARNESS_RENDER_TRACE_MODULE="$case_name" \
     PTY_COLS="$cols" \
     PTY_ROWS="$rows" \
     PTY_TIMEOUT=6 \
@@ -407,8 +669,21 @@ run_budget_case() {
         return 1
     fi
 
+    if [[ ! -s "$trace_jsonl" ]]; then
+        log_test_fail "$case_name" "missing render trace"
+        record_result "$case_name" "failed" "$duration_ms" "$LOG_FILE" "missing render trace"
+        write_budget_case_meta "$jsonl" "$case_name" "failed" "$seed" "$screen_mode" "$cols" "$rows" "$frame_budget_us" "$render_budget_us" "$evidence_jsonl" "$output_file" "$duration_ms" "$run_id" ""
+        return 1
+    fi
+
     if ! check_widget_refresh_evidence "$evidence_jsonl" "$case_name"; then
         record_result "$case_name" "failed" "$duration_ms" "$LOG_FILE" "missing widget_refresh evidence"
+        write_budget_case_meta "$jsonl" "$case_name" "failed" "$seed" "$screen_mode" "$cols" "$rows" "$frame_budget_us" "$render_budget_us" "$evidence_jsonl" "$output_file" "$duration_ms" "$run_id" ""
+        return 1
+    fi
+
+    if ! run_trace_replay "$case_name" "$trace_jsonl" "$trace_replay_log"; then
+        record_result "$case_name" "failed" "$duration_ms" "$LOG_FILE" "${TRACE_REPLAY_ERR:-trace replay failed}"
         write_budget_case_meta "$jsonl" "$case_name" "failed" "$seed" "$screen_mode" "$cols" "$rows" "$frame_budget_us" "$render_budget_us" "$evidence_jsonl" "$output_file" "$duration_ms" "$run_id" ""
         return 1
     fi
@@ -458,6 +733,63 @@ if $RUN_LARGE; then
 
         if [[ "$LARGE_FAILURES" -gt 0 ]]; then
             log_error "$LARGE_FAILURES large-screen scenario(s) failed"
+            RUN_ALL_STATUS=1
+        fi
+    fi
+fi
+
+if $RUN_SPAN; then
+    log_info "Running span-diff scenario"
+
+    TARGET_DIR="${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}"
+    E2E_HARNESS_BIN="${E2E_HARNESS_BIN:-$TARGET_DIR/debug/ftui-harness}"
+    export E2E_HARNESS_BIN
+
+    if [[ ! -x "$E2E_HARNESS_BIN" ]]; then
+        log_test_skip "span_diff" "ftui-harness binary missing"
+        record_result "span_diff" "skipped" 0 "$LOG_FILE" "missing harness binary"
+    else
+        SPAN_JSONL="$E2E_LOG_DIR/span_diff.jsonl"
+        SEED="${FTUI_HARNESS_SEED:-${E2E_SEED:-0}}"
+        RUN_ID="span_diff_${TIMESTAMP}_$$"
+
+        SPAN_FAILURES=0
+        run_span_case "span_diff_run1" "altscreen" 160 60 "$SEED" "$SPAN_JSONL" "$RUN_ID" || SPAN_FAILURES=1
+        run_span_case "span_diff_run2" "altscreen" 160 60 "$SEED" "$SPAN_JSONL" "$RUN_ID" || SPAN_FAILURES=1
+
+        if [[ "$SPAN_FAILURES" -eq 0 ]]; then
+            local_a="$E2E_LOG_DIR/span_diff_run1_diff_decision.jsonl"
+            local_b="$E2E_LOG_DIR/span_diff_run2_diff_decision.jsonl"
+            extract_diff_decision_lines "$E2E_LOG_DIR/span_diff_run1_evidence.jsonl" "$local_a"
+            extract_diff_decision_lines "$E2E_LOG_DIR/span_diff_run2_evidence.jsonl" "$local_b"
+
+            if ! diff -u "$local_a" "$local_b" >/dev/null 2>&1; then
+                log_test_fail "span_diff_determinism" "diff_decision evidence mismatch"
+                if command -v diff >/dev/null 2>&1; then
+                    diff -u "$local_a" "$local_b" | head -40 >> "$LOG_FILE" 2>&1 || true
+                fi
+                if command -v jq >/dev/null 2>&1; then
+                    mismatch_lines="$(awk 'NR==FNR {a[NR]=$0; next} { if ($0 != a[FNR]) { print a[FNR]; print $0; exit 0 } } END { if (FNR != NR) { if (FNR < NR) print a[FNR+1]; else print $0 } }' "$local_a" "$local_b")"
+                    if [[ -n "$mismatch_lines" ]]; then
+                        left_line="$(printf '%s\n' "$mismatch_lines" | sed -n '1p')"
+                        right_line="$(printf '%s\n' "$mismatch_lines" | sed -n '2p')"
+                        left_idx="$(printf '%s' "$left_line" | jq -r '.event_idx // empty')"
+                        left_span="$(printf '%s' "$left_line" | jq -r '.span_count // empty')"
+                        left_cov="$(printf '%s' "$left_line" | jq -r '.span_coverage_pct // empty')"
+                        left_cost="$(printf '%s' "$left_line" | jq -r '.scan_cost_estimate // empty')"
+                        printf 'Span mismatch event_idx=%s span_count=%s span_coverage_pct=%s scan_cost_estimate=%s\n' \
+                            "$left_idx" "$left_span" "$left_cov" "$left_cost" >> "$LOG_FILE"
+                        printf 'Span mismatch line A: %s\nSpan mismatch line B: %s\n' \
+                            "$left_line" "$right_line" >> "$LOG_FILE"
+                    fi
+                fi
+                record_result "span_diff_determinism" "failed" 0 "$LOG_FILE" "diff_decision evidence mismatch"
+                RUN_ALL_STATUS=1
+            else
+                log_test_pass "span_diff_determinism"
+                record_result "span_diff_determinism" "passed" 0 "$LOG_FILE"
+            fi
+        else
             RUN_ALL_STATUS=1
         fi
     fi

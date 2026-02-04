@@ -38,9 +38,7 @@
 use crate::canvas::Painter;
 use crate::visual_fx::effects::metaballs::MetaballsParams;
 use crate::visual_fx::effects::plasma::PlasmaPalette;
-use crate::visual_fx::effects::sampling::{
-    BallState, MetaballFieldSampler, PlasmaSampler, Sampler,
-};
+use crate::visual_fx::effects::sampling::{BallState, MetaballFieldSampler};
 use crate::visual_fx::{FxQuality, ThemeInputs};
 use ftui_render::cell::PackedRgba;
 
@@ -56,13 +54,52 @@ use ftui_render::cell::PackedRgba;
 pub struct PlasmaCanvasAdapter {
     /// Color palette for the effect.
     palette: PlasmaPalette,
+    /// Cached geometry for the current painter size.
+    cache_width: u16,
+    cache_height: u16,
+    /// Wave-space x coordinates (nx * 6.0).
+    wx: Vec<f64>,
+    /// Wave-space y coordinates (ny * 6.0).
+    wy: Vec<f64>,
+    /// sin/cos for diagonal term (wx * 1.2).
+    x_diag_sin: Vec<f64>,
+    x_diag_cos: Vec<f64>,
+    /// sin/cos for diagonal term (wy * 1.2).
+    y_diag_sin: Vec<f64>,
+    y_diag_cos: Vec<f64>,
+    /// sin(wx * 2.0) for interference.
+    x_sin2: Vec<f64>,
+    /// cos(wy * 2.0) for interference.
+    y_cos2: Vec<f64>,
+    /// Pre-scaled radial distances for v4 (center) and v5 (offset).
+    radial_center_scaled: Vec<f64>,
+    radial_offset_scaled: Vec<f64>,
+    /// Per-frame scratch buffers for v1/v2.
+    x_wave: Vec<f64>,
+    y_wave: Vec<f64>,
 }
 
 impl PlasmaCanvasAdapter {
     /// Create a new plasma canvas adapter.
     #[inline]
     pub const fn new(palette: PlasmaPalette) -> Self {
-        Self { palette }
+        Self {
+            palette,
+            cache_width: 0,
+            cache_height: 0,
+            wx: Vec::new(),
+            wy: Vec::new(),
+            x_diag_sin: Vec::new(),
+            x_diag_cos: Vec::new(),
+            y_diag_sin: Vec::new(),
+            y_diag_cos: Vec::new(),
+            x_sin2: Vec::new(),
+            y_cos2: Vec::new(),
+            radial_center_scaled: Vec::new(),
+            radial_offset_scaled: Vec::new(),
+            x_wave: Vec::new(),
+            y_wave: Vec::new(),
+        }
     }
 
     /// Create a plasma adapter using theme accent colors.
@@ -77,6 +114,72 @@ impl PlasmaCanvasAdapter {
         self.palette = palette;
     }
 
+    fn ensure_cache(&mut self, width: u16, height: u16) {
+        if self.cache_width == width && self.cache_height == height {
+            return;
+        }
+
+        self.cache_width = width;
+        self.cache_height = height;
+
+        let w = width as usize;
+        let h = height as usize;
+
+        self.wx.resize(w, 0.0);
+        self.x_diag_sin.resize(w, 0.0);
+        self.x_diag_cos.resize(w, 0.0);
+        self.x_sin2.resize(w, 0.0);
+
+        let inv_w = if w > 0 { 1.0 / w as f64 } else { 0.0 };
+        for x in 0..w {
+            let nx = (x as f64 + 0.5) * inv_w;
+            let wx = nx * 6.0;
+            self.wx[x] = wx;
+            let diag = wx * 1.2;
+            let (sin, cos) = diag.sin_cos();
+            self.x_diag_sin[x] = sin;
+            self.x_diag_cos[x] = cos;
+            self.x_sin2[x] = (wx * 2.0).sin();
+        }
+
+        self.wy.resize(h, 0.0);
+        self.y_diag_sin.resize(h, 0.0);
+        self.y_diag_cos.resize(h, 0.0);
+        self.y_cos2.resize(h, 0.0);
+
+        let inv_h = if h > 0 { 1.0 / h as f64 } else { 0.0 };
+        for y in 0..h {
+            let ny = (y as f64 + 0.5) * inv_h;
+            let wy = ny * 6.0;
+            self.wy[y] = wy;
+            let diag = wy * 1.2;
+            let (sin, cos) = diag.sin_cos();
+            self.y_diag_sin[y] = sin;
+            self.y_diag_cos[y] = cos;
+            self.y_cos2[y] = (wy * 2.0).cos();
+        }
+
+        let total = w.saturating_mul(h);
+        self.radial_center_scaled.resize(total, 0.0);
+        self.radial_offset_scaled.resize(total, 0.0);
+
+        for y in 0..h {
+            let wy = self.wy[y];
+            let wy_sq = wy * wy;
+            let wy_m3 = wy - 3.0;
+            let wy_m3_sq = wy_m3 * wy_m3;
+            let row_offset = y * w;
+            for x in 0..w {
+                let wx = self.wx[x];
+                let wx_sq = wx * wx;
+                let wx_m3 = wx - 3.0;
+                let idx = row_offset + x;
+                self.radial_center_scaled[idx] = (wx_sq + wy_sq).sqrt() * 2.0;
+                self.radial_offset_scaled[idx] = ((wx_m3 * wx_m3) + wy_m3_sq).sqrt() * 1.8;
+            }
+        }
+    }
+
     /// Fill a painter with plasma at sub-pixel resolution.
     ///
     /// # Arguments
@@ -87,7 +190,13 @@ impl PlasmaCanvasAdapter {
     ///
     /// # No Allocations
     /// This method does not allocate after initial painter setup.
-    pub fn fill(&self, painter: &mut Painter, time: f64, quality: FxQuality, theme: &ThemeInputs) {
+    pub fn fill(
+        &mut self,
+        painter: &mut Painter,
+        time: f64,
+        quality: FxQuality,
+        theme: &ThemeInputs,
+    ) {
         if !quality.is_enabled() {
             return;
         }
@@ -97,26 +206,66 @@ impl PlasmaCanvasAdapter {
             return;
         }
 
-        let sampler = PlasmaSampler;
-        let w = width as f64;
-        let h = height as f64;
+        self.ensure_cache(width, height);
 
-        for dy in 0..height {
-            // Normalized y: sample at sub-pixel centers
-            let ny = (dy as f64 + 0.5) / h;
+        let w = width as usize;
+        let h = height as usize;
 
-            for dx in 0..width {
-                // Normalized x: sample at sub-pixel centers
-                let nx = (dx as f64 + 0.5) / w;
+        let t1 = time;
+        let t2 = time * 0.8;
+        let t3 = time * 0.6;
+        let t4 = time * 1.2;
+        let t6 = time * 0.5;
+        let (sin_t3, cos_t3) = t3.sin_cos();
 
-                // Sample plasma wave intensity
-                let wave = sampler.sample(nx, ny, time, quality);
+        self.x_wave.resize(w, 0.0);
+        for (x, wave) in self.x_wave.iter_mut().enumerate().take(w) {
+            *wave = (self.wx[x] * 1.5 + t1).sin();
+        }
 
-                // Convert to color via palette
-                let color = self.palette.color_at(wave, theme);
+        self.y_wave.resize(h, 0.0);
+        for (y, wave) in self.y_wave.iter_mut().enumerate().take(h) {
+            *wave = (self.wy[y] * 1.8 + t2).sin();
+        }
 
-                // Set sub-pixel with color
-                painter.point_colored(dx as i32, dy as i32, color);
+        let full = quality == FxQuality::Full;
+        let reduced = quality == FxQuality::Reduced;
+
+        for y in 0..h {
+            let v2 = self.y_wave[y];
+            let y_sin = self.y_diag_sin[y];
+            let y_cos = self.y_diag_cos[y];
+            let y_cos2 = self.y_cos2[y];
+            let row_offset = y * w;
+
+            for x in 0..w {
+                let v1 = self.x_wave[x];
+                let x_sin = self.x_diag_sin[x];
+                let x_cos = self.x_diag_cos[x];
+
+                // sin(x+y+t3) via trig identities (no per-pixel trig).
+                let sin_xy = x_sin * y_cos + x_cos * y_sin;
+                let cos_xy = x_cos * y_cos - x_sin * y_sin;
+                let v3 = sin_xy * cos_t3 + cos_xy * sin_t3;
+
+                let wave = if full {
+                    let idx = row_offset + x;
+                    let v4 = (self.radial_center_scaled[idx] - t4).sin();
+                    let v5 = (self.radial_offset_scaled[idx] + time).cos();
+                    let v6 = (self.x_sin2[x] * y_cos2 + t6).sin();
+                    (v1 + v2 + v3 + v4 + v5 + v6) / 6.0
+                } else if reduced {
+                    let idx = row_offset + x;
+                    let v4 = (self.radial_center_scaled[idx] - t4).sin();
+                    (v1 + v2 + v3 + v4) / 4.0
+                } else if quality == FxQuality::Minimal {
+                    (v1 + v2 + v3) / 3.0
+                } else {
+                    0.0
+                };
+
+                let color = self.palette.color_at((wave + 1.0) * 0.5, theme);
+                painter.point_colored(x as i32, y as i32, color);
             }
         }
     }
@@ -234,19 +383,26 @@ impl MetaballsCanvasAdapter {
             return;
         }
 
-        let sampler = MetaballFieldSampler::new(self.ball_cache.clone());
         let (glow, threshold) = thresholds(&self.params);
         let w = width as f64;
         let h = height as f64;
+        let inv_w = 1.0 / w;
+        let inv_h = 1.0 / h;
+        let stops = palette_stops(self.params.palette, theme);
 
         for dy in 0..height {
-            let ny = (dy as f64 + 0.5) / h;
+            let ny = (dy as f64 + 0.5) * inv_h;
 
             for dx in 0..width {
-                let nx = (dx as f64 + 0.5) / w;
+                let nx = (dx as f64 + 0.5) * inv_w;
 
                 // Sample field and hue
-                let (field, avg_hue) = sampler.sample_field(nx, ny, quality);
+                let (field, avg_hue) = MetaballFieldSampler::sample_field_from_slice(
+                    &self.ball_cache,
+                    nx,
+                    ny,
+                    quality,
+                );
 
                 if field > glow {
                     let intensity = if field > threshold {
@@ -255,7 +411,7 @@ impl MetaballsCanvasAdapter {
                         (field - glow) / (threshold - glow)
                     };
 
-                    let color = color_at(self.params.palette, avg_hue, intensity, theme);
+                    let color = color_at_with_stops(&stops, avg_hue, intensity, theme);
                     painter.point_colored(dx as i32, dy as i32, color);
                 }
             }
@@ -309,18 +465,6 @@ fn thresholds(params: &MetaballsParams) -> (f64, f64) {
     (glow, threshold)
 }
 
-fn color_at(
-    palette: crate::visual_fx::effects::metaballs::MetaballsPalette,
-    hue: f64,
-    intensity: f64,
-    theme: &ThemeInputs,
-) -> PackedRgba {
-    let stops = palette_stops(palette, theme);
-    let base = gradient_color(&stops, hue);
-    let t = intensity.clamp(0.0, 1.0);
-    lerp_color(theme.bg_base, base, t)
-}
-
 fn palette_stops(
     palette: crate::visual_fx::effects::metaballs::MetaballsPalette,
     theme: &ThemeInputs,
@@ -352,6 +496,18 @@ fn palette_stops(
             theme.fg_primary,
         ],
     }
+}
+
+#[inline]
+fn color_at_with_stops(
+    stops: &[PackedRgba; 4],
+    hue: f64,
+    intensity: f64,
+    theme: &ThemeInputs,
+) -> PackedRgba {
+    let base = gradient_color(stops, hue);
+    let t = intensity.clamp(0.0, 1.0);
+    lerp_color(theme.bg_base, base, t)
 }
 
 #[inline]
@@ -408,7 +564,7 @@ mod tests {
     #[test]
     fn plasma_adapter_fills_painter() {
         let theme = default_theme();
-        let adapter = PlasmaCanvasAdapter::theme();
+        let mut adapter = PlasmaCanvasAdapter::theme();
         let mut painter = Painter::new(20, 16, Mode::Braille);
 
         adapter.fill(&mut painter, 1.0, FxQuality::Full, &theme);
@@ -429,7 +585,7 @@ mod tests {
     #[test]
     fn plasma_adapter_quality_off_noop() {
         let theme = default_theme();
-        let adapter = PlasmaCanvasAdapter::theme();
+        let mut adapter = PlasmaCanvasAdapter::theme();
         let mut painter = Painter::new(10, 8, Mode::Braille);
 
         adapter.fill(&mut painter, 1.0, FxQuality::Off, &theme);
@@ -449,7 +605,7 @@ mod tests {
     #[test]
     fn plasma_adapter_deterministic() {
         let theme = default_theme();
-        let adapter = PlasmaCanvasAdapter::new(PlasmaPalette::Ocean);
+        let mut adapter = PlasmaCanvasAdapter::new(PlasmaPalette::Ocean);
         let mut p1 = Painter::new(16, 16, Mode::Braille);
         let mut p2 = Painter::new(16, 16, Mode::Braille);
 
@@ -551,7 +707,7 @@ mod tests {
     #[test]
     fn empty_painter_safe() {
         let theme = default_theme();
-        let adapter = PlasmaCanvasAdapter::theme();
+        let mut adapter = PlasmaCanvasAdapter::theme();
         let mut painter = Painter::new(0, 0, Mode::Braille);
 
         // Should not panic
@@ -561,7 +717,7 @@ mod tests {
     #[test]
     fn single_pixel_painter() {
         let theme = default_theme();
-        let adapter = PlasmaCanvasAdapter::theme();
+        let mut adapter = PlasmaCanvasAdapter::theme();
         let mut painter = Painter::new(1, 1, Mode::Braille);
 
         adapter.fill(&mut painter, 0.5, FxQuality::Full, &theme);

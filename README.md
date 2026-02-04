@@ -433,6 +433,25 @@ where BF_i = Bayes Factor for evidence type i
 
 **Result:** Every search result includes an explainable evidence ledger showing exactly why it ranked where it did.
 
+### Bayesian Hint Ranking (Keybinding Hints)
+
+Keybinding hints are ranked by **expected utility minus display cost**, with a VOI exploration bonus and hysteresis for stability:
+
+```
+Utility posterior:
+    U_i ~ Beta(α_i, β_i)
+    E[U_i] = α_i / (α_i + β_i)
+    VOI_i = sqrt(Var(U_i))
+
+Net value:
+    V_i = E[U_i] + w_voi × VOI_i - λ × C_i
+
+Hysteresis:
+    swap only if V_i - V_j > ε
+```
+
+**Result:** the UI surfaces the most valuable shortcuts without flicker, while still exploring uncertain hints.
+
 ### Bayesian Diff Strategy Selection
 
 The renderer adaptively chooses between diff strategies using a **Beta posterior over change rates**:
@@ -499,6 +518,20 @@ query(i):     for (j=i; j>0; j-=j&-j)  sum+=tree[j]
 ```
 
 **Result:** O(log n) height lookup and scroll positioning without scanning all rows.
+
+### Bayesian Height Prediction + Conformal Bounds (Virtualized Lists)
+
+Virtualized lists predict unseen row heights to avoid scroll jumps, using a **Normal-Normal** conjugate update plus conformal bounds:
+
+```
+Prior:     μ ~ N(μ₀, σ₀²/κ₀)
+Posterior: μ_n = (κ₀·μ₀ + n·x̄) / (κ₀ + n)
+
+Conformal interval:
+    [μ_n - q_{1-α}, μ_n + q_{1-α}]
+```
+
+Variance is tracked online with Welford’s algorithm, and `q` is the empirical quantile of |residuals|.
 
 ### BOCPD: Online Change-Point Detection
 
@@ -593,6 +626,20 @@ E-process layer (anytime-valid):
 ```
 
 **Why conformal?** No distributional assumptions required—works for any data pattern.
+
+### Mondrian Conformal Frame-Time Risk Gating
+
+Frame-time risk gating uses **bucketed (Mondrian) conformal prediction** keyed by screen mode, diff strategy, and size:
+
+```
+Residuals: r_t = y_t - ŷ_t
+Upper bound: ŷ_t^+ = ŷ_t + q_{1-α}(|r|)
+
+Risk if: ŷ_t^+ > budget
+```
+
+Buckets fall back from (mode, diff, size) → (mode, diff) → (mode) → global default,
+preserving coverage even when data is sparse.
 
 ### CUSUM Control Charts
 
@@ -932,15 +979,18 @@ These aren’t academic decorations—they’re directly tied to throughput, lat
 |----------|------------------|-------------------------------|--------------------|
 | **Bayes Factors** | Command palette scoring | $\frac{P(R\mid E)}{P(\neg R\mid E)}=\frac{P(R)}{P(\neg R)}\prod_i BF_i$ | Better ranking with fewer re‑sorts |
 | **Evidence Ledger** | Explanations for probabilistic decisions | $\log\frac{P(R\mid E)}{P(\neg R\mid E)}=\log\frac{P(R)}{P(\neg R)}+\sum_i\log BF_i$ | Debuggable, auditable scoring |
+| **Bayesian Hint Ranking** | Keybinding hint ordering | $V_i=E[U_i]+w_{voi}\sqrt{Var(U_i)}-\lambda C_i$ | Stable, utility‑aware hints |
 | **Beta-Binomial** | Diff strategy selection | $p\sim\mathrm{Beta}(\alpha,\beta)$ with binomial updates | Avoids slow strategies as workload shifts |
 | **Interval Union** | Dirty-span diff scan | $S_y=\bigcup_k [x_{0k},x_{1k})$ | Scan proportional to changed segments |
 | **Summed-Area Table** | Tile-skip diff | $SAT(x,y)=A(x,y)+SAT(x-1,y)+SAT(x,y-1)-SAT(x-1,y-1)$ | Skip empty tiles on large screens |
 | **Fenwick Tree** | Virtualized lists | Prefix sums with $i\pm (i\&-i)$ | O(log n) scroll + height queries |
+| **Bayesian Height Predictor** | Virtualized list preallocation | $\mu_n=\frac{\kappa_0\mu_0+n\bar{x}}{\kappa_0+n}$ + conformal $q_{1-\alpha}$ | Fewer scroll jumps |
 | **BOCPD** | Resize coalescing | Run‑length posterior + hazard $H(r)$ | Fewer redundant renders during drags |
 | **Run‑Length Posterior** | BOCPD core | $P(r_t=r\mid x_{1:t})$ recursion | Fast regime switches without thresholds |
 | **E‑Process** | Budget alerts, throttle | $W_t=W_{t-1}(1+\lambda_t(X_t-\mu_0))$ | Safe early exits under continuous monitoring |
 | **GRAPA** | Adaptive e‑process | $\lambda_{t+1}=\lambda_t+\eta\nabla_{\lambda}\log W_t$ | Self‑tuning sensitivity |
 | **Conformal Prediction** | Risk bounds | $q=\text{Quantile}_{\lceil(1-\alpha)(n+1)\rceil}(R)$ | Stable thresholds without tuning |
+| **Mondrian Conformal** | Frame‑time risk gating | $\hat y^+=\hat y+q_{1-\alpha}(|r|)$ per bucket | Safe budget gating with sparse data |
 | **CUSUM** | Budget change detection | $S_t=\max(0,S_{t-1}+X_t-\mu_0-k)$ | Fast drift detection |
 | **PID / PI** | Degradation control | $u_t=K_pe_t+K_i\sum e_t+K_d\Delta e_t$ | Smooth frame‑time stabilization |
 | **MPC** | Control evaluation | $\min_{u_{t:t+H}}\sum\|y_{t+k}-y^*\|^2+\rho\|u_{t+k}\|^2$ | Confirms PI is sufficient |

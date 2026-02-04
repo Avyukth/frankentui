@@ -28,7 +28,7 @@
 //! let cached = cache.get_or_compute(
 //!     WidgetId::from_ptr(&my_widget),
 //!     Size::new(80, 24),
-//!     || panic!("should not be called"),
+//!     || SizeConstraints::default(),
 //! );
 //! ```
 //!
@@ -452,7 +452,7 @@ mod tests {
         };
 
         let r1 = cache.get_or_compute(widget_id, available, compute);
-        let r2 = cache.get_or_compute(widget_id, available, || panic!("should not call"));
+        let r2 = cache.get_or_compute(widget_id, available, || unreachable!("should not call"));
 
         assert_eq!(r1, r2);
         assert_eq!(call_count, 1); // Only called once
@@ -542,7 +542,7 @@ mod tests {
             count1 += 1;
             SizeConstraints::ZERO
         });
-        cache.get_or_compute(widget2, available, || panic!("should hit"));
+        cache.get_or_compute(widget2, available, || unreachable!("should hit"));
 
         assert_eq!(count1, 2);
         assert_eq!(count2, 1);
@@ -557,7 +557,9 @@ mod tests {
         cache.get_or_compute(WidgetId(2), Size::new(10, 10), || SizeConstraints::ZERO);
 
         // Access widget 1 again (increases its access count)
-        cache.get_or_compute(WidgetId(1), Size::new(10, 10), || panic!("should hit"));
+        cache.get_or_compute(WidgetId(1), Size::new(10, 10), || {
+            unreachable!("should hit")
+        });
 
         // Insert third entry, should evict widget 2 (least accessed)
         cache.get_or_compute(WidgetId(3), Size::new(10, 10), || SizeConstraints::ZERO);
@@ -574,7 +576,7 @@ mod tests {
 
         // Widget 1 should still be cached
         cache.get_or_compute(WidgetId(1), Size::new(10, 10), || {
-            panic!("widget 1 should still be cached")
+            unreachable!("widget 1 should still be cached")
         });
     }
 
@@ -583,7 +585,7 @@ mod tests {
         let mut cache = MeasureCache::new(100);
 
         cache.get_or_compute(WidgetId(1), Size::new(10, 10), || SizeConstraints::ZERO);
-        cache.get_or_compute(WidgetId(1), Size::new(10, 10), || panic!("hit"));
+        cache.get_or_compute(WidgetId(1), Size::new(10, 10), || unreachable!("hit"));
         cache.get_or_compute(WidgetId(2), Size::new(10, 10), || SizeConstraints::ZERO);
 
         let stats = cache.stats();
@@ -597,7 +599,7 @@ mod tests {
         let mut cache = MeasureCache::new(100);
 
         cache.get_or_compute(WidgetId(1), Size::new(10, 10), || SizeConstraints::ZERO);
-        cache.get_or_compute(WidgetId(1), Size::new(10, 10), || panic!("hit"));
+        cache.get_or_compute(WidgetId(1), Size::new(10, 10), || unreachable!("hit"));
 
         let stats = cache.stats();
         assert_eq!(stats.hits, 1);
@@ -684,7 +686,7 @@ mod tests {
 
         // Subsequent accesses are hits
         for _ in 0..5 {
-            cache.get_or_compute(id, size, || panic!("should hit"));
+            cache.get_or_compute(id, size, || unreachable!("should hit"));
         }
 
         let stats = cache.stats();

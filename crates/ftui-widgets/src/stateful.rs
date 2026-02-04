@@ -404,9 +404,11 @@ impl<S: 'static> MigrationChain<S> {
             from,
             to
         );
-        if self.migrations.contains_key(&from) {
-            panic!("migration for version {} already registered", from);
-        }
+        assert!(
+            !self.migrations.contains_key(&from),
+            "migration for version {} already registered",
+            from
+        );
         self.migrations.insert(from, migration);
     }
 

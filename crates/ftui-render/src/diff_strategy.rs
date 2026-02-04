@@ -168,6 +168,22 @@ pub struct DiffStrategyConfig {
     /// Prevents noise from near-zero observations.
     /// Default: 0
     pub min_observation_cells: usize,
+
+    /// Hysteresis ratio required to switch strategies.
+    ///
+    /// A value of 0.05 means the new strategy must be at least 5% cheaper
+    /// than the previous strategy to trigger a switch.
+    ///
+    /// Default: 0.05
+    pub hysteresis_ratio: f64,
+
+    /// Variance threshold for uncertainty guard.
+    ///
+    /// When posterior variance exceeds this threshold, the selector
+    /// uses conservative quantiles and avoids FullRedraw.
+    ///
+    /// Default: 0.002
+    pub uncertainty_guard_variance: f64,
 }
 
 impl Default for DiffStrategyConfig {
@@ -185,6 +201,8 @@ impl Default for DiffStrategyConfig {
             conservative: false,
             conservative_quantile: 0.95,
             min_observation_cells: 0,
+            hysteresis_ratio: 0.05,
+            uncertainty_guard_variance: 0.002,
         }
     }
 }
@@ -200,6 +218,9 @@ impl DiffStrategyConfig {
         config.prior_beta = normalize_positive(config.prior_beta, 19.0);
         config.decay = normalize_decay(config.decay);
         config.conservative_quantile = config.conservative_quantile.clamp(EPS, 1.0 - EPS);
+        config.hysteresis_ratio = normalize_ratio(config.hysteresis_ratio, 0.05);
+        config.uncertainty_guard_variance =
+            normalize_cost(config.uncertainty_guard_variance, 0.002);
         config
     }
 }
@@ -225,6 +246,14 @@ fn normalize_decay(value: f64) -> f64 {
         value.min(1.0)
     } else {
         1.0
+    }
+}
+
+fn normalize_ratio(value: f64, fallback: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        fallback
     }
 }
 
@@ -393,6 +422,15 @@ pub struct StrategyEvidence {
 
     /// Total cells (width × height).
     pub total_cells: usize,
+
+    /// Guard reason, if any.
+    pub guard_reason: &'static str,
+
+    /// Whether hysteresis prevented a switch.
+    pub hysteresis_applied: bool,
+
+    /// Hysteresis ratio used for the decision.
+    pub hysteresis_ratio: f64,
 }
 
 impl fmt::Display for StrategyEvidence {
@@ -412,6 +450,11 @@ impl fmt::Display for StrategyEvidence {
             f,
             "Dirty: {}/{} rows, {} total cells",
             self.dirty_rows, self.total_rows, self.total_cells
+        )?;
+        writeln!(
+            f,
+            "Guard: {}, Hysteresis: {} (ratio {:.3})",
+            self.guard_reason, self.hysteresis_applied, self.hysteresis_ratio
         )
     }
 }
@@ -509,7 +552,9 @@ impl DiffStrategySelector {
         let n = w * h;
 
         // Get expected change rate
-        let p = if self.config.conservative {
+        let uncertainty_guard = self.config.uncertainty_guard_variance > 0.0
+            && self.posterior_variance() > self.config.uncertainty_guard_variance;
+        let p = if self.config.conservative || uncertainty_guard {
             self.upper_quantile(self.config.conservative_quantile)
         } else {
             self.posterior_mean()
@@ -524,13 +569,43 @@ impl DiffStrategySelector {
         let cost_redraw = self.config.c_emit * n;
 
         // Select argmin
-        let strategy = if cost_dirty <= cost_full && cost_dirty <= cost_redraw {
+        let mut strategy = if cost_dirty <= cost_full && cost_dirty <= cost_redraw {
             DiffStrategy::DirtyRows
         } else if cost_full <= cost_redraw {
             DiffStrategy::Full
         } else {
             DiffStrategy::FullRedraw
         };
+
+        let mut guard_reason = "none";
+        if uncertainty_guard {
+            guard_reason = "uncertainty_variance";
+            if strategy == DiffStrategy::FullRedraw {
+                strategy = if cost_dirty <= cost_full {
+                    DiffStrategy::DirtyRows
+                } else {
+                    DiffStrategy::Full
+                };
+            }
+        }
+
+        let mut hysteresis_applied = false;
+        if let Some(prev) = self.last_evidence.as_ref().map(|e| e.strategy)
+            && prev != strategy
+        {
+            let prev_cost = cost_for_strategy(prev, cost_full, cost_dirty, cost_redraw);
+            let new_cost = cost_for_strategy(strategy, cost_full, cost_dirty, cost_redraw);
+            let ratio = self.config.hysteresis_ratio;
+            if ratio > 0.0
+                && prev_cost.is_finite()
+                && prev_cost > 0.0
+                && new_cost >= prev_cost * (1.0 - ratio)
+                && !(uncertainty_guard && prev == DiffStrategy::FullRedraw)
+            {
+                strategy = prev;
+                hysteresis_applied = true;
+            }
+        }
 
         // Store evidence
         let (alpha, beta) = self.estimator.posterior_params();
@@ -546,6 +621,9 @@ impl DiffStrategySelector {
             dirty_rows,
             total_rows: height as usize,
             total_cells: (width as usize) * (height as usize),
+            guard_reason,
+            hysteresis_applied,
+            hysteresis_ratio: self.config.hysteresis_ratio,
         });
 
         strategy
@@ -574,6 +652,20 @@ impl DiffStrategySelector {
     /// `p_q ≈ μ + z_q × σ` where z_q is the standard normal quantile.
     fn upper_quantile(&self, q: f64) -> f64 {
         self.estimator.upper_quantile(q)
+    }
+}
+
+#[inline]
+fn cost_for_strategy(
+    strategy: DiffStrategy,
+    cost_full: f64,
+    cost_dirty: f64,
+    cost_redraw: f64,
+) -> f64 {
+    match strategy {
+        DiffStrategy::Full => cost_full,
+        DiffStrategy::DirtyRows => cost_dirty,
+        DiffStrategy::FullRedraw => cost_redraw,
     }
 }
 
@@ -618,6 +710,8 @@ mod tests {
         assert!((config.c_emit - 6.0).abs() < 1e-9);
         assert!((config.prior_alpha - 1.0).abs() < 1e-9);
         assert!((config.prior_beta - 19.0).abs() < 1e-9);
+        assert!((config.hysteresis_ratio - 0.05).abs() < 1e-9);
+        assert!((config.uncertainty_guard_variance - 0.002).abs() < 1e-9);
     }
 
     #[test]
@@ -760,6 +854,8 @@ mod tests {
             conservative: true,
             conservative_quantile: 2.0,
             min_observation_cells: 0,
+            hysteresis_ratio: -1.0,
+            uncertainty_guard_variance: -1.0,
         };
         let selector = DiffStrategySelector::new(config);
         let sanitized = selector.config();
@@ -771,6 +867,44 @@ mod tests {
         assert!(sanitized.prior_beta > 0.0);
         assert!((0.0..=1.0).contains(&sanitized.decay));
         assert!((0.0..=1.0).contains(&sanitized.conservative_quantile));
+        assert!((0.0..=1.0).contains(&sanitized.hysteresis_ratio));
+        assert!(sanitized.uncertainty_guard_variance >= 0.0);
+    }
+
+    #[test]
+    fn hysteresis_can_freeze_strategy_switching() {
+        let config = DiffStrategyConfig {
+            hysteresis_ratio: 1.0,
+            uncertainty_guard_variance: 0.0,
+            ..Default::default()
+        };
+        let mut selector = DiffStrategySelector::new(config);
+
+        let first = selector.select(80, 24, 1);
+        let second = selector.select(80, 24, 24);
+
+        assert_eq!(
+            first, second,
+            "With hysteresis_ratio=1.0, selector should keep prior strategy"
+        );
+    }
+
+    #[test]
+    fn uncertainty_guard_avoids_full_redraw() {
+        let config = DiffStrategyConfig {
+            c_scan: 10.0,
+            c_emit: 1.0,
+            uncertainty_guard_variance: 1e-6,
+            ..Default::default()
+        };
+        let mut selector = DiffStrategySelector::new(config);
+
+        let strategy = selector.select(80, 24, 24);
+        assert_ne!(
+            strategy,
+            DiffStrategy::FullRedraw,
+            "Uncertainty guard should avoid FullRedraw under high variance"
+        );
     }
 
     #[test]

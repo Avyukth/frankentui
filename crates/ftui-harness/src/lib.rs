@@ -39,6 +39,7 @@ pub mod resize_storm;
 pub mod terminal_model;
 pub mod time_travel;
 pub mod time_travel_inspector;
+pub mod trace_replay;
 
 #[cfg(feature = "pty-capture")]
 pub mod pty_capture;

@@ -1,4 +1,4 @@
-//! Unicode Width Corpus Tests (bd-16k)
+//! Display Width Corpus Tests (bd-16k)
 //!
 //! Comprehensive test corpus for Unicode width edge cases. This covers:
 //! - Basic ASCII (width 1)
@@ -12,8 +12,23 @@
 //! - Ambiguous width characters
 //! - WTF-8 handling for edge cases
 
-use ftui_text::{Segment, WidthCache, grapheme_width};
-use unicode_width::UnicodeWidthStr;
+use ftui_text::{Segment, WidthCache, display_width, grapheme_width};
+
+trait DisplayWidthExt {
+    fn width(&self) -> usize;
+}
+
+impl DisplayWidthExt for str {
+    fn width(&self) -> usize {
+        display_width(self)
+    }
+}
+
+impl DisplayWidthExt for String {
+    fn width(&self) -> usize {
+        display_width(self)
+    }
+}
 
 // =============================================================================
 // Test Corpus Data Structures
@@ -24,7 +39,7 @@ use unicode_width::UnicodeWidthStr;
 struct WidthTestCase {
     input: &'static str,
     description: &'static str,
-    /// Expected width according to unicode-width crate
+    /// Expected terminal display width (historical field name)
     expected_unicode_width: usize,
     /// Known terminal-specific behavior (may differ from Unicode)
     terminal_notes: Option<&'static str>,
@@ -297,8 +312,7 @@ const EMOJI_SKIN_TONE_TESTS: &[WidthTestCase] = &[
 fn emoji_skin_tone_width_tests() {
     for case in EMOJI_SKIN_TONE_TESTS {
         let width = case.input.width();
-        // Skin tone modifiers are complex - unicode-width may count each code point
-        // We just verify it doesn't panic and returns a reasonable value
+        // Skin tone modifiers are complex - display width should still be >= 2
         assert!(
             width >= 2,
             "Emoji with skin tone '{}' ({}) should be at least 2, got {}. Notes: {:?}",
@@ -456,8 +470,8 @@ const COMBINING_TESTS: &[WidthTestCase] = &[
     WidthTestCase::new("\u{0308}", "standalone combining diaeresis", 0),
     // Vietnamese text with tone marks
     WidthTestCase::new("a\u{0302}\u{0301}", "a with circumflex and acute", 1),
-    // Devanagari with combining marks
-    WidthTestCase::new("\u{0915}\u{093F}", "ka + i vowel sign", 2),
+    // Devanagari with combining marks (single grapheme width)
+    WidthTestCase::new("\u{0915}\u{093F}", "ka + i vowel sign", 1),
     // Hebrew with niqqud
     WidthTestCase::new("\u{05D0}\u{05B8}", "alef with qamats", 1),
 ];
@@ -475,34 +489,30 @@ fn combining_character_width_tests() {
 }
 
 // =============================================================================
-// Category 10: Control Characters (width 0)
+// Category 10: Control Characters (special-case whitespace)
 // =============================================================================
 
 const CONTROL_TESTS: &[WidthTestCase] = &[
-    // Note: unicode-width 0.2 returns None (treated as 0) for some controls,
-    // but returns 1 for tab and other "horizontal" controls.
-    // We use width() which converts None to 0.
+    // Tab/newline/CR are treated as a single cell for internal measurement.
     WidthTestCase::new("\n", "newline", 1),
     WidthTestCase::new("\r", "carriage return", 1),
-    WidthTestCase::new("\x00", "null", 1),
-    WidthTestCase::new("\x07", "bell", 1),
-    WidthTestCase::new("\x08", "backspace", 1),
-    WidthTestCase::new("\x1B", "escape", 1),
+    WidthTestCase::new("\x00", "null", 0),
+    WidthTestCase::new("\x07", "bell", 0),
+    WidthTestCase::new("\x08", "backspace", 0),
+    WidthTestCase::new("\x1B", "escape", 0),
     WidthTestCase::new("\t", "tab", 1),
     // DEL
-    WidthTestCase::new("\x7F", "delete", 1),
+    WidthTestCase::new("\x7F", "delete", 0),
     // C1 controls (0x80-0x9F)
-    WidthTestCase::new("\u{0080}", "padding character", 1),
-    WidthTestCase::new("\u{0085}", "next line", 1),
-    WidthTestCase::new("\u{009F}", "application program command", 1),
+    WidthTestCase::new("\u{0080}", "padding character", 0),
+    WidthTestCase::new("\u{0085}", "next line", 0),
+    WidthTestCase::new("\u{009F}", "application program command", 0),
 ];
 
 #[test]
 fn control_character_width_tests() {
     for case in CONTROL_TESTS {
         let width = case.input.width();
-        // Note: unicode-width 0.2+ returns Some(1) for C0/C1 controls, not None
-        // This is technically incorrect for terminals, but we test actual behavior
         assert_eq!(
             width,
             case.expected_unicode_width,
@@ -632,7 +642,7 @@ const ZERO_WIDTH_TESTS: &[WidthTestCase] = &[
     WidthTestCase::new("\u{200D}", "zero-width joiner", 0),
     WidthTestCase::new("\u{FEFF}", "byte order mark", 0),
     WidthTestCase::new("\u{2060}", "word joiner", 0),
-    // Soft hyphen - unicode-width returns 0 (invisible unless at line break)
+    // Soft hyphen - display width returns 0 (invisible unless at line break)
     WidthTestCase::new("\u{00AD}", "soft hyphen", 0),
 ];
 
@@ -692,7 +702,7 @@ fn mixed_content_width_tests() {
 // =============================================================================
 
 #[test]
-fn segment_width_matches_unicode_width() {
+fn segment_width_matches_display_width() {
     let test_strings = [
         "Hello",
         "\u{4E2D}\u{6587}",
@@ -704,11 +714,11 @@ fn segment_width_matches_unicode_width() {
     for s in test_strings {
         let segment = Segment::text(s);
         let segment_width = segment.cell_length();
-        let unicode_width = s.width();
+        let display_width = s.width();
 
         assert_eq!(
-            segment_width, unicode_width,
-            "Segment width should match unicode_width for '{}'",
+            segment_width, display_width,
+            "Segment width should match display width for '{}'",
             s
         );
     }
@@ -733,7 +743,7 @@ fn width_cache_consistency() {
         assert_eq!(
             cached,
             direct,
-            "Cached width should match direct width for '{}'",
+            "Cached width should match display width for '{}'",
             s.escape_unicode()
         );
 
@@ -748,6 +758,7 @@ fn width_cache_consistency() {
 // =============================================================================
 
 mod proptests {
+    use super::DisplayWidthExt;
     use super::*;
     use proptest::prelude::*;
 
@@ -780,12 +791,21 @@ mod proptests {
             prop_assert_eq!(s.width(), 1, "ASCII char '{}' should have width 1", c);
         }
 
-        /// Control characters have width 1 in unicode-width 0.2+
-        /// Note: This is the crate behavior, terminals may render differently
+        /// Control characters have width 0, except tab/newline/CR which are 1 cell
         #[test]
         fn control_chars_width_one(c in prop::char::range('\x00', '\x1F')) {
             let s = c.to_string();
-            prop_assert_eq!(s.width(), 1, "Control char {:?} has width 1 in unicode-width", c);
+            let expected = match c {
+                '\t' | '\n' | '\r' => 1,
+                _ => 0,
+            };
+            prop_assert_eq!(
+                s.width(),
+                expected,
+                "Control char {:?} has width {} in display width",
+                c,
+                expected
+            );
         }
 
         /// CJK characters have width 2
@@ -866,8 +886,8 @@ fn stress_test_combining_chain() {
 // Terminal Behavior Documentation Tests
 // =============================================================================
 
-/// These tests document known differences between Unicode width and
-/// typical terminal rendering. They serve as documentation, not assertions.
+/// These tests document terminal display width for emoji sequences.
+/// They serve as documentation, not assertions.
 #[test]
 fn document_terminal_differences() {
     let cases = [
@@ -880,13 +900,8 @@ fn document_terminal_differences() {
     ];
 
     for (s, desc) in cases {
-        let unicode_width = s.width();
-        // Terminal typically renders these as 2 cells, but unicode-width
-        // counts each code point separately
-        println!(
-            "{}: unicode-width={} (terminal often displays as 2)",
-            desc, unicode_width
-        );
+        let display_width = s.width();
+        println!("{}: display-width={}", desc, display_width);
     }
 }
 

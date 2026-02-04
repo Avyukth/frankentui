@@ -159,12 +159,11 @@ impl HeadlessTerm {
             })
             .collect();
 
-        if !mismatches.is_empty() {
-            panic!(
-                "HeadlessTerm: screen content mismatch\n{}",
-                format_diff(&mismatches),
-            );
-        }
+        assert!(
+            mismatches.is_empty(),
+            "HeadlessTerm: screen content mismatch\n{}",
+            format_diff(&mismatches)
+        );
     }
 
     /// Assert that a specific row matches the expected text.

@@ -20,8 +20,8 @@
 //! assert_eq!(lines.len(), 2);
 //! ```
 
+use unicode_display_width::width as unicode_display_width;
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 /// Text wrapping mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -409,15 +409,54 @@ pub fn ascii_width(text: &str) -> Option<usize> {
     }
 }
 
+#[inline]
+fn ascii_display_width(text: &str) -> usize {
+    let mut width = 0;
+    for b in text.bytes() {
+        match b {
+            b'\t' | b'\n' | b'\r' => width += 1,
+            0x20..=0x7E => width += 1,
+            _ => {}
+        }
+    }
+    width
+}
+
+#[inline]
+fn is_zero_width_codepoint(c: char) -> bool {
+    let u = c as u32;
+    matches!(u, 0x0000..=0x001F | 0x007F..=0x009F)
+        || matches!(u, 0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF)
+        || matches!(u, 0xFE20..=0xFE2F)
+        || matches!(u, 0xFE00..=0xFE0F | 0xE0100..=0xE01EF)
+        || matches!(
+            u,
+            0x00AD | 0x034F | 0x180E | 0x200B | 0x200C | 0x200D | 0x200E | 0x200F | 0x2060 | 0xFEFF
+        )
+        || matches!(u, 0x202A..=0x202E | 0x2066..=0x2069 | 0x206A..=0x206F)
+}
+
+#[inline]
+fn is_probable_emoji(c: char) -> bool {
+    let u = c as u32;
+    matches!(u, 0x1F000..=0x1FAFF)
+}
+
 /// Calculate the display width of a single grapheme cluster.
 ///
-/// This uses the maximum width of any code point in the cluster, which aligns
-/// with terminal behavior for ZWJ emoji and combining sequences.
+/// Uses `unicode-display-width` so grapheme clusters (ZWJ emoji, flags, combining
+/// marks) are treated as a single glyph with correct terminal width.
 #[inline]
 #[must_use]
 pub fn grapheme_width(grapheme: &str) -> usize {
-    let width = UnicodeWidthStr::width(grapheme);
-    if width == 1 && grapheme.contains('\u{FE0F}') {
+    if grapheme.is_ascii() {
+        return ascii_display_width(grapheme);
+    }
+    if grapheme.chars().all(is_zero_width_codepoint) {
+        return 0;
+    }
+    let width = unicode_display_width(grapheme) as usize;
+    if width == 1 && grapheme.chars().any(is_probable_emoji) {
         return 2;
     }
     width
@@ -433,7 +472,19 @@ pub fn grapheme_width(grapheme: &str) -> usize {
 #[inline]
 #[must_use]
 pub fn display_width(text: &str) -> usize {
-    ascii_width(text).unwrap_or_else(|| text.graphemes(true).map(crate::wrap::grapheme_width).sum())
+    if let Some(width) = ascii_width(text) {
+        return width;
+    }
+    if text.is_ascii() {
+        return ascii_display_width(text);
+    }
+    if !text.chars().any(is_zero_width_codepoint) {
+        if text.chars().any(is_probable_emoji) {
+            return text.graphemes(true).map(crate::wrap::grapheme_width).sum();
+        }
+        return unicode_display_width(text) as usize;
+    }
+    text.graphemes(true).map(crate::wrap::grapheme_width).sum()
 }
 
 /// Check if a string contains any wide characters (width > 1).
@@ -849,7 +900,8 @@ pub fn wrap_optimal(text: &str, width: usize) -> KpBreakResult {
 #[must_use]
 pub fn wrap_text_optimal(text: &str, width: usize) -> Vec<String> {
     let mut result = Vec::new();
-    for paragraph in text.split('\n') {
+    for raw_paragraph in text.split('\n') {
+        let paragraph = raw_paragraph.strip_suffix('\r').unwrap_or(raw_paragraph);
         if paragraph.is_empty() {
             result.push(String::new());
             continue;
@@ -861,9 +913,28 @@ pub fn wrap_text_optimal(text: &str, width: usize) -> Vec<String> {
 }
 
 #[cfg(test)]
+trait TestWidth {
+    fn width(&self) -> usize;
+}
+
+#[cfg(test)]
+impl TestWidth for str {
+    fn width(&self) -> usize {
+        display_width(self)
+    }
+}
+
+#[cfg(test)]
+impl TestWidth for String {
+    fn width(&self) -> usize {
+        display_width(self)
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    use super::TestWidth;
     use super::*;
-    use unicode_width::UnicodeWidthStr;
 
     // ==========================================================================
     // wrap_text tests
@@ -1063,6 +1134,18 @@ mod tests {
     #[test]
     fn display_width_cjk() {
         assert_eq!(display_width("你好"), 4);
+    }
+
+    #[test]
+    fn display_width_emoji_sequences() {
+        assert_eq!(display_width("👩‍🔬"), 2);
+        assert_eq!(display_width("👨‍👩‍👧‍👦"), 2);
+        assert_eq!(display_width("👩‍🚀x"), 3);
+    }
+
+    #[test]
+    fn grapheme_width_emoji_sequence() {
+        assert_eq!(grapheme_width("👩‍🔬"), 2);
     }
 
     #[test]
@@ -1976,9 +2059,9 @@ mod tests {
 
 #[cfg(test)]
 mod proptests {
+    use super::TestWidth;
     use super::*;
     use proptest::prelude::*;
-    use unicode_width::UnicodeWidthStr;
 
     proptest! {
         #[test]

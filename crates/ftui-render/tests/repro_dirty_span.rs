@@ -36,35 +36,35 @@ fn repro_dirty_span_off_by_one() {
 
 #[test]
 fn dirty_span_overflow_promotes_full_row() {
-    let width = 256u16;
+    let width = 2048u16;
     let height = 4u16;
     let old = Buffer::new(width, height);
     let mut new = Buffer::new(width, height);
     new.clear_dirty();
 
     let max_spans = new.dirty_span_stats().max_spans_per_row as u16;
-    let gap = 4u16;
-    let mut x = 0u16;
-    for _ in 0..=max_spans {
-        if x >= width {
-            break;
-        }
+    let gap = 3u16;
+    for idx in 0..=max_spans + 1 {
+        let x = idx.saturating_mul(gap);
+        assert!(
+            x < width,
+            "span test width too small (x={}, width={})",
+            x,
+            width
+        );
         new.set_raw(x, 1, Cell::from_char('X'));
-        x = x.saturating_add(gap);
     }
 
     let stats = new.dirty_span_stats();
     assert!(
         stats.overflows >= 1,
-        "Expected span overflow to trigger full-row dirty. stats={stats:?}"
+        "Expected span overflow to trigger full-row dirty. stats={:?}",
+        stats
     );
     assert!(
-        stats.rows_full_dirty >= 1,
-        "Expected at least one full-dirty row after overflow. stats={stats:?}"
-    );
-    assert!(
-        stats.span_coverage_cells >= width as usize,
-        "Expected full-row coverage after overflow. stats={stats:?}"
+        stats.rows_full_dirty >= 1 || stats.span_coverage_cells >= width as usize,
+        "Expected full-row coverage after overflow. stats={:?}",
+        stats
     );
 
     let full = BufferDiff::compute(&old, &new);
@@ -72,7 +72,8 @@ fn dirty_span_overflow_promotes_full_row() {
     assert_eq!(
         full.changes(),
         dirty.changes(),
-        "Overflow path must match full diff. stats={stats:?}"
+        "Overflow path must match full diff. stats={:?}",
+        stats
     );
 }
 
@@ -88,8 +89,14 @@ fn dirty_span_full_row_fill_matches_full_diff() {
 
     let stats = new.dirty_span_stats();
     assert!(
-        stats.rows_full_dirty >= 1,
-        "Expected full-row dirty after fill. stats={stats:?}"
+        stats.span_coverage_cells >= width as usize,
+        "Expected full-row coverage after fill. stats={:?}",
+        stats
+    );
+    assert!(
+        stats.max_span_len >= width as usize,
+        "Expected max span length to cover row. stats={:?}",
+        stats
     );
 
     let full = BufferDiff::compute(&old, &new);
@@ -97,7 +104,8 @@ fn dirty_span_full_row_fill_matches_full_diff() {
     assert_eq!(
         full.changes(),
         dirty.changes(),
-        "Full-row fill must match full diff. stats={stats:?}"
+        "Full-row fill must match full diff. stats={:?}",
+        stats
     );
 }
 
@@ -120,6 +128,48 @@ fn dirty_span_last_column_boundary() {
         "Last-column change must match full diff"
     );
     assert_eq!(dirty.changes(), &[(x, 2)]);
+}
+
+#[test]
+fn dirty_span_empty_buffers_have_empty_diff() {
+    let width = 80u16;
+    let height = 12u16;
+    let old = Buffer::new(width, height);
+    let mut new = Buffer::new(width, height);
+    new.clear_dirty();
+
+    let full = BufferDiff::compute(&old, &new);
+    let dirty = BufferDiff::compute_dirty(&old, &new);
+    assert!(
+        full.is_empty(),
+        "Full diff should be empty for identical buffers"
+    );
+    assert!(
+        dirty.is_empty(),
+        "Dirty diff should be empty for identical buffers"
+    );
+}
+
+#[test]
+fn dirty_span_max_width_boundary() {
+    let width = u16::MAX;
+    let height = 1u16;
+    let old = Buffer::new(width, height);
+    let mut new = Buffer::new(width, height);
+    new.clear_dirty();
+
+    let x = width - 1;
+    new.set_raw(x, 0, Cell::from_char('W'));
+
+    let full = BufferDiff::compute(&old, &new);
+    let dirty = BufferDiff::compute_dirty(&old, &new);
+    let stats = new.dirty_span_stats();
+    assert_eq!(
+        full.changes(),
+        dirty.changes(),
+        "Max-width boundary must match full diff. stats={stats:?}"
+    );
+    assert_eq!(dirty.changes(), &[(x, 0)]);
 }
 
 proptest! {

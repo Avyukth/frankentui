@@ -32,10 +32,13 @@
 //! - D: Toggle diagnostic panel
 
 use std::collections::HashSet;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::time::Duration;
 
 use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use ftui_core::geometry::Rect;
+use ftui_extras::charts::heatmap_gradient;
 use ftui_layout::{Constraint, Flex};
 use ftui_render::buffer::Buffer;
 use ftui_render::cell::Cell;
@@ -129,6 +132,81 @@ pub struct FrameInfo {
     pub checksum: u64,
     /// Render time (if known).
     pub render_time: Option<Duration>,
+}
+
+/// Preview mode for the Time-Travel Studio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StudioView {
+    Single,
+    Compare,
+}
+
+impl StudioView {
+    fn toggle(self) -> Self {
+        match self {
+            Self::Single => Self::Compare,
+            Self::Compare => Self::Single,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Single => "Single",
+            Self::Compare => "A/B Compare",
+        }
+    }
+}
+
+/// Heatmap overlay mode for diff visualization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeatmapMode {
+    Off,
+    Overlay,
+}
+
+impl HeatmapMode {
+    fn toggle(self) -> Self {
+        match self {
+            Self::Off => Self::Overlay,
+            Self::Overlay => Self::Off,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Overlay => "Overlay",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DiffCell {
+    x: u16,
+    y: u16,
+    intensity: f64,
+}
+
+#[derive(Debug, Clone)]
+struct DiffCache {
+    a_index: usize,
+    b_index: usize,
+    frames_version: u64,
+    width: u16,
+    height: u16,
+    diff_cells: Vec<DiffCell>,
+    diff_count: usize,
+    content_diff_count: usize,
+    style_diff_count: usize,
+    checksum_a: u64,
+    checksum_b: u64,
+}
+
+#[derive(Debug, Clone)]
+struct ExportStatus {
+    path: String,
+    ok: bool,
+    message: String,
 }
 
 // =============================================================================
@@ -327,7 +405,7 @@ impl DiagnosticLog {
     }
 }
 
-/// Snapshot Player screen state.
+/// Time-Travel Studio screen state.
 #[derive(Debug)]
 pub struct SnapshotPlayer {
     /// Recorded frames (buffers stored directly for demo simplicity).
@@ -355,6 +433,22 @@ pub struct SnapshotPlayer {
     diagnostic_config: DiagnosticConfig,
     /// Diagnostic log (bd-3sa7.5).
     diagnostic_log: DiagnosticLog,
+    /// Studio view mode (single vs compare).
+    compare_view: StudioView,
+    /// Heatmap overlay mode.
+    heatmap_mode: HeatmapMode,
+    /// Selected frame A for comparison.
+    compare_a: usize,
+    /// Selected frame B for comparison.
+    compare_b: usize,
+    /// Cached diff data for A/B comparison.
+    diff_cache: Option<DiffCache>,
+    /// Frames version counter for cache invalidation.
+    frames_version: u64,
+    /// Last export status for JSONL reports.
+    last_export: Option<ExportStatus>,
+    /// Export path for JSONL reports.
+    export_path: String,
 }
 
 impl Default for SnapshotPlayer {
@@ -368,6 +462,8 @@ impl SnapshotPlayer {
     pub fn new() -> Self {
         let config = SnapshotPlayerConfig::default();
         let diagnostic_config = DiagnosticConfig::default();
+        let export_path = std::env::var("FTUI_TIME_TRAVEL_STUDIO_REPORT")
+            .unwrap_or_else(|_| "time_travel_studio_report.jsonl".to_string());
         let mut player = Self {
             frames: Vec::with_capacity(config.max_frames),
             frame_info: Vec::with_capacity(config.max_frames),
@@ -382,10 +478,19 @@ impl SnapshotPlayer {
             checksum_chain: 0,
             diagnostic_log: DiagnosticLog::new(diagnostic_config.max_entries),
             diagnostic_config,
+            compare_view: StudioView::Single,
+            heatmap_mode: HeatmapMode::Off,
+            compare_a: 0,
+            compare_b: 0,
+            diff_cache: None,
+            frames_version: 0,
+            last_export: None,
+            export_path,
         };
 
         if player.config.auto_generate_demo {
             player.generate_demo_frames();
+            player.reset_compare_indices();
         }
 
         player
@@ -394,6 +499,8 @@ impl SnapshotPlayer {
     /// Create with custom configuration.
     pub fn with_config(config: SnapshotPlayerConfig) -> Self {
         let diagnostic_config = DiagnosticConfig::default();
+        let export_path = std::env::var("FTUI_TIME_TRAVEL_STUDIO_REPORT")
+            .unwrap_or_else(|_| "time_travel_studio_report.jsonl".to_string());
         let mut player = Self {
             frames: Vec::with_capacity(config.max_frames),
             frame_info: Vec::with_capacity(config.max_frames),
@@ -408,13 +515,163 @@ impl SnapshotPlayer {
             config,
             diagnostic_log: DiagnosticLog::new(diagnostic_config.max_entries),
             diagnostic_config,
+            compare_view: StudioView::Single,
+            heatmap_mode: HeatmapMode::Off,
+            compare_a: 0,
+            compare_b: 0,
+            diff_cache: None,
+            frames_version: 0,
+            last_export: None,
+            export_path,
         };
 
         if player.config.auto_generate_demo {
             player.generate_demo_frames();
+            player.reset_compare_indices();
         }
 
         player
+    }
+
+    fn bump_frames_version(&mut self) {
+        self.frames_version = self.frames_version.wrapping_add(1);
+        self.diff_cache = None;
+    }
+
+    fn reset_compare_indices(&mut self) {
+        let count = self.frames.len();
+        if count <= 1 {
+            self.compare_a = 0;
+            self.compare_b = 0;
+        } else {
+            self.compare_a = 0;
+            self.compare_b = 1;
+        }
+        self.diff_cache = None;
+    }
+
+    fn clamp_compare_indices(&mut self) {
+        let count = self.frames.len();
+        if count == 0 {
+            self.compare_a = 0;
+            self.compare_b = 0;
+            return;
+        }
+        let max = count.saturating_sub(1);
+        self.compare_a = self.compare_a.min(max);
+        self.compare_b = self.compare_b.min(max);
+    }
+
+    fn set_compare_a(&mut self, index: usize) {
+        self.compare_a = index;
+        self.clamp_compare_indices();
+        self.diff_cache = None;
+    }
+
+    fn set_compare_b(&mut self, index: usize) {
+        self.compare_b = index;
+        self.clamp_compare_indices();
+        self.diff_cache = None;
+    }
+
+    fn swap_compare(&mut self) {
+        std::mem::swap(&mut self.compare_a, &mut self.compare_b);
+        self.diff_cache = None;
+    }
+
+    fn toggle_compare_view(&mut self) {
+        self.compare_view = self.compare_view.toggle();
+        self.diff_cache = None;
+    }
+
+    fn toggle_heatmap(&mut self) {
+        self.heatmap_mode = self.heatmap_mode.toggle();
+    }
+
+    fn compare_pair(&self) -> Option<(usize, usize)> {
+        if self.frames.is_empty() {
+            None
+        } else {
+            Some((self.compare_a, self.compare_b))
+        }
+    }
+
+    fn refresh_diff_cache(&mut self) {
+        if self.compare_view != StudioView::Compare {
+            return;
+        }
+        self.clamp_compare_indices();
+        let Some((a_idx, b_idx)) = self.compare_pair() else {
+            self.diff_cache = None;
+            return;
+        };
+        let needs_refresh = match &self.diff_cache {
+            Some(cache) => {
+                cache.a_index != a_idx
+                    || cache.b_index != b_idx
+                    || cache.frames_version != self.frames_version
+            }
+            None => true,
+        };
+        if needs_refresh {
+            self.diff_cache = Some(self.compute_diff_cache(a_idx, b_idx));
+        }
+    }
+
+    fn compute_diff_cache(&mut self, a_idx: usize, b_idx: usize) -> DiffCache {
+        let buffer_a = &self.frames[a_idx];
+        let buffer_b = &self.frames[b_idx];
+        let width = buffer_a.width().min(buffer_b.width());
+        let height = buffer_a.height().min(buffer_b.height());
+
+        let mut diff_cells = if let Some(cache) = self.diff_cache.take() {
+            let mut cells = cache.diff_cells;
+            cells.clear();
+            cells
+        } else {
+            Vec::new()
+        };
+        diff_cells.reserve((width as usize * height as usize) / 8);
+
+        let mut diff_count = 0usize;
+        let mut content_diff_count = 0usize;
+        let mut style_diff_count = 0usize;
+
+        for y in 0..height {
+            for x in 0..width {
+                let a = buffer_a.get_unchecked(x, y);
+                let b = buffer_b.get_unchecked(x, y);
+                if a.bits_eq(b) {
+                    continue;
+                }
+                let content_diff = a.content.raw() != b.content.raw();
+                if content_diff {
+                    content_diff_count += 1;
+                } else {
+                    style_diff_count += 1;
+                }
+                let intensity = if content_diff { 1.0 } else { 0.6 };
+                diff_cells.push(DiffCell { x, y, intensity });
+                diff_count += 1;
+            }
+        }
+
+        let checksum_a = self.frame_info.get(a_idx).map_or(0, |info| info.checksum);
+        let checksum_b = self.frame_info.get(b_idx).map_or(0, |info| info.checksum);
+
+        DiffCache {
+            a_index: a_idx,
+            b_index: b_idx,
+            frames_version: self.frames_version,
+            width,
+            height,
+            diff_cells,
+            diff_count,
+            content_diff_count,
+            style_diff_count,
+            checksum_a,
+            checksum_b,
+        }
     }
 
     /// Generate demo frames with evolving content.
@@ -452,6 +709,8 @@ impl SnapshotPlayer {
             self.frames.push(buf);
             self.frame_info.push(info);
         }
+
+        self.bump_frames_version();
     }
 
     /// Draw demo content for a specific frame.
@@ -579,6 +838,8 @@ impl SnapshotPlayer {
         self.frames.push(buf.clone());
         self.frame_info.push(info);
         self.current_frame = self.frames.len().saturating_sub(1);
+        self.bump_frames_version();
+        self.clamp_compare_indices();
         self.log_frame_recorded(frame_index, change_count, checksum, width, height);
     }
 
@@ -592,6 +853,8 @@ impl SnapshotPlayer {
         self.checksum_chain = 0;
         self.playback_state = PlaybackState::Paused;
         self.diagnostic_log.clear();
+        self.bump_frames_version();
+        self.reset_compare_indices();
     }
 
     /// Total number of frames.
@@ -806,6 +1069,85 @@ impl SnapshotPlayer {
         self.diagnostic_log.to_jsonl()
     }
 
+    fn export_report(&mut self) {
+        let path = self.export_path.clone();
+        let mut ok = true;
+
+        self.clamp_compare_indices();
+        let Some((a_idx, b_idx)) = self.compare_pair() else {
+            self.last_export = Some(ExportStatus {
+                path,
+                ok: false,
+                message: "no frames to export".to_string(),
+            });
+            return;
+        };
+
+        if self.diff_cache.is_none()
+            || self
+                .diff_cache
+                .as_ref()
+                .is_some_and(|cache| cache.a_index != a_idx || cache.b_index != b_idx)
+        {
+            self.diff_cache = Some(self.compute_diff_cache(a_idx, b_idx));
+        }
+        let cache = self.diff_cache.as_ref();
+        let (
+            width,
+            height,
+            diff_count,
+            content_diff_count,
+            style_diff_count,
+            checksum_a,
+            checksum_b,
+        ) = if let Some(cache) = cache {
+            (
+                cache.width,
+                cache.height,
+                cache.diff_count,
+                cache.content_diff_count,
+                cache.style_diff_count,
+                cache.checksum_a,
+                cache.checksum_b,
+            )
+        } else {
+            (0, 0, 0, 0, 0, 0, 0)
+        };
+
+        let total_cells = (width as usize).saturating_mul(height as usize).max(1);
+        let diff_pct = diff_count as f64 / total_cells as f64;
+
+        let message = match OpenOptions::new().create(true).append(true).open(&path) {
+            Ok(mut file) => {
+                let line = format!(
+                    "{{\"event\":\"time_travel_report\",\"frame_a\":{},\"frame_b\":{},\"width\":{},\"height\":{},\"checksum_a\":\"0x{:016x}\",\"checksum_b\":\"0x{:016x}\",\"diff_cells\":{},\"diff_pct\":{:.6},\"content_diff\":{},\"style_diff\":{}}}\n",
+                    a_idx,
+                    b_idx,
+                    width,
+                    height,
+                    checksum_a,
+                    checksum_b,
+                    diff_count,
+                    diff_pct,
+                    content_diff_count,
+                    style_diff_count
+                );
+                if let Err(err) = file.write_all(line.as_bytes()) {
+                    ok = false;
+                    format!("write failed: {err}")
+                } else {
+                    "report appended".to_string()
+                }
+            }
+            Err(err) => {
+                ok = false;
+                format!("open failed: {err}")
+            }
+        };
+
+        self.last_export = Some(ExportStatus { path, ok, message });
+    }
+
     // ========================================================================
     // Rendering
     // ========================================================================
@@ -815,6 +1157,13 @@ impl SnapshotPlayer {
             return;
         }
 
+        match self.compare_view {
+            StudioView::Single => self.render_single_layout(frame, area),
+            StudioView::Compare => self.render_compare_layout(frame, area),
+        }
+    }
+
+    fn render_single_layout(&self, frame: &mut Frame, area: Rect) {
         // Layout: Preview (left) | Info panel (right)
         let chunks = Flex::horizontal()
             .constraints([Constraint::Percentage(60.0), Constraint::Percentage(40.0)])
@@ -831,6 +1180,24 @@ impl SnapshotPlayer {
             }
 
             // Right side: Info + Controls
+            self.render_info_panel(frame, chunks[1]);
+        }
+    }
+
+    fn render_compare_layout(&self, frame: &mut Frame, area: Rect) {
+        let chunks = Flex::horizontal()
+            .constraints([Constraint::Percentage(60.0), Constraint::Percentage(40.0)])
+            .split(area);
+
+        if chunks.len() >= 2 {
+            let left_chunks = Flex::vertical()
+                .constraints([Constraint::Fixed(3), Constraint::Min(1)])
+                .split(chunks[0]);
+            if left_chunks.len() >= 2 {
+                self.render_timeline(frame, left_chunks[0]);
+                self.render_compare_preview(frame, left_chunks[1]);
+            }
+
             self.render_info_panel(frame, chunks[1]);
         }
     }
@@ -886,13 +1253,70 @@ impl SnapshotPlayer {
                 frame.buffer.set(inner.x + marker_x, inner.y, cell);
             }
         }
+
+        if self.compare_view == StudioView::Compare {
+            let count = self.frames.len();
+            let frame_to_x = |idx: usize| -> u16 {
+                if count <= 1 {
+                    0
+                } else {
+                    let ratio = idx as f64 / (count - 1) as f64;
+                    (ratio * inner.width as f64).floor() as u16
+                }
+            };
+            if let Some((a_idx, b_idx)) = self.compare_pair() {
+                let a_x = frame_to_x(a_idx).min(inner.width.saturating_sub(1));
+                let b_x = frame_to_x(b_idx).min(inner.width.saturating_sub(1));
+                if a_x == b_x {
+                    let cell = Cell::from_char('◆').with_fg(theme::accent::INFO.into());
+                    frame.buffer.set(inner.x + a_x, inner.y, cell);
+                } else {
+                    let a_cell = Cell::from_char('A').with_fg(theme::accent::INFO.into());
+                    let b_cell = Cell::from_char('B').with_fg(theme::accent::WARNING.into());
+                    frame.buffer.set(inner.x + a_x, inner.y, a_cell);
+                    frame.buffer.set(inner.x + b_x, inner.y, b_cell);
+                }
+            }
+        }
     }
 
     fn render_preview(&self, frame: &mut Frame, area: Rect) {
+        self.render_frame_block(frame, area, "Frame Preview", self.current_buffer());
+    }
+
+    fn render_compare_preview(&self, frame: &mut Frame, area: Rect) {
+        let cols = Flex::horizontal()
+            .constraints([Constraint::Percentage(50.0), Constraint::Percentage(50.0)])
+            .split(area);
+        if cols.len() < 2 {
+            return;
+        }
+
+        let (a_idx, b_idx) = self.compare_pair().unwrap_or((0, 0));
+        let buffer_a = self.frames.get(a_idx);
+        let buffer_b = self.frames.get(b_idx);
+
+        let _a_inner = self.render_frame_block(frame, cols[0], "Frame A", buffer_a);
+        let b_inner = self.render_frame_block(frame, cols[1], "Frame B", buffer_b);
+
+        if self.heatmap_mode == HeatmapMode::Overlay
+            && let Some(cache) = &self.diff_cache
+        {
+            self.render_heatmap_overlay(frame, b_inner, cache);
+        }
+    }
+
+    fn render_frame_block(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        title: &str,
+        buffer: Option<&Buffer>,
+    ) -> Rect {
         let block = Block::new()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title("Frame Preview")
+            .title(title)
             .title_alignment(Alignment::Center)
             .style(theme::content_border());
 
@@ -900,27 +1324,48 @@ impl SnapshotPlayer {
         block.render(area, frame);
 
         if inner.is_empty() {
-            return;
+            return inner;
         }
 
-        // Render the frame content if available
-        if let Some(buf) = self.current_buffer() {
-            // Copy frame content to preview area (scaled if needed)
-            for y in 0..inner.height.min(buf.height()) {
-                for x in 0..inner.width.min(buf.width()) {
-                    if let Some(cell) = buf.get(x, y) {
-                        frame.buffer.set(inner.x + x, inner.y + y, *cell);
-                    }
-                }
-            }
+        if let Some(buf) = buffer {
+            self.blit_buffer(frame, inner, buf);
         } else {
-            // No frames - show empty state
             let msg = "No frames recorded";
             let x = inner.x + (inner.width.saturating_sub(msg.len() as u16)) / 2;
             let y = inner.y + inner.height / 2;
             Paragraph::new(msg)
                 .style(Style::new().fg(theme::fg::MUTED))
                 .render(Rect::new(x, y, msg.len() as u16, 1), frame);
+        }
+
+        inner
+    }
+
+    fn blit_buffer(&self, frame: &mut Frame, area: Rect, buf: &Buffer) {
+        let width = area.width.min(buf.width());
+        let height = area.height.min(buf.height());
+        if width == 0 || height == 0 {
+            return;
+        }
+        frame
+            .buffer
+            .copy_from(buf, Rect::new(0, 0, width, height), area.x, area.y);
+    }
+
+    fn render_heatmap_overlay(&self, frame: &mut Frame, area: Rect, cache: &DiffCache) {
+        if area.is_empty() {
+            return;
+        }
+        for cell in &cache.diff_cells {
+            if cell.x >= area.width || cell.y >= area.height {
+                continue;
+            }
+            let x = area.x + cell.x;
+            let y = area.y + cell.y;
+            let color = heatmap_gradient(cell.intensity);
+            let mut base = *frame.buffer.get_unchecked(x, y);
+            base.bg = color;
+            frame.buffer.set_raw(x, y, base);
         }
     }
 
@@ -970,6 +1415,52 @@ impl SnapshotPlayer {
         }
 
         lines.push(String::new());
+        lines.push("── Compare ──".to_string());
+        lines.push(format!("View: {}", self.compare_view.label()));
+        lines.push(format!("Heatmap: {}", self.heatmap_mode.label()));
+        if let Some((a_idx, b_idx)) = self.compare_pair() {
+            let a_info = self.frame_info.get(a_idx);
+            let b_info = self.frame_info.get(b_idx);
+            lines.push(format!(
+                "A: #{}{}",
+                a_idx + 1,
+                a_info
+                    .map(|info| format!("  {:016x}", info.checksum))
+                    .unwrap_or_default()
+            ));
+            lines.push(format!(
+                "B: #{}{}",
+                b_idx + 1,
+                b_info
+                    .map(|info| format!("  {:016x}", info.checksum))
+                    .unwrap_or_default()
+            ));
+
+            if let Some(cache) = &self.diff_cache {
+                let total = (cache.width as usize)
+                    .saturating_mul(cache.height as usize)
+                    .max(1);
+                let pct = cache.diff_count as f64 / total as f64 * 100.0;
+                lines.push(format!("Diff: {} cells ({:.2}%)", cache.diff_count, pct));
+                lines.push(format!(
+                    "Content: {}  Style: {}",
+                    cache.content_diff_count, cache.style_diff_count
+                ));
+            } else {
+                lines.push("Diff: n/a".to_string());
+            }
+        } else {
+            lines.push("A/B: n/a".to_string());
+        }
+
+        if let Some(export) = &self.last_export {
+            let status = if export.ok { "ok" } else { "error" };
+            lines.push(format!("Export: {status}"));
+            lines.push(format!("Path: {}", export.path));
+            lines.push(format!("Msg: {}", export.message));
+        }
+
+        lines.push(String::new());
         lines.push("── Controls ──".to_string());
         lines.push("Space: Play/Pause".to_string());
         lines.push("←/→ or h/l: Step".to_string());
@@ -978,6 +1469,11 @@ impl SnapshotPlayer {
         lines.push("R: Toggle record".to_string());
         lines.push("C: Clear".to_string());
         lines.push("D: Diagnostics".to_string());
+        lines.push("V: Toggle compare view".to_string());
+        lines.push("A/B: Pin compare A/B".to_string());
+        lines.push("X: Swap A/B".to_string());
+        lines.push("H: Heatmap overlay".to_string());
+        lines.push("E: Export JSONL".to_string());
 
         for (i, line) in lines.iter().enumerate() {
             if i as u16 >= inner.height {
@@ -1037,10 +1533,17 @@ impl Screen for SnapshotPlayer {
                 }
                 KeyCode::Char('g') => self.go_to_start(),
                 KeyCode::Char('G') => self.go_to_end(),
+                KeyCode::Char('v') | KeyCode::Char('V') => self.toggle_compare_view(),
+                KeyCode::Char('H') => self.toggle_heatmap(),
+                KeyCode::Char('a') | KeyCode::Char('A') => self.set_compare_a(self.current_frame),
+                KeyCode::Char('b') | KeyCode::Char('B') => self.set_compare_b(self.current_frame),
+                KeyCode::Char('x') | KeyCode::Char('X') => self.swap_compare(),
+                KeyCode::Char('e') | KeyCode::Char('E') => self.export_report(),
                 _ => {}
             }
         }
 
+        self.refresh_diff_cache();
         Cmd::None
     }
 
@@ -1059,6 +1562,8 @@ impl Screen for SnapshotPlayer {
                 }
             }
         }
+
+        self.refresh_diff_cache();
     }
 
     fn view(&self, frame: &mut Frame, area: Rect) {
@@ -1099,15 +1604,35 @@ impl Screen for SnapshotPlayer {
                 key: "D",
                 action: "Diagnostics",
             },
+            HelpEntry {
+                key: "V",
+                action: "Toggle compare view",
+            },
+            HelpEntry {
+                key: "A/B",
+                action: "Pin compare A/B",
+            },
+            HelpEntry {
+                key: "X",
+                action: "Swap A/B",
+            },
+            HelpEntry {
+                key: "H",
+                action: "Heatmap overlay",
+            },
+            HelpEntry {
+                key: "E",
+                action: "Export JSONL report",
+            },
         ]
     }
 
     fn title(&self) -> &'static str {
-        "Snapshot Player"
+        "Time-Travel Studio"
     }
 
     fn tab_label(&self) -> &'static str {
-        "Snapshots"
+        "TimeTravel"
     }
 }
 
@@ -1295,14 +1820,55 @@ mod tests {
     #[test]
     fn title_and_label() {
         let player = SnapshotPlayer::new();
-        assert_eq!(player.title(), "Snapshot Player");
-        assert_eq!(player.tab_label(), "Snapshots");
+        assert_eq!(player.title(), "Time-Travel Studio");
+        assert_eq!(player.tab_label(), "TimeTravel");
     }
 
     #[test]
     fn keybindings_not_empty() {
         let player = SnapshotPlayer::new();
         assert!(!player.keybindings().is_empty());
+    }
+
+    #[test]
+    fn compare_view_toggles() {
+        let mut player = SnapshotPlayer::new();
+        assert_eq!(player.compare_view, StudioView::Single);
+        player.toggle_compare_view();
+        assert_eq!(player.compare_view, StudioView::Compare);
+    }
+
+    #[test]
+    fn diff_cache_counts_content_and_style_changes() {
+        let config = SnapshotPlayerConfig {
+            auto_generate_demo: false,
+            max_frames: 4,
+            ..Default::default()
+        };
+        let mut player = SnapshotPlayer::with_config(config);
+
+        let mut buf_a = Buffer::new(4, 2);
+        let mut buf_b = Buffer::new(4, 2);
+        buf_a.set(0, 0, Cell::from_char('A'));
+        buf_b.set(0, 0, Cell::from_char('B')); // content diff
+        buf_a.set(1, 0, Cell::from_char('Z'));
+        buf_b.set(
+            1,
+            0,
+            Cell::from_char('Z').with_fg(theme::accent::ERROR.into()),
+        ); // style diff
+
+        player.record_frame(&buf_a);
+        player.record_frame(&buf_b);
+        player.toggle_compare_view();
+        player.set_compare_a(0);
+        player.set_compare_b(1);
+        player.refresh_diff_cache();
+
+        let cache = player.diff_cache.as_ref().expect("diff cache");
+        assert_eq!(cache.diff_count, 2);
+        assert_eq!(cache.content_diff_count, 1);
+        assert_eq!(cache.style_diff_count, 1);
     }
 
     // ========================================================================

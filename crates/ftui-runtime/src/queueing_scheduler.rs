@@ -779,30 +779,34 @@ impl QueueingScheduler {
     /// Returns a list of completed job IDs.
     pub fn tick(&mut self, delta_time: f64) -> Vec<u64> {
         let mut completed = Vec::new();
+        if delta_time <= 0.0 {
+            return completed;
+        }
 
         let mut remaining_time = delta_time;
-        self.current_time += delta_time;
+        let mut now = self.current_time;
         self.stats.total_processing_time += delta_time;
 
         while remaining_time > 0.0 {
             // Get or select next job
-            let job = if let Some(j) = self.current_job.take() {
-                j
-            } else if let Some(pj) = self.queue.pop() {
-                pj.job
+            let Some(mut job) = (if let Some(j) = self.current_job.take() {
+                Some(j)
             } else {
+                self.queue.pop().map(|pj| pj.job)
+            }) else {
+                now += remaining_time;
                 break; // Queue empty
             };
 
             // Process job
             let process_time = remaining_time.min(job.remaining_time);
-            let mut job = job;
             job.remaining_time -= process_time;
             remaining_time -= process_time;
+            now += process_time;
 
             if job.is_complete() {
                 // Job completed
-                let response_time = self.current_time - job.arrival_time;
+                let response_time = now - job.arrival_time;
                 self.stats.total_response_time += response_time;
                 self.stats.max_response_time = self.stats.max_response_time.max(response_time);
                 self.stats.total_completed += 1;
@@ -813,6 +817,7 @@ impl QueueingScheduler {
             }
         }
 
+        self.current_time = now;
         // Recompute priorities for aged jobs
         self.refresh_priorities();
 
@@ -924,6 +929,7 @@ impl QueueingScheduler {
             && j.id == job_id
         {
             self.current_job = None;
+            self.stats.queue_length = self.queue.len();
             return true;
         }
 
@@ -2034,6 +2040,73 @@ mod tests {
         assert_eq!(fifo1.completion_order, fifo2.completion_order);
         assert!((smith1.mean - smith2.mean).abs() < 1e-9);
         assert!((fifo1.mean - fifo2.mean).abs() < 1e-9);
+    }
+
+    #[test]
+    fn effect_queue_trace_is_deterministic() {
+        let mut config = test_config();
+        config.preemptive = false;
+        config.aging_factor = 0.0;
+        config.wait_starve_ms = 0.0;
+        config.force_fifo = false;
+        config.smith_enabled = true;
+
+        let mut scheduler = QueueingScheduler::new(config);
+        let id_alpha = scheduler
+            .submit_with_sources(
+                1.0,
+                8.0,
+                WeightSource::Explicit,
+                EstimateSource::Explicit,
+                Some("alpha"),
+            )
+            .expect("alpha accepted");
+        let id_beta = scheduler
+            .submit_with_sources(
+                4.0,
+                2.0,
+                WeightSource::Explicit,
+                EstimateSource::Explicit,
+                Some("beta"),
+            )
+            .expect("beta accepted");
+        let id_gamma = scheduler
+            .submit_with_sources(
+                2.0,
+                10.0,
+                WeightSource::Explicit,
+                EstimateSource::Explicit,
+                Some("gamma"),
+            )
+            .expect("gamma accepted");
+        let id_delta = scheduler
+            .submit_with_sources(
+                3.0,
+                3.0,
+                WeightSource::Explicit,
+                EstimateSource::Explicit,
+                Some("delta"),
+            )
+            .expect("delta accepted");
+
+        scheduler.refresh_priorities();
+
+        let mut selected = Vec::new();
+        while let Some(job) = scheduler.peek_next().cloned() {
+            let evidence = scheduler.evidence();
+            if let Some(id) = evidence.selected_job_id {
+                selected.push(id);
+            }
+            println!("{}", evidence.to_jsonl("effect_queue_select"));
+
+            let completed = scheduler.tick(job.remaining_time);
+            assert!(
+                !completed.is_empty(),
+                "expected completion per tick in non-preemptive mode"
+            );
+        }
+
+        assert_eq!(selected, vec![id_beta, id_delta, id_gamma, id_alpha]);
     }
 
     // =========================================================================
