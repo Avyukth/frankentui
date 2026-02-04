@@ -12,7 +12,7 @@
 //! - Ambiguous width characters
 //! - WTF-8 handling for edge cases
 
-use ftui_text::{Segment, WidthCache};
+use ftui_text::{Segment, WidthCache, grapheme_width};
 use unicode_width::UnicodeWidthStr;
 
 // =============================================================================
@@ -215,6 +215,19 @@ const EMOJI_BASIC_TESTS: &[WidthTestCase] = &[
     WidthTestCase::new("\u{1F31F}", "glowing star", 2),
     WidthTestCase::new("\u{1F308}", "rainbow", 2),
 ];
+
+#[test]
+fn emoji_presentation_grapheme_width_is_wide() {
+    let cases = ["⚙️", "🖼️"];
+    for case in cases {
+        let width = grapheme_width(case);
+        assert_eq!(
+            width, 2,
+            "Expected emoji presentation '{}' to be width 2",
+            case
+        );
+    }
+}
 
 #[test]
 fn emoji_basic_width_tests() {

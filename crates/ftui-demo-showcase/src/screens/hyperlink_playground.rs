@@ -6,6 +6,10 @@
 //! - OSC-8 hyperlink rendering via `LinkRegistry`
 //! - Hit regions for hover/click feedback
 //! - Keyboard navigation for accessibility
+//!
+//! Environment:
+//! - `FTUI_LINK_REPORT_PATH`: JSONL log path for E2E runs
+//! - `FTUI_LINK_RUN_ID`: run identifier for logs
 
 use std::cell::RefCell;
 use std::fs::OpenOptions;

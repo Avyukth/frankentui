@@ -143,7 +143,10 @@ impl EvidenceSink {
 
     /// Write a single JSONL line with newline and optional flush.
     pub fn write_jsonl(&self, line: &str) -> io::Result<()> {
-        let mut inner = self.inner.lock().expect("evidence sink lock poisoned");
+        let mut inner = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         inner.writer.write_all(line.as_bytes())?;
         inner.writer.write_all(b"\n")?;
         if inner.flush_on_write {
@@ -154,7 +157,10 @@ impl EvidenceSink {
 
     /// Flush any buffered output.
     pub fn flush(&self) -> io::Result<()> {
-        let mut inner = self.inner.lock().expect("evidence sink lock poisoned");
+        let mut inner = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         inner.writer.flush()
     }
 }
