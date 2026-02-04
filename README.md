@@ -71,6 +71,72 @@ FTUI_HARNESS_VIEW=widget-table cargo run -p ftui-harness
 
 ---
 
+## Use Cases
+
+- Inline UI for CLI tools where logs must keep scrolling.
+- Full-screen dashboards that must never flicker.
+- Deterministic rendering harnesses for terminal regressions.
+- Libraries that want a strict “kernel” but their own widget layer.
+
+## Non-Goals
+
+- Not a full batteries‑included app framework (by design).
+- Not a drop‑in replacement for existing widget libraries.
+- Not a “best effort” renderer; correctness beats convenience.
+
+## Minimal API Example
+
+```rust
+use ftui_core::event::Event;
+use ftui_core::geometry::Rect;
+use ftui_render::frame::Frame;
+use ftui_runtime::{Cmd, Model, Program};
+use ftui_widgets::paragraph::Paragraph;
+
+struct App {
+    ticks: u64,
+}
+
+#[derive(Debug, Clone)]
+enum Msg {
+    Tick,
+    Quit,
+}
+
+impl From<Event> for Msg {
+    fn from(_: Event) -> Self {
+        Msg::Tick
+    }
+}
+
+impl Model for App {
+    type Message = Msg;
+
+    fn update(&mut self, msg: Msg) -> Cmd<Msg> {
+        match msg {
+            Msg::Tick => {
+                self.ticks += 1;
+                Cmd::none()
+            }
+            Msg::Quit => Cmd::quit(),
+        }
+    }
+
+    fn view(&self, frame: &mut Frame) {
+        let text = format!("Ticks: {}", self.ticks);
+        let area = Rect::new(0, 0, frame.width(), 1);
+        Paragraph::new(text).render(area, frame);
+    }
+}
+
+fn main() -> std::io::Result<()> {
+    let mut program = Program::new(App { ticks: 0 })?;
+    program.run()
+}
+```
+
+---
+
 ## Design Philosophy
 
 1. **Correctness over cleverness** — predictable terminal state is non‑negotiable.
@@ -178,6 +244,47 @@ See `docs/telemetry.md` for integration patterns and trace‑parent attachment.
 
 ---
 
+## Feature Flags
+
+| Crate | Feature | What It Enables |
+|------|---------|------------------|
+| `ftui-core` | `tracing` | Structured spans for terminal lifecycle |
+| `ftui-core` | `tracing-json` | JSON output via tracing-subscriber |
+| `ftui-render` | `tracing` | Performance spans for diff/presenter |
+| `ftui-runtime` | `tracing` | Runtime loop instrumentation |
+| `ftui-runtime` | `telemetry` | OpenTelemetry export (OTLP) |
+
+Enable features per-crate in your `Cargo.toml` as needed.
+
+---
+
+## Evidence Logs (JSONL Diagnostics)
+
+FrankenTUI can emit structured, deterministic evidence logs for diff strategy
+decisions, resize coalescing, and budget alerts. The log sink is shared and
+configured at the runtime level.
+
+```rust
+use ftui_runtime::{EvidenceSinkConfig, EvidenceSinkDestination, Program, ProgramConfig};
+
+let config = ProgramConfig::default().with_evidence_sink(
+    EvidenceSinkConfig::enabled_file("evidence.jsonl")
+        .with_destination(EvidenceSinkDestination::file("evidence.jsonl"))
+        .with_flush_on_write(true),
+);
+
+let mut program = Program::with_config(model, config)?;
+program.run()?;
+```
+
+Example event line:
+
+```json
+{"event":"diff_decision","strategy":"DirtyRows","cost_full":1.230000,"cost_dirty":0.410000,"dirty_rows":4,"total_rows":40,"total_cells":3200}
+```
+
+---
+
 ## Commands
 
 ### Run the Harness
@@ -263,6 +370,20 @@ Terminal capability detection uses standard environment variables (`TERM`, `COLO
 │   TerminalWriter (inline or alt-screen)                           │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Frame Pipeline (Step-by-Step)
+
+1. **Input** → `TerminalSession` reads `Event`.
+2. **Model** → `update()` returns `Cmd` for side effects.
+3. **View** → `view()` renders into `Frame`.
+4. **Buffer** → `Frame` writes cells into a 2D `Buffer`.
+5. **Diff** → `BufferDiff` computes minimal changes.
+6. **Presenter** → emits ANSI with state tracking.
+7. **Writer** → enforces one‑writer rule, flushes output.
+
+This is the core loop that ensures determinism and flicker‑free output.
 
 ---
 
@@ -572,6 +693,213 @@ BLESS=1 cargo test -p ftui-harness
 ## Core Algorithms & Data Structures
 
 FrankenTUI isn't just another widget library—it's built on carefully chosen algorithms and data structures optimized for terminal rendering constraints.
+
+## Math-Driven Performance
+
+FrankenTUI deliberately uses “heavy” math where it buys real-world speed or determinism. The core idea is: spend a little compute on principled decisions that prevent expensive work later.
+
+### Bayesian Match Scoring (Command Palette)
+
+Instead of raw string distance, the palette asks “how likely is this the right command?” Each clue (word start, tags, position) is a multiplier on confidence.
+
+$$
+\frac{P(R\mid E)}{P(\neg R\mid E)} = \frac{P(R)}{P(\neg R)} \prod_i BF_i, \quad
+BF_i = \frac{P(E_i\mid R)}{P(E_i\mid \neg R)}
+$$
+
+Intuition: add a few strong clues and the right command jumps to the top without expensive rescoring passes.
+
+### Evidence Ledger (Explainable Bayes)
+
+Every probabilistic decision records its “why” as a ledger of factors. Internally this is just log‑odds arithmetic:
+
+$$
+\log \frac{P(R\mid E)}{P(\neg R\mid E)} = \log \frac{P(R)}{P(\neg R)} + \sum_i \log BF_i
+$$
+
+Intuition: you can read a human‑friendly list of reasons instead of debugging a black‑box score.
+
+### Bayesian Cost Models (Diff Strategy)
+
+The renderer learns the change rate instead of guessing. It keeps a **Beta posterior** and chooses the cheapest strategy (full diff vs dirty rows vs redraw).
+
+$$
+p \sim \mathrm{Beta}(\alpha,\beta), \quad
+\alpha \leftarrow \alpha\cdot\gamma + k, \quad
+\beta \leftarrow \beta\cdot\gamma + (n-k)
+$$
+
+$$
+E[\text{cost}] = c_{scan}\,N_{scan} + c_{emit}\,N_{emit}
+$$
+
+Intuition: when the screen is stable we avoid scanning; when it’s noisy we switch to the cheapest path.
+
+### Presenter Cost Modeling (Cursor/Byte Economy)
+
+Even after diffing, there are multiple ways to emit ANSI. We compute a cheap byte‑level cost for cursor moves vs merged runs.
+
+$$
+\text{cost} = c_{scan}\,N_{scan} + c_{emit}\,N_{emit}
+$$
+
+Intuition: fewer cursor moves and shorter sequences means less output and lower latency.
+
+### BOCPD for Resize Regimes
+
+Resize storms are handled by **Bayesian Online Change‑Point Detection**. It detects when the stream changes from steady to burst, and only then coalesces aggressively.
+
+$$
+H(r)=\frac{1}{\lambda}, \quad
+P(r_t=0\mid x_{1:t}) \propto \sum_r P(r_{t-1}=r)\,H(r)\,P(x_t\mid r)
+$$
+
+Intuition: no brittle thresholds; the model smoothly adapts to drag vs pause behavior.
+
+### Run‑Length Posterior + Hazard Function (BOCPD Core)
+
+BOCPD’s main state is the **run‑length posterior**—how long the current regime has lasted.
+
+$$
+P(r_t=r\mid x_{1:t}) \propto P(r_{t-1}=r-1)\,(1-H(r-1))\,P(x_t\mid r)
+$$
+
+Intuition: long steady streaks increase confidence; a sudden timing change collapses the posterior and triggers coalescing.
+
+### Conformal Prediction (Risk Bounds)
+
+Alerts are not hard‑coded. The threshold is learned from recent residuals so false‑alarm rates stay stable under distribution shifts.
+
+$$
+q = \text{Quantile}_{\lceil(1-\alpha)(n+1)\rceil}(R_1,\dots,R_n)
+$$
+
+Intuition: the system learns what “normal” looks like and updates the bar automatically.
+
+### E‑Processes + GRAPA (Anytime‑Valid Monitoring)
+
+We can check alerts continuously without “peeking penalties” using a test‑martingale (e‑process). GRAPA tunes the betting fraction.
+
+$$
+W_t = W_{t-1}\bigl(1 + \lambda_t (X_t-\mu_0)\bigr)
+$$
+
+Intuition: we can look after every frame, and the false‑alarm guarantees still hold.
+
+### GRAPA (Adaptive Betting Fraction)
+
+GRAPA adjusts the betting fraction to keep the e‑process sensitive but stable.
+
+$$
+\lambda_{t+1} = \lambda_t + \eta\,\nabla_{\lambda}\,\log W_t
+$$
+
+Intuition: it auto‑tunes how aggressively we test, instead of locking a single sensitivity.
+
+### CUSUM (Fast Drift Detection)
+
+CUSUM accumulates small deviations until they add up, catching sustained drift quickly.
+
+$$
+S_t = \max\bigl(0,\,S_{t-1} + (X_t-\mu_0) - k\bigr)
+$$
+
+Intuition: small problems that persist trigger quickly, while isolated noise is ignored.
+
+### Value‑of‑Information (VOI) Sampling
+
+Expensive measurements are taken only when the expected information gain is worth the cost.
+
+$$
+\mathrm{Var}(p)=\frac{\alpha\beta}{(\alpha+\beta)^2(\alpha+\beta+1)},\quad
+\mathrm{VOI}=\mathrm{Var}(p)-\mathbb{E}[\mathrm{Var}(p\mid 1\ \text{sample})]
+$$
+
+Intuition: if a measurement won’t change our decision, we skip it and stay fast.
+
+### Jain’s Fairness Index (Input Guarding)
+
+We watch whether rendering is starving input processing.
+
+$$
+F=\frac{(\sum x_i)^2}{n\sum x_i^2}
+$$
+
+Intuition: a single metric tells us when to yield so the UI feels responsive.
+
+### PID / PI Control (Frame Pacing)
+
+Frame‑time control is classic feedback control.
+
+$$
+u_t = K_p e_t + K_i \sum e_t + K_d \Delta e_t
+$$
+
+Intuition: if we’re too slow, dial down; if we’re too fast, allow more detail. PI is the default because it’s robust and cheap.
+
+### MPC (Model Predictive Control) Evaluation
+
+We test MPC vs PI to prove we’re not leaving performance on the table.
+
+$$
+\min_{u_{t:t+H}} \sum_{k=0}^H \|y_{t+k}-y^*\|^2 + \rho\,\|u_{t+k}\|^2
+$$
+
+Intuition: MPC looks ahead but costs more; the tests show PI is already good enough for TUI pacing.
+
+### Count‑Min Sketch (Approximate Counts)
+
+We track hot items with a probabilistic sketch, then tighten error bounds with PAC‑Bayes.
+
+$$
+\hat f(x)=\min_j C_{j,h_j(x)},\quad
+$$
+
+Intuition: a tiny data structure gives you “close enough” frequencies at huge scale.
+
+### PAC‑Bayes Calibration (Error Tightening)
+
+We tighten sketch error bounds using PAC‑Bayes.
+
+$$
+\mathbb{E}[\text{err}] \le \bar e + \sqrt{\frac{\mathrm{KL}(q\|\|p)}{2n}}
+$$
+
+Intuition: the bound shrinks as we observe more data, without assuming a specific distribution.
+
+### Scheduling Math (Smith’s Rule + Aging)
+
+Background work is ordered by “importance per remaining time,” with aging to prevent starvation.
+
+$$
+\text{priority}=\frac{w}{r}+a\cdot\text{wait}
+$$
+
+Intuition: short, important jobs finish quickly, but long‑waiting jobs still rise.
+
+These aren’t academic decorations—they’re directly tied to throughput, latency, and determinism under real terminal workloads.
+
+### Math At a Glance
+
+| Technique | Where It’s Used | Core Formula / Idea (MathJax) | Performance Impact |
+|----------|------------------|-------------------------------|--------------------|
+| **Bayes Factors** | Command palette scoring | $\frac{P(R\mid E)}{P(\neg R\mid E)}=\frac{P(R)}{P(\neg R)}\prod_i BF_i$ | Better ranking with fewer re‑sorts |
+| **Evidence Ledger** | Explanations for probabilistic decisions | $\log\frac{P(R\mid E)}{P(\neg R\mid E)}=\log\frac{P(R)}{P(\neg R)}+\sum_i\log BF_i$ | Debuggable, auditable scoring |
+| **Beta Posterior** | Diff strategy selection | $p\sim\mathrm{Beta}(\alpha,\beta)$ | Avoids slow strategies as workload shifts |
+| **BOCPD** | Resize coalescing | Run‑length posterior + hazard $H(r)$ | Fewer redundant renders during drags |
+| **Run‑Length Posterior** | BOCPD core | $P(r_t=r\mid x_{1:t})$ recursion | Fast regime switches without thresholds |
+| **E‑Process** | Budget alerts, throttle | $W_t=W_{t-1}(1+\lambda_t(X_t-\mu_0))$ | Safe early exits under continuous monitoring |
+| **GRAPA** | Adaptive e‑process | $\lambda_{t+1}=\lambda_t+\eta\nabla_{\lambda}\log W_t$ | Self‑tuning sensitivity |
+| **Conformal Prediction** | Risk bounds | $q=\text{Quantile}_{\lceil(1-\alpha)(n+1)\rceil}(R)$ | Stable thresholds without tuning |
+| **CUSUM** | Budget change detection | $S_t=\max(0,S_{t-1}+X_t-\mu_0-k)$ | Fast drift detection |
+| **PID / PI** | Degradation control | $u_t=K_pe_t+K_i\sum e_t+K_d\Delta e_t$ | Smooth frame‑time stabilization |
+| **MPC** | Control evaluation | $\min_{u_{t:t+H}}\sum\|y_{t+k}-y^*\|^2+\rho\|u_{t+k}\|^2$ | Confirms PI is sufficient |
+| **VOI Sampling** | Expensive measurements | $\mathrm{VOI}=\mathrm{Var}-\mathbb{E}[\mathrm{Var}\mid\text{sample}]$ | Lower overhead in steady state |
+| **Jain’s Fairness** | Input guard | $F=(\sum x_i)^2/(n\sum x_i^2)$ | Prevents UI render from starving input |
+| **Count‑Min Sketch** | Timeline aggregation | $\hat f(x)=\min_j C_{j,h_j(x)}$ | Fast approximate counts |
+| **PAC‑Bayes** | Sketch calibration | $\bar e+\sqrt{\mathrm{KL}(q\|\|p)/(2n)}$ | Tighter error bounds |
+| **Smith’s Rule + Aging** | Queueing scheduler | $priority=\frac{w}{r}+a\cdot\text{wait}$ | Fair throughput under load |
+| **Cost Modeling** | Presenter decisions | $cost=c_{scan}N_{scan}+c_{emit}N_{emit}$ | Minimizes cursor bytes |
 
 ### The Cell: A 16-Byte Cache-Optimized Unit
 
