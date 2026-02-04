@@ -261,6 +261,31 @@ check_policy_evidence() {
         log_test_fail "$case_name" "missing fairness_decision evidence"
         missing=1
     fi
+    if command -v jq >/dev/null 2>&1; then
+        if ! jq -e -s 'map(select(.event=="fairness_decision")) | length > 0' \
+            "$evidence_jsonl" >/dev/null; then
+            log_test_fail "$case_name" "fairness_decision never emitted"
+            missing=1
+        fi
+        if ! jq -e -s 'map(select(.event=="fairness_decision") | .jain_index) | all(. >= 0 and . <= 1)' \
+            "$evidence_jsonl" >/dev/null; then
+            log_test_fail "$case_name" "jain_index out of [0,1] bounds"
+            missing=1
+        fi
+    else
+        if ! rg '"event":"fairness_decision"' "$evidence_jsonl" \
+            | rg -o '"jain_index":[0-9.]+' >/dev/null; then
+            log_test_fail "$case_name" "missing jain_index field"
+            missing=1
+        else
+            if ! rg '"event":"fairness_decision"' "$evidence_jsonl" \
+                | rg -o '"jain_index":[0-9.]+' \
+                | awk -F: '{v=$2+0; if (v < 0 || v > 1) {exit 1}}'; then
+                log_test_fail "$case_name" "jain_index out of [0,1] bounds"
+                missing=1
+            fi
+        fi
+    fi
 
     return "$missing"
 }
