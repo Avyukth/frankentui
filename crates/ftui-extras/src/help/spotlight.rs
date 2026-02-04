@@ -28,6 +28,11 @@ use unicode_display_width::width as unicode_display_width;
 use unicode_segmentation::UnicodeSegmentation;
 
 #[inline]
+fn width_u64_to_usize(width: u64) -> usize {
+    width.min(usize::MAX as u64) as usize
+}
+
+#[inline]
 fn ascii_display_width(text: &str) -> usize {
     let mut width = 0;
     for b in text.bytes() {
@@ -47,7 +52,7 @@ fn grapheme_width(grapheme: &str) -> usize {
     if grapheme.chars().all(is_zero_width_codepoint) {
         return 0;
     }
-    unicode_display_width(grapheme)
+    width_u64_to_usize(unicode_display_width(grapheme))
 }
 
 fn display_width(text: &str) -> usize {
@@ -58,7 +63,7 @@ fn display_width(text: &str) -> usize {
         return ascii_display_width(text);
     }
     if !text.chars().any(is_zero_width_codepoint) {
-        return unicode_display_width(text);
+        return width_u64_to_usize(unicode_display_width(text));
     }
     text.graphemes(true).map(grapheme_width).sum()
 }

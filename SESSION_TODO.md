@@ -1,5 +1,122 @@
 # Session TODO List
 
+## Current Session (RedGate) — bd-1e3w Menu Semantics + Doom/Quake Visibility (2026-02-04)
+- [x] Re-read `AGENTS.md` + `README.md`
+- [x] Agent Mail `macro_start_session` + list agents + inbox check
+- [x] Send intro messages to active agents
+- [x] Run `bv --robot-triage`
+- [x] Update bead `bd-1e3w` notes + announce start in Agent Mail thread
+- [x] Reserve files: `crates/ftui-demo-showcase/src/app.rs`, `crates/ftui-demo-showcase/src/chrome.rs`, `crates/ftui-demo-showcase/src/screens/visual_effects.rs`
+- [x] Status bar hint: clarify Tab/Shift+Tab navigation wording
+- [x] Doom/Quake: switch to half-block canvas mode for broader font support
+- [x] Doom/Quake: brighten sky/floor + wall lighting for visibility
+- [x] Doom/Quake: add visibility tests
+- [x] Run quality gates: `cargo fmt --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`
+- [x] Run targeted tests: `cargo test -p ftui-demo-showcase visual_effects`
+- [x] Update bead `bd-1e3w` with results + Agent Mail summary
+- [x] Release file reservations
+
+## Current Session (DarkCreek) — bd-2dui Coverage Audit + Deep Review + Perf Loop (2026-02-04)
+- [x] Re-read `AGENTS.md` + `README.md` (fresh constraints + architecture)
+- [x] Run `bv --robot-triage` to confirm top-impact bead
+- [x] `br show bd-2dui` to confirm scope + dependencies
+- [x] Mark bead in progress: `br update bd-2dui --status in_progress`
+- [x] Agent Mail `macro_start_session` + list agents
+- [x] Send Agent Mail start note in thread `bd-2dui`
+- [ ] Coverage audit: run `cargo llvm-cov --workspace --summary-only` (record totals)
+- [ ] Coverage audit: per-crate `cargo llvm-cov -p ftui-render/ftui-core/ftui-text/...` (record gaps)
+- [ ] Coverage audit: identify high-risk uncovered paths (diff/presenter, terminal writer, text width/wrap, layout, widget search/scoring)
+- [ ] Coverage audit: map "no-mock" test gaps + propose fixtures
+- [ ] Deep review: staged diffs (render/text/runtime/widgets/extras/demo) for correctness + perf regressions
+- [ ] Deep review: unstaged diffs + untracked files (demo tests, theme studio, mermaid)
+- [ ] Fix any review findings (root cause + minimal change)
+- [ ] Extreme optimization loop: baseline + profile + single-lever change + re-profile + isomorphism proof
+- [ ] Re-run quality gates if code changed: `cargo fmt --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`
+- [ ] Update bead `bd-2dui` with audit findings + next steps
+- [ ] Post Agent Mail update in thread `bd-2dui` (summary + coverage gaps)
+
+## Current Session (ChartreuseCove) — Review + Dependency Updates (2026-02-04)
+- [x] Agent Mail bootstrap + list agents + inbox check
+- [x] Send intro + bd-112f status update
+- [x] Run `bv --robot-triage` (18:39)
+- [x] Update `bd-112f` notes with review + test runs
+- [x] Fix `drawing.rs` width fallback (remove unused var)
+- [x] Run quality gates: `cargo fmt --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`
+- [x] Run tests: `cargo test -p ftui-text`, `cargo test -p ftui-core`
+- [x] Feature checks: `cargo check -p ftui-extras --features fx-gpu/markdown/terminal`, `cargo check -p ftui-widgets --features regex-search`
+
+## Current Session (Codex) — BV Triage + Deep Review + Perf Loop + bd-112f Start (2026-02-04)
+- [x] Re-read `AGENTS.md` + `README.md` end-to-end
+- [x] Run `bv --robot-triage`
+- [x] Run `br ready --json`
+- [x] Inspect top bead: `br show bd-112f --json`
+- [x] Claim bead: `br update bd-112f --claim --actor codex`
+- [ ] Agent Mail bootstrap (`macro_start_session`) — connection error persists
+- [ ] Send Agent Mail status update to thread `bd-112f` — blocked by connection error
+- [x] Spawn explorer agent to summarize architecture + invariants
+- [x] Deep review: `crates/ftui-runtime/src/terminal_writer.rs` (posterior update fix)
+- [x] Deep review: `crates/ftui-render/src/buffer.rs` (dirty spans logic)
+- [x] Perf baseline (PTY): `hyperfine` Visual Effects (screen 15, exit-after 1500ms)
+- [x] Perf profile: `perf record` + `perf report` (startup hotspot in Shakespeare TOC)
+- [x] Opportunity matrix: `Shakespeare::build_toc` (high impact, medium effort) → choose lazy init
+- [x] Implement single-lever optimization: lazy TOC via `OnceCell`
+- [x] Rebuild release + re-baseline (improved mean: 1.609s → 1.569s)
+- [x] Isomorphism proof (lazy TOC): ordering/tie-break/FP/RNG unchanged; outputs identical for screen 3 once initialized
+- [x] Verify golden outputs (`sha256sum -c golden_checksums.txt`) — 81 preexisting mismatches
+- [x] Run quality gates: `cargo fmt --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`
+- [x] Run UBS diff scan (`UBS_MAX_DIR_SIZE_MB=0 ubs --diff`)
+- [x] Coverage audit/gap map (bd-112f core deliverable) — updated `docs/testing/coverage-gap-report.md`
+- [x] Fix llvm-cov bench type error in `crates/ftui-runtime/benches/telemetry_bench.rs`
+- [x] Fix `unicode_display_width` return type in help overlays (`spotlight.rs`, `tooltip.rs`)
+- [ ] Re-run `cargo llvm-cov` summary (full workspace) — aborted (long-running demo tests); needs stabilized run
+
+## Current Session (Codex) — bd-112f + Deep Review + VFX Perf + Demo Fixes (2026-02-04)
+- [x] Re-read `AGENTS.md` + `README.md`
+- [x] Load required skills: `extreme-software-optimization`, `beads-bv`, `agent-mail`, `multi-pass-bug-hunting`
+- [x] Run `bv --robot-triage` to identify top-impact bead(s)
+- [x] Mark bead in progress: `br update bd-112f --status in_progress`
+- [ ] Start Agent Mail session (macro) + list agents (tool still connection error)
+- [ ] Send Agent Mail start note for `bd-112f` (blocked by tool error)
+- [x] Multi-pass bug hunt — Pass 1: `UBS_MAX_DIR_SIZE_MB=0 ubs --diff --only=rust`
+- [ ] Multi-pass bug hunt — Pass 2: fresh-eyes re-read of touched files (visual_effects, drawing, markdown, file_browser, app, chrome)
+- [ ] Multi-pass bug hunt — Pass 3: integration check (targeted tests)
+- [ ] Multi-pass bug hunt — Pass 4: final UBS scan (clean or documented warnings)
+- [x] Perf loop (baseline): `hyperfine` Visual Effects screen (TTY)
+- [x] Perf loop (profile): `perf record/report` on Visual Effects
+- [x] Opportunity matrix: hotspot `WallSeg::distance_sq` score ≥ 2.0
+- [x] Single-lever optimization: precompute `inv_len_sq` in `WallSeg` + remove branch
+- [x] Rebuild release + re-baseline `hyperfine` + re-profile `perf`
+- [x] Isomorphism proof drafted (note FP reciprocal; behavior preserved)
+- [x] `sha256sum -c golden_checksums.txt` (failed due to existing snapshot drift)
+- [x] Fix grapheme-width fallback in `Buffer::print_text_clipped` (avoid border gaps)
+- [ ] Fix visual FX crash for effect #14/#15 (repro + guard)
+- [ ] File browser: verify border alignment for long/emoji rows (adjust if still off)
+- [ ] Markdown screen: verify border alignment after grapheme fix
+- [ ] Mouse: click-to-focus per-pane within screens (not just whole screen)
+- [ ] Global: ensure arrow-key navigation for every screen (widgets + forms + others)
+- [ ] Dashboard: upgrade info/activity/charts/code/markdown/text-effects panels per spec
+- [ ] Shakespeare: instant search-as-you-type + highlight + jump + animations
+- [ ] Code Explorer (SQLite): more dynamic panels + features
+- [ ] Data Viz: fill blank space with additional panes/visuals
+- [ ] Macro recorder: improve UX + ctrl+arrow behavior + hints
+- [x] Re-run quality gates after fixes: `cargo fmt --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`
+- [x] Re-run UBS on diff after fixes (`UBS_MAX_DIR_SIZE_MB=0 ubs --diff`)
+- [ ] Update bead `bd-112f` with progress notes
+- [ ] Post Agent Mail update with perf + bug-fix summary (if tool recovers)
+
+## Current Session (Codex) — Markdown Tables + Diff Evidence (2026-02-04)
+- [x] Re-read `AGENTS.md` + `README.md`
+- [x] Run `bv --robot-triage` to confirm top-impact beads
+- [x] Confirm `bd-1e3w` remains in progress (`br show bd-1e3w`)
+- [x] Start Agent Mail session + introduce self
+- [x] Diff posterior: use `total_cells` for Bayesian observe
+- [x] Selector regression: keep small dirty-row test coverage
+- [x] JSONL escape strategy: add helper + escape freeform fields in resize coalescer
+- [x] Markdown tables: upgrade border + header emphasis + zebra stripe styling
+- [x] Run quality gates: `cargo fmt --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`
+- [x] Run UBS on diff (`UBS_MAX_DIR_SIZE_MB=0 ubs --diff`)
+- [x] Send Agent Mail update to thread `bd-1e3w`
+
 ## Current Session (Codex) — Menu Semantics + Doom/Quake Fix + Deep Audit (2026-02-04)
 - [x] Re-read `AGENTS.md` + `README.md` (fresh constraints + architecture)
 - [x] Load skills: `agent-mail`, `beads-bv`, `codebase-archaeology`, `codebase-audit`, `multi-pass-bug-hunting`

@@ -1,49 +1,33 @@
-# Final Comprehensive Code Review Report
+# Final Code Review Report (2026-02-04)
 
-## Scope
-I performed a deep, first-principles code review of the `frankentui` codebase, covering all major crates and components. My goal was to identify bugs, inefficiencies, security risks, and reliability issues.
+## Summary
+A comprehensive "fresh eyes" audit of the `frankentui` codebase was conducted, focusing on the core rendering pipeline, layout engine, and complex widgets. The review verified that recent critical fixes (Unicode handling, dirty tracking, scrolling logic, layout constraints) are correctly implemented and robust. No new critical bugs were identified.
 
-**Crates Reviewed:**
-- **Core:** `ftui-core` (Input parsing, terminal session, events, animation, hover stabilization, geometry)
-- **Render:** `ftui-render` (Diffing, buffer management, ANSI emission, link registry)
-- **Layout:** `ftui-layout` (Flex, Grid, constraint solving)
-- **Widgets:** `ftui-widgets` (Input, List, Table, Tree, Text, Command Palette, etc.)
-- **Styling:** `ftui-style` (Color, Style, Theme)
-- **Text:** `ftui-text` (Graphemes, wrapping, rope storage)
-- **Extras:** `ftui-extras` (Markdown, Syntax highlighting, PTY capture, Images, Forms, Canvas)
-- **Harness:** `ftui-harness` (Integration testing infrastructure)
+## Audited Components
 
-## Findings
+### 1. Render Core (`ftui-render`)
+- **Diffing (`diff.rs`):** Verified block-based SIMD-friendly scanning, robust dirty-row skipping (backed by `Buffer` invariants), and correct handling of row-major coalescing.
+- **Buffer (`buffer.rs`):** Confirmed `set_raw` correctly maintains dirty invariants. Wide-character writes are atomic (all-or-nothing based on bounds/scissor) and correctly clear overlapping cells.
+- **Presenter (`presenter.rs`):** Verified the Dynamic Programming cost model for ANSI emission. It correctly handles zero-width characters (replacing with `U+FFFD`) and "orphan" continuations to prevent terminal corruption.
+- **Grapheme Pool (`grapheme_pool.rs`):** Confirmed the Mark-and-Sweep garbage collection implementation is sound and handles multiple buffer references correctly.
 
-The codebase demonstrates an **exceptionally high standard of quality**. It adheres strictly to safety guidelines (extensive use of `forbid(unsafe_code)`), handles edge cases robustly (overflow checks, saturating arithmetic), and implements sophisticated performance optimizations.
+### 2. Layout Engine (`ftui-layout`)
+- **Grid (`grid.rs`):** Verified correct gap calculation (N-1 gaps) and spanning logic (accumulating gaps for spanned cells).
+- **Flex (`lib.rs`):** Verified the constraint solver (`solve_constraints_with_hints`) robustly handles mixed constraints (Min, Max, Ratio, FitContent) and edge cases like zero-weight distribution. `SpaceAround` alignment logic was verified to be correct.
 
-### 1. Robustness & Safety
-- **DoS Protection:** The `ftui-core/input_parser.rs` implements a state machine with strict length limits on CSI, OSC, and paste sequences, effectively neutralizing memory exhaustion attacks via malformed terminal input.
-- **Panic Safety:** `TerminalSession` (in `ftui-core`) uses RAII guards to ensure the terminal is restored to a usable state (raw mode disabled, cursor shown) even if the application panics.
-- **Arithmetic:** The codebase pervasive uses `saturating_add`, `saturating_sub`, and `checked_add` for coordinate and dimension calculations, preventing panics on resizing or large layouts. `ftui-core/geometry.rs` confirms this pattern for geometric primitives.
-- **Bounds Checking:** Buffer access in `ftui-render` is consistently bounds-checked. `get_unchecked` is used only in verified hot loops.
-- **Secure Links:** `LinkRegistry` uses a robust ID-based system to manage URLs, preventing injection attacks and handling deduplication correctly.
+### 3. Widgets (`ftui-widgets`)
+- **Table (`table.rs`):** Verified that `render` correctly handles scrolling (ensuring selected row visibility) and style composition (merging span styles over row styles). Partial row rendering is handled correctly via scissor clipping.
+- **Input (`input.rs`):** Verified "word" movement logic correctly distinguishes punctuation as a separate class. Verified rendering loop correctly skips partially-scrolled wide characters to avoid visual artifacts.
+- **Scrollbar (`scrollbar.rs`):** Verified that hit region calculation and rendering loop correctly account for wide symbols (e.g. emoji thumbs).
+- **List (`list.rs`):** Confirmed integer truncation fixes and scrolling logic.
 
-### 2. Correctness
-- **Unicode Support:** `GraphemePool` and text primitives correctly handle multi-byte characters, combining marks, and emojis. Width calculations use `unicode-width` and cache results. `ftui-text` logic correctly handles grapheme clustering.
-- **Layout Engine:** The constraint solvers for Flex and Grid correctly handle over-constrained and under-constrained scenarios, edge cases (zero area), and intrinsic sizing (`FitContent`). `Grid` layout correctly handles cell spanning.
-- **State Management:** Stateful widgets (`List`, `Table`, `Tree`) manage selection and scrolling offsets correctly, including clamping to valid ranges when content changes.
-- **Input Handling:** `TextInput` correctly handles multi-byte character insertion/deletion and cursor movement.
-- **Animation:** The spring physics implementation (`ftui-core/animation/spring.rs`) uses semi-implicit Euler integration for stability and includes correct damping and clamping logic.
-- **Forms:** The `ftui-extras/src/forms.rs` module correctly handles field navigation, validation, and state tracking (dirty/touched), enforcing input constraints like numeric bounds properly.
-- **Canvas:** The `ftui-extras/src/canvas.rs` implementation correctly maps sub-pixel coordinates to Braille/Block characters and handles boundary conditions for drawing primitives.
-- **Style Merging:** `ftui-style` implements CSS-like cascading logic correctly, ensuring child styles override parent styles appropriately while inheriting unset properties.
-
-### 3. Performance
-- **Optimized Diffing:** The block-based diff algorithm in `ftui-render/diff.rs` uses SIMD-friendly structures (16-byte Cells) and row-skipping optimizations to minimize CPU usage.
-- **Efficient Rendering:** The `Presenter` uses a dynamic cost model to choose between sparse cursor moves and merged writes, minimizing ANSI byte output.
-- **Dirty Tracking:** `Buffer` tracks dirty rows and spans to avoid scanning unchanged areas during diffing.
-- **Grapheme Interning:** `GraphemePool` deduplicates complex strings, reducing memory usage and allocation overhead.
-
-### 4. Integration
-- **One-Writer Rule:** The harness and runtime enforce a strict "one writer" policy for terminal output, preventing race conditions and visual artifacts. `PtyCapture` correctly routes subprocess output through this pipeline.
-- **Markdown & Syntax:** The extras crate provides safe, regex-free implementations for Markdown rendering (via `pulldown-cmark`) and syntax highlighting, with streaming support for incomplete fragments.
-- **Images:** Image protocol handling (`ftui-extras/src/image.rs`) correctly detects terminal capabilities and provides safe fallbacks (ASCII) when needed.
+## Verification of Fixes
+The following specific fixes from `FIXES_SUMMARY.md` were manually verified in the code:
+- **#67 TextInput Horizontal Clipping:** Validated logic skipping partially scrolled graphemes.
+- **#76 Integer Truncation:** Validated saturating casts in `Table` and `List`.
+- **#83 Table Intrinsic Width:** Validated `requires_measurement` optimization.
+- **#88 Scrollbar Hit Region:** Validated `hit_w` calculation using `symbol_width`.
+- **#72 Grapheme Pool GC:** Validated `gc()` method implementation.
 
 ## Conclusion
-I found **no critical bugs, security vulnerabilities, or architectural defects**. The project is in a stable and release-ready state. The implementation matches or exceeds the "alien artifact" quality claims found in the documentation.
+The `frankentui` codebase demonstrates a high level of quality and correctness ("alien artifact" standard). The core invariants for the "One-Writer Rule" and "Deterministic Rendering" are rigorously enforced. No modifications were necessary during this session.

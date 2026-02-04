@@ -5,7 +5,7 @@
 use ftui_core::geometry::Rect;
 use ftui_render::frame::{Frame, HitId};
 use ftui_style::{Style, StyleFlags};
-use ftui_text::{Line, Span, Text, WrapMode};
+use ftui_text::{Line, Span, Text, WrapMode, display_width};
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
@@ -245,7 +245,9 @@ pub fn render_tab_bar(current: ScreenId, frame: &mut Frame, area: Rect) {
 
         let id = meta.id;
         let label_text = meta.short_label;
-        let label_width = 1 + key_label.len() as u16 + 2 + label_text.len() as u16 + 1; // " {key}: {label} "
+        let key_width = display_width(&key_label) as u16;
+        let label_text_width = display_width(label_text) as u16;
+        let label_width = 1 + key_width + 2 + label_text_width + 1; // " {key}: {label} "
 
         if x + label_width > area.x + area.width {
             break; // No room for more tabs
@@ -315,7 +317,7 @@ pub fn render_category_tabs(current: ScreenId, frame: &mut Frame, area: Rect) {
 
     for category in ScreenCategory::ALL {
         let label = category.short_label();
-        let label_width = 1 + label.len() as u16 + 1; // " {label} "
+        let label_width = 1 + display_width(label) as u16 + 1; // " {label} "
         if x + label_width > area.x + area.width {
             break;
         }
@@ -371,7 +373,7 @@ pub fn render_screen_tabs_for_category(
     for meta in screens::screens_in_category(category) {
         let id = meta.id;
         let label_text = meta.short_label;
-        let label_width = 1 + label_text.len() as u16 + 1;
+        let label_width = 1 + display_width(label_text) as u16 + 1;
         if x + label_width > area.x + area.width {
             break;
         }
@@ -508,10 +510,11 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
     // Build content strings
     let position_str = format!("[{}/{}]", state.screen_index + 1, state.screen_count);
     let theme_str = format!("  {}", state.theme_name);
-    let nav_hint = "Tab: next section · Shift+Tab: prev";
+    let nav_hint_full = "Tab: next screen · Shift+Tab: prev";
+    let nav_hint_compact = "Tab/Shift+Tab: next/prev";
     let metrics_str = format!("tick:{} frm:{}", state.tick_count, state.frame_count);
-    let center_full = format!("{nav_hint} │ {metrics_str}");
-    let center_compact = nav_hint.to_string();
+    let center_full = format!("{nav_hint_full} │ {metrics_str}");
+    let center_compact = nav_hint_compact.to_string();
     let mut center_str = center_full;
     let dims_str = format!("{}x{}", state.terminal_width, state.terminal_height);
     let time_str = format!("{:02}:{:02}", mins, secs);
@@ -526,20 +529,20 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
 
     // Calculate lengths for padding
     let left_content_len = 1
-        + state.screen_title.len()
+        + display_width(state.screen_title)
         + 1
-        + position_str.len()
-        + theme_str.len()
-        + a11y_label.len()
-        + undo_label.len();
-    let mut center_content_len = center_str.len();
-    let right_content_len = dims_str.len() + 1 + time_str.len() + 1;
+        + display_width(&position_str)
+        + display_width(&theme_str)
+        + display_width(&a11y_label)
+        + display_width(&undo_label);
+    let mut center_content_len = display_width(&center_str);
+    let right_content_len = display_width(&dims_str) + 1 + display_width(&time_str) + 1;
 
     let available = area.width as usize;
     let mut total_content = left_content_len + center_content_len + right_content_len;
     if total_content > available {
         center_str = center_compact;
-        center_content_len = center_str.len();
+        center_content_len = display_width(&center_str);
         total_content = left_content_len + center_content_len + right_content_len;
     }
 
@@ -812,9 +815,9 @@ pub fn render_help_overlay(
     }
 
     let legend_width = {
-        let mut width = "Categories:".len();
+        let mut width = display_width("Categories:");
         for category in ScreenCategory::ALL {
-            width += 1 + category.short_label().len();
+            width += 1 + display_width(category.short_label());
         }
         width
     };
@@ -857,10 +860,11 @@ pub fn render_help_overlay(
     if footer_y > inner.y {
         let footer = "Press ? or Esc to close";
         let footer_style = Style::new().fg(theme::fg::MUTED);
-        let footer_x = inner.x + (inner.width.saturating_sub(footer.len() as u16)) / 2;
+        let footer_width = display_width(footer) as u16;
+        let footer_x = inner.x + (inner.width.saturating_sub(footer_width)) / 2;
         Paragraph::new(footer)
             .style(footer_style)
-            .render(Rect::new(footer_x, footer_y, footer.len() as u16, 1), frame);
+            .render(Rect::new(footer_x, footer_y, footer_width, 1), frame);
     }
 }
 

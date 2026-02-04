@@ -46,6 +46,7 @@ use ftui_core::geometry::Rect;
 use ftui_render::cell::{Cell, CellAttrs, CellContent, PackedRgba, StyleFlags as CellStyleFlags};
 use ftui_render::frame::Frame;
 use ftui_style::Style;
+use ftui_text::{display_width, grapheme_width, graphemes};
 
 use crate::Widget;
 
@@ -934,17 +935,10 @@ impl CommandPalette {
 
         // Title "Command Palette" in top border.
         let title = " Command Palette ";
-        let title_x = area.x + (area.width.saturating_sub(title.len() as u16)) / 2;
-        for (i, ch) in title.chars().enumerate() {
-            let x = title_x + i as u16;
-            if x < area.right()
-                && let Some(cell) = frame.buffer.get_mut(x, area.y)
-            {
-                cell.content = CellContent::from_char(ch);
-                cell.fg = PackedRgba::rgb(200, 200, 220);
-                cell.bg = bg;
-            }
-        }
+        let title_width = display_width(title).min(area.width as usize);
+        let title_x = area.x + (area.width.saturating_sub(title_width as u16)) / 2;
+        let title_style = Style::new().fg(PackedRgba::rgb(200, 200, 220)).bg(bg);
+        crate::draw_text_span(frame, title_x, area.y, title, title_style, area.right());
 
         // Side borders.
         for y in (area.y + 1)..area.bottom().saturating_sub(1) {
@@ -1137,42 +1131,87 @@ impl CommandPalette {
             // Category badge (if present).
             if let Some(ref cat) = action.category {
                 let badge = format!("[{}] ", cat);
-                for ch in badge.chars() {
-                    if col >= area.right() {
+                for grapheme in graphemes(&badge) {
+                    let w = grapheme_width(grapheme);
+                    if w == 0 {
+                        continue;
+                    }
+                    if col >= area.right() || col.saturating_add(w as u16) > area.right() {
                         break;
                     }
-                    if let Some(cell) = frame.buffer.get_mut(col, y) {
-                        cell.content = CellContent::from_char(ch);
-                        cell.fg = cat_fg;
-                        cell.bg = row_bg;
-                        cell.attrs = row_attrs;
-                    }
-                    col += 1;
+                    let content = if w > 1 || grapheme.chars().count() > 1 {
+                        let id = frame.intern_with_width(grapheme, w as u8);
+                        CellContent::from_grapheme(id)
+                    } else if let Some(ch) = grapheme.chars().next() {
+                        CellContent::from_char(ch)
+                    } else {
+                        continue;
+                    };
+                    let mut cell = Cell::new(content);
+                    cell.fg = cat_fg;
+                    cell.bg = row_bg;
+                    cell.attrs = row_attrs;
+                    frame.buffer.set(col, y, cell);
+                    col = col.saturating_add(w as u16);
                 }
             }
 
             // Title with match highlighting and ellipsis truncation.
             let title_max_width = area.right().saturating_sub(col) as usize;
-            let title_len = action.title.chars().count();
-            let needs_ellipsis = title_len > title_max_width && title_max_width > 3;
-            let title_display_len = if needs_ellipsis {
+            let title_width = display_width(action.title.as_str());
+            let needs_ellipsis = title_width > title_max_width && title_max_width > 3;
+            let title_display_width = if needs_ellipsis {
                 title_max_width.saturating_sub(1) // leave room for '…'
             } else {
                 title_max_width
             };
 
-            for (char_idx, ch) in action.title.chars().enumerate() {
-                if char_idx >= title_display_len || col >= area.right() {
+            let mut title_used_width = 0usize;
+            let mut char_idx = 0usize;
+            let mut match_cursor = 0usize;
+            let match_positions = &si.result.match_positions;
+            for grapheme in graphemes(action.title.as_str()) {
+                let g_chars = grapheme.chars().count();
+                let char_end = char_idx + g_chars;
+                while match_cursor < match_positions.len()
+                    && match_positions[match_cursor] < char_idx
+                {
+                    match_cursor += 1;
+                }
+                let is_match = match_cursor < match_positions.len()
+                    && match_positions[match_cursor] < char_end;
+
+                let w = grapheme_width(grapheme);
+                if w == 0 {
+                    char_idx = char_end;
+                    continue;
+                }
+                if title_used_width + w > title_display_width || col >= area.right() {
                     break;
                 }
-                let is_match = si.result.match_positions.contains(&char_idx);
-                if let Some(cell) = frame.buffer.get_mut(col, y) {
-                    cell.content = CellContent::from_char(ch);
-                    cell.fg = if is_match { highlight_fg } else { row_fg };
-                    cell.bg = row_bg;
-                    cell.attrs = row_attrs;
+                if col.saturating_add(w as u16) > area.right() {
+                    break;
                 }
-                col += 1;
+
+                let content = if w > 1 || grapheme.chars().count() > 1 {
+                    let id = frame.intern_with_width(grapheme, w as u8);
+                    CellContent::from_grapheme(id)
+                } else if let Some(ch) = grapheme.chars().next() {
+                    CellContent::from_char(ch)
+                } else {
+                    char_idx = char_end;
+                    continue;
+                };
+
+                let mut cell = Cell::new(content);
+                cell.fg = if is_match { highlight_fg } else { row_fg };
+                cell.bg = row_bg;
+                cell.attrs = row_attrs;
+                frame.buffer.set(col, y, cell);
+
+                col = col.saturating_add(w as u16);
+                title_used_width += w;
+                char_idx = char_end;
             }
 
             // Ellipsis for truncated titles.
@@ -1189,26 +1228,43 @@ impl CommandPalette {
             // Description (if space allows, with ellipsis truncation).
             if let Some(ref desc) = action.description {
                 col += 2; // gap
-                let max_desc_len = area.right().saturating_sub(col) as usize;
-                if max_desc_len > 5 {
-                    let desc_len = desc.chars().count();
-                    let desc_needs_ellipsis = desc_len > max_desc_len && max_desc_len > 3;
-                    let desc_display_len = if desc_needs_ellipsis {
-                        max_desc_len.saturating_sub(1)
+                let max_desc_width = area.right().saturating_sub(col) as usize;
+                if max_desc_width > 5 {
+                    let desc_width = display_width(desc.as_str());
+                    let desc_needs_ellipsis = desc_width > max_desc_width && max_desc_width > 3;
+                    let desc_display_width = if desc_needs_ellipsis {
+                        max_desc_width.saturating_sub(1)
                     } else {
-                        max_desc_len
+                        max_desc_width
                     };
 
-                    for (i, ch) in desc.chars().enumerate() {
-                        if i >= desc_display_len || col >= area.right() {
+                    let mut desc_used_width = 0usize;
+                    for grapheme in graphemes(desc.as_str()) {
+                        let w = grapheme_width(grapheme);
+                        if w == 0 {
+                            continue;
+                        }
+                        if desc_used_width + w > desc_display_width || col >= area.right() {
                             break;
                         }
-                        if let Some(cell) = frame.buffer.get_mut(col, y) {
-                            cell.content = CellContent::from_char(ch);
-                            cell.fg = desc_fg;
-                            cell.bg = row_bg;
+                        if col.saturating_add(w as u16) > area.right() {
+                            break;
                         }
-                        col += 1;
+                        let content = if w > 1 || grapheme.chars().count() > 1 {
+                            let id = frame.intern_with_width(grapheme, w as u8);
+                            CellContent::from_grapheme(id)
+                        } else if let Some(ch) = grapheme.chars().next() {
+                            CellContent::from_char(ch)
+                        } else {
+                            continue;
+                        };
+                        let mut cell = Cell::new(content);
+                        cell.fg = desc_fg;
+                        cell.bg = row_bg;
+                        cell.attrs = row_attrs;
+                        frame.buffer.set(col, y, cell);
+                        col = col.saturating_add(w as u16);
+                        desc_used_width += w;
                     }
 
                     if desc_needs_ellipsis
@@ -1218,6 +1274,7 @@ impl CommandPalette {
                         cell.content = CellContent::from_char('\u{2026}');
                         cell.fg = desc_fg;
                         cell.bg = row_bg;
+                        cell.attrs = row_attrs;
                     }
                 }
             }

@@ -1285,9 +1285,9 @@ impl<W: Write> TerminalWriter<W> {
                 &span_stats,
                 tile_stats,
             );
-            let total_cells = width.saturating_mul(height);
+            let scanned_cells = scan_cost.max(self.diff_scratch.len());
             self.diff_strategy
-                .observe(total_cells, self.diff_scratch.len());
+                .observe(scanned_cells, self.diff_scratch.len());
             span_stats_snapshot = Some(span_stats);
             scan_cost_estimate = scan_cost;
             fallback_reason = reason;

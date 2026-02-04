@@ -15,6 +15,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashSet, VecDeque};
 use std::env;
 use std::f64::consts::TAU;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -34,9 +35,8 @@ use ftui_render::cell::PackedRgba;
 use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::Style;
-use ftui_text::WrapMode;
 use ftui_text::text::Text;
-use ftui_text::truncate_to_width;
+use ftui_text::{WrapMode, display_width, truncate_to_width};
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
@@ -129,6 +129,8 @@ pub struct VisualEffectsScreen {
     painter: RefCell<Painter>,
     /// Last render quality (used to throttle updates).
     last_quality: Cell<FxQuality>,
+    /// Last effect that panicked during render (handled on next tick).
+    effect_panic: Cell<Option<EffectType>>,
     // Text effects demo (bd-2b82)
     /// Current demo mode: Canvas or TextEffects
     demo_mode: DemoMode,
@@ -2861,9 +2863,11 @@ const DOOM_WALL_HEIGHT: f32 = 128.0;
 const DOOM_GRAVITY: f32 = -4.2;
 const DOOM_JUMP_VELOCITY: f32 = 40.0;
 const DOOM_COLLISION_RADIUS: f32 = 20.0;
+const DOOM_COLLISION_PAD: f32 = 2.0;
 const DOOM_MOVE_STEP: f32 = 2.8;
 const DOOM_STRAFE_STEP: f32 = 2.4;
 const DOOM_TURN_RATE: f32 = 0.07;
+const DOOM_SUBSTEP: f32 = 1.2;
 
 #[derive(Debug, Clone, Copy)]
 struct DoomLine {
@@ -3131,13 +3135,13 @@ impl DoomE1M1State {
         center_y = center_y.clamp(0.0, (height.saturating_sub(1)) as f32);
         let proj_scale = h * 0.95;
 
-        // Paint a subtle Doom-like sky/floor gradient under the walls.
+        // Paint a Doom-like sky/floor gradient under the walls (brighter for visibility).
         let horizon = center_y.round() as i32;
         let max_y = height as i32 - 1;
-        let sky_top = (62, 92, 152);
-        let sky_bottom = (132, 164, 210);
-        let floor_top = (142, 106, 72);
-        let floor_bottom = (82, 56, 36);
+        let sky_top = (70, 104, 170);
+        let sky_bottom = (150, 186, 226);
+        let floor_top = (160, 120, 86);
+        let floor_bottom = (96, 68, 44);
         let fill_stride = 1;
         for py in (0..=max_y).step_by(fill_stride) {
             let (r, g, b) = if py <= horizon {
@@ -3183,7 +3187,7 @@ impl DoomE1M1State {
             }
 
             let fog = (corrected / 900.0).clamp(0.0, 1.0);
-            let mut brightness = (0.45 + (1.0 - fog).powf(1.1)).clamp(0.0, 1.8);
+            let mut brightness = (0.55 + (1.0 - fog).powf(1.0)).clamp(0.0, 2.0);
             if self.fire_flash > 0.0 {
                 brightness = (brightness + self.fire_flash * 0.35).min(1.6);
             }
@@ -3200,15 +3204,15 @@ impl DoomE1M1State {
                 (((px as u64).wrapping_mul(113) ^ (frame.wrapping_mul(131)) ^ hit_idx as u64) & 7)
                     as f32
                     / 80.0;
-            brightness = (brightness * tex_boost + grain + 0.16).clamp(0.35, 1.9);
+            brightness = (brightness * tex_boost + grain + 0.24).clamp(0.45, 2.1);
 
             let r = (base.r() as f32 * brightness).min(255.0) as u8;
             let g = (base.g() as f32 * brightness).min(255.0) as u8;
             let b = (base.b() as f32 * brightness).min(255.0) as u8;
             let wall_color = PackedRgba::rgb(r, g, b);
 
-            let sky_base = PackedRgba::rgb(68, 98, 150);
-            let floor_base = PackedRgba::rgb(96, 70, 44);
+            let sky_base = PackedRgba::rgb(80, 112, 170);
+            let floor_base = PackedRgba::rgb(110, 80, 52);
             let sky_fade = fog.clamp(0.0, 1.0);
             let floor_fade = fog.clamp(0.0, 1.0);
             let ceiling_color = PackedRgba::rgb(
@@ -3344,6 +3348,8 @@ const QUAKE_FOV: f32 = 1.5;
 const QUAKE_MOVE_STEP: f32 = 0.012;
 const QUAKE_STRAFE_STEP: f32 = 0.01;
 const QUAKE_TURN_RATE: f32 = 0.055;
+const QUAKE_STEP_HEIGHT: f32 = 0.06;
+const QUAKE_SUBSTEP: f32 = 0.02;
 
 #[derive(Debug, Clone, Copy)]
 struct WallSeg {
@@ -3862,16 +3868,16 @@ impl QuakeE1M1State {
         let proj_scale = (w.min(h) * 0.5) / (QUAKE_FOV * 0.5).tan();
         let near = 0.04f32;
         let far = 10.0f32;
-        let fog_color = PackedRgba::rgb(72, 80, 92);
+        let fog_color = PackedRgba::rgb(90, 100, 118);
 
         let horizon = (h * 0.5 - self.player.pitch * (h * 0.35) + bob * proj_scale * 0.8)
             .clamp(0.0, h - 1.0)
             .round() as i32;
         let max_y = height as i32 - 1;
-        let sky_top = (48, 70, 104);
-        let sky_bottom = (104, 128, 164);
-        let floor_top = (120, 100, 74);
-        let floor_bottom = (64, 46, 32);
+        let sky_top = (60, 84, 120);
+        let sky_bottom = (128, 160, 196);
+        let floor_top = (140, 116, 86);
+        let floor_bottom = (78, 58, 40);
         let fill_stride = 1;
         for py in (0..=max_y).step_by(fill_stride) {
             let (r, g, b) = if py <= horizon {
@@ -3924,7 +3930,8 @@ impl QuakeE1M1State {
             let is_floor = tri.is_floor;
             let is_ceiling = tri.is_ceiling;
             let base = tri.base;
-            let light = (tri.ambient + tri.diffuse * tri.diffuse_scale + rim).clamp(0.0, 1.4);
+            let light =
+                (tri.ambient + tri.diffuse * tri.diffuse_scale + rim + 0.08).clamp(0.0, 1.6);
 
             let cam0 = Vec3::new(
                 (world0 - eye).dot(right),
@@ -4045,7 +4052,7 @@ impl QuakeE1M1State {
                             & 3) as f32
                             / 20.0;
                         let mut brightness =
-                            (light * fade * pattern + grain + 0.38).clamp(0.28, 1.8);
+                            (light * fade * pattern + grain + 0.44).clamp(0.38, 2.0);
                         if self.fire_flash > 0.0 {
                             brightness = (brightness + self.fire_flash * 0.5).min(1.9);
                         }
@@ -4289,6 +4296,7 @@ impl Default for VisualEffectsScreen {
             transition: TransitionState::new(),
             painter: RefCell::new(Painter::new(0, 0, Mode::Braille)),
             last_quality: Cell::new(FxQuality::Full),
+            effect_panic: Cell::new(None),
             // Text effects demo (bd-2b82)
             demo_mode: DemoMode::Canvas,
             text_effects: TextEffectsDemo::default(),
@@ -4342,8 +4350,8 @@ impl VisualEffectsScreen {
 
     fn canvas_mode_for_effect(&self, _quality: FxQuality, _area_cells: usize) -> Mode {
         match self.effect {
-            // FPS effects benefit from chunkier pixels for readability in terminals.
-            EffectType::DoomE1M1 | EffectType::QuakeE1M1 => Mode::Block,
+            // FPS effects use half-blocks for broad font support + readable pixels.
+            EffectType::DoomE1M1 | EffectType::QuakeE1M1 => Mode::HalfBlock,
             _ => Mode::Braille,
         }
     }
@@ -4662,7 +4670,8 @@ impl VisualEffectsScreen {
 
         let demo_text = demo.demo_text;
         let text_y = area.y + area.height / 2;
-        let text_x = area.x + (area.width.saturating_sub(demo_text.len() as u16)) / 2;
+        let text_width = display_width(demo_text) as u16;
+        let text_x = area.x + (area.width.saturating_sub(text_width)) / 2;
         let text_area = Rect {
             x: text_x,
             y: text_y,
@@ -5064,8 +5073,9 @@ impl Screen for VisualEffectsScreen {
             painter.clear();
             let (pw, ph) = painter.size();
 
+            let mut effect_panicked = false;
             if !matches!(quality, FxQuality::Off) {
-                match self.effect {
+                let result = catch_unwind(AssertUnwindSafe(|| match self.effect {
                     EffectType::Shape3D => self.shape3d.render(&mut painter, pw, ph, self.time),
                     EffectType::Particles => self.particles.render(&mut painter, pw, ph),
                     EffectType::Matrix => self.matrix.render(&mut painter, pw, ph),
@@ -5113,12 +5123,35 @@ impl Screen for VisualEffectsScreen {
                             &theme_inputs,
                         );
                     }
+                }));
+                if result.is_err() {
+                    effect_panicked = true;
+                    painter.clear();
+                    self.effect_panic.set(Some(self.effect));
                 }
             }
 
             // Render canvas to frame without cloning painter buffers.
             let canvas = CanvasRef::from_painter(&painter);
             canvas.render(canvas_area, frame);
+
+            if effect_panicked {
+                let crash_block = Block::new()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Double)
+                    .title("Effect Error")
+                    .title_alignment(Alignment::Center)
+                    .style(Style::new().fg(PackedRgba::rgb(255, 120, 120)));
+                let crash_area = crash_block.inner(canvas_area);
+                crash_block.render(canvas_area, frame);
+                if !crash_area.is_empty() {
+                    Paragraph::new(
+                        "This effect panicked and was disabled.\nSwitch effects with ←/→.",
+                    )
+                    .style(Style::new().fg(PackedRgba::rgb(255, 220, 220)))
+                    .render(crash_area, frame);
+                }
+            }
         }
 
         // Render markdown overlay for metaballs/plasma
@@ -5133,6 +5166,14 @@ impl Screen for VisualEffectsScreen {
     }
 
     fn tick(&mut self, _tick_count: u64) {
+        if let Some(failed) = self.effect_panic.replace(None) {
+            // Fall back to a safe effect and show a transition banner.
+            if self.effect == failed {
+                self.effect = EffectType::Plasma;
+                self.start_transition();
+            }
+        }
+
         // FPS tracking
         let now = Instant::now();
         if let Some(last) = self.last_frame {
@@ -5512,6 +5553,56 @@ mod tests {
             })
         });
         assert!(has_content, "Metaballs should render visible content");
+    }
+
+    /// Verify Doom renders visible output (not a blank screen).
+    #[test]
+    fn doom_render_visible() {
+        let screen = VisualEffectsScreen {
+            effect: EffectType::DoomE1M1,
+            ..Default::default()
+        };
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        let area = Rect::new(0, 0, 80, 24);
+
+        screen.view(&mut frame, area);
+
+        let has_content = (0..area.height).any(|y| {
+            (0..area.width).any(|x| {
+                frame
+                    .buffer
+                    .get(area.x + x, area.y + y)
+                    .map(|c| c.content.as_char() != Some(' '))
+                    .unwrap_or(false)
+            })
+        });
+        assert!(has_content, "Doom should render visible content");
+    }
+
+    /// Verify Quake renders visible output (not a blank screen).
+    #[test]
+    fn quake_render_visible() {
+        let screen = VisualEffectsScreen {
+            effect: EffectType::QuakeE1M1,
+            ..Default::default()
+        };
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        let area = Rect::new(0, 0, 80, 24);
+
+        screen.view(&mut frame, area);
+
+        let has_content = (0..area.height).any(|y| {
+            (0..area.width).any(|x| {
+                frame
+                    .buffer
+                    .get(area.x + x, area.y + y)
+                    .map(|c| c.content.as_char() != Some(' '))
+                    .unwrap_or(false)
+            })
+        });
+        assert!(has_content, "Quake should render visible content");
     }
 
     /// Verify effect transitions work without panicking.

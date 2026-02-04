@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "started": "2026-02-02T20:53:16Z",
-  "last_updated": "2026-02-04T08:00:50Z",
+  "last_updated": "2026-02-04T18:40:00Z",
   "project": "frankentui",
   "language": "Rust",
   "manifest": "Cargo.toml (workspace)",
@@ -14,7 +14,7 @@
   },
   "summary": {
     "total": 27,
-    "updated": 7,
+    "updated": 13,
     "skipped": 1,
     "failed": 0,
     "requires_refactor": 0
@@ -64,14 +64,16 @@
     {
       "name": "criterion",
       "current_version": "mixed: 0.5, 0.6",
-      "target_version": "",
+      "target_version": "0.8.2",
       "version_type": "stable",
-      "status": "pending",
-      "changelog_url": "",
-      "breaking_changes": [],
+      "status": "updated",
+      "changelog_url": "https://docs.rs/crate/criterion/latest/source/CHANGELOG.md",
+      "breaking_changes": [
+        "No breaking changes affecting current bench usage in 0.8.x"
+      ],
       "deprecations": [],
-      "notes": "",
-      "attempts": 0,
+      "notes": "Updated across all crates; cargo check --all-targets passed.",
+      "attempts": 1,
       "error_log": []
     },
     {
@@ -146,6 +148,21 @@
       "error_log": []
     },
     {
+      "name": "pollster",
+      "current_version": "0.3.0",
+      "target_version": "0.4.0",
+      "version_type": "stable",
+      "status": "updated",
+      "changelog_url": "https://docs.rs/crate/pollster/0.4.0/source/CHANGELOG.md",
+      "breaking_changes": [
+        "0.4.0: block_on now accepts IntoFuture (backwards compatible)"
+      ],
+      "deprecations": [],
+      "notes": "fx-gpu feature compiles cleanly with pollster 0.4.0.",
+      "attempts": 1,
+      "error_log": []
+    },
+    {
       "name": "proptest",
       "current_version": "1",
       "target_version": "",
@@ -161,14 +178,31 @@
     {
       "name": "pulldown-cmark",
       "current_version": "0.12",
-      "target_version": "",
+      "target_version": "0.13.0",
       "version_type": "stable",
-      "status": "pending",
-      "changelog_url": "",
-      "breaking_changes": [],
+      "status": "updated",
+      "changelog_url": "https://github.com/pulldown-cmark/pulldown-cmark/releases/tag/v0.13.0",
+      "breaking_changes": [
+        "0.13.0 adds new extensions and parser changes; no API changes used in ftui-extras"
+      ],
       "deprecations": [],
-      "notes": "",
-      "attempts": 0,
+      "notes": "Markdown feature compiles cleanly with pulldown-cmark 0.13.0.",
+      "attempts": 1,
+      "error_log": []
+    },
+    {
+      "name": "regex",
+      "current_version": "1.12.2",
+      "target_version": "1.12.3",
+      "version_type": "stable",
+      "status": "updated",
+      "changelog_url": "https://docs.rs/crate/regex/1.12.3/source/CHANGELOG.md",
+      "breaking_changes": [
+        "No breaking changes noted in 1.12.3 (patch release)"
+      ],
+      "deprecations": [],
+      "notes": "regex-search feature compiles with regex 1.12.3.",
+      "attempts": 1,
       "error_log": []
     },
     {
@@ -213,14 +247,16 @@
     {
       "name": "signal-hook",
       "current_version": "0.3.18",
-      "target_version": "",
+      "target_version": "0.4.3",
       "version_type": "stable",
-      "status": "pending",
-      "changelog_url": "",
-      "breaking_changes": [],
+      "status": "updated",
+      "changelog_url": "https://docs.rs/crate/signal-hook/0.4.1/source/CHANGELOG.md",
+      "breaking_changes": [
+        "0.4.0 changed low_level::pipe to accept raw fd; iterator API unchanged"
+      ],
       "deprecations": [],
-      "notes": "",
-      "attempts": 0,
+      "notes": "ftui-core uses iterator API only; cargo test -p ftui-core passed.",
+      "attempts": 1,
       "error_log": []
     },
     {
@@ -288,6 +324,21 @@
       "deprecations": [],
       "notes": "",
       "attempts": 0,
+      "error_log": []
+    },
+    {
+      "name": "vte",
+      "current_version": "0.13.1",
+      "target_version": "0.15.0",
+      "version_type": "stable",
+      "status": "updated",
+      "changelog_url": "https://www.spinics.net/lists/fedora-package-announce/msg420331.html",
+      "breaking_changes": [
+        "Parser advance API now accepts byte slices; updated ftui-extras parser accordingly"
+      ],
+      "deprecations": [],
+      "notes": "terminal feature compiles cleanly with vte 0.15.0.",
+      "attempts": 1,
       "error_log": []
     },
     {
@@ -431,6 +482,66 @@
       ],
       "fixes_applied": [],
       "timestamp": "2026-02-04T08:00:50Z"
+    },
+    {
+      "name": "criterion",
+      "from": "mixed: 0.5, 0.6",
+      "to": "0.8.2",
+      "breaking_changes": [
+        "No breaking changes affecting current bench usage in 0.8.x"
+      ],
+      "fixes_applied": [],
+      "timestamp": "2026-02-04T18:40:00Z"
+    },
+    {
+      "name": "signal-hook",
+      "from": "0.3.18",
+      "to": "0.4.3",
+      "breaking_changes": [
+        "0.4.0 changed low_level::pipe to accept raw fd; iterator API unchanged"
+      ],
+      "fixes_applied": [],
+      "timestamp": "2026-02-04T18:40:00Z"
+    },
+    {
+      "name": "pollster",
+      "from": "0.3.0",
+      "to": "0.4.0",
+      "breaking_changes": [
+        "0.4.0: block_on now accepts IntoFuture (backwards compatible)"
+      ],
+      "fixes_applied": [],
+      "timestamp": "2026-02-04T18:40:00Z"
+    },
+    {
+      "name": "pulldown-cmark",
+      "from": "0.12",
+      "to": "0.13.0",
+      "breaking_changes": [
+        "0.13.0 adds new extensions and parser changes; no API changes used in ftui-extras"
+      ],
+      "fixes_applied": [],
+      "timestamp": "2026-02-04T18:40:00Z"
+    },
+    {
+      "name": "vte",
+      "from": "0.13.1",
+      "to": "0.15.0",
+      "breaking_changes": [
+        "Parser advance API now accepts byte slices; updated ftui-extras parser accordingly"
+      ],
+      "fixes_applied": [],
+      "timestamp": "2026-02-04T18:40:00Z"
+    },
+    {
+      "name": "regex",
+      "from": "1.12.2",
+      "to": "1.12.3",
+      "breaking_changes": [
+        "No breaking changes noted in 1.12.3 (patch release)"
+      ],
+      "fixes_applied": [],
+      "timestamp": "2026-02-04T18:40:00Z"
     }
   ],
   "failed": [],

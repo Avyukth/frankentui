@@ -191,9 +191,21 @@ mod cost_model {
 
         for j in 0..run_count {
             let mut best_cost = usize::MAX;
-            let mut best_i = 0usize;
+            let mut best_i = j;
 
-            for i in 0..=j {
+            // Optimization: iterate backwards and break if the gap becomes too large.
+            // The gap cost grows linearly, while cursor movement cost is bounded (~10-15 bytes).
+            // Once the gap exceeds ~20 cells, merging is strictly worse than moving.
+            // We use 32 as a conservative safety bound.
+            for i in (0..=j).rev() {
+                let changed_cells = prefix_cells[j + 1] - prefix_cells[i];
+                let total_cells = (row_runs[j].x1 - row_runs[i].x0 + 1) as usize;
+                let gap_cells = total_cells - changed_cells;
+
+                if gap_cells > 32 {
+                    break;
+                }
+
                 let from_x = if i == 0 {
                     prev_x
                 } else {
@@ -202,15 +214,13 @@ mod cost_model {
                 let from_y = if i == 0 { prev_y } else { Some(row_y) };
 
                 let move_cost = cheapest_move_cost(from_x, from_y, row_runs[i].x0, row_y);
-
-                let changed_cells = prefix_cells[j + 1] - prefix_cells[i];
-                let total_cells = (row_runs[j].x1 - row_runs[i].x0 + 1) as usize;
-                let gap_cells = total_cells - changed_cells;
                 let gap_overhead = gap_cells * 2; // conservative: char + style amortized
                 let emit_cost = changed_cells + gap_overhead;
 
                 let prev_cost = if i == 0 { 0 } else { dp[i - 1] };
-                let cost = prev_cost + move_cost + emit_cost;
+                let cost = prev_cost
+                    .saturating_add(move_cost)
+                    .saturating_add(emit_cost);
 
                 if cost < best_cost {
                     best_cost = cost;
@@ -728,8 +738,10 @@ impl<W: Write> Presenter<W> {
 
         // Regular character content
         if let Some(ch) = cell.content.as_char() {
+            // Sanitize control characters that would break the grid.
+            let safe_ch = if ch.is_control() { ' ' } else { ch };
             let mut buf = [0u8; 4];
-            let encoded = ch.encode_utf8(&mut buf);
+            let encoded = safe_ch.encode_utf8(&mut buf);
             self.writer.write_all(encoded.as_bytes())
         } else {
             // Empty cell - emit space

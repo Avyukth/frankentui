@@ -31,8 +31,9 @@
 use ftui_core::geometry::Rect;
 use ftui_render::cell::{Cell, PackedRgba};
 use ftui_render::frame::{Frame, HitCell, HitData, HitId, HitRegion};
+use ftui_text::display_width;
 
-use crate::{Widget, set_style_area};
+use crate::{Widget, draw_text_span, set_style_area};
 use ftui_style::Style;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -1084,7 +1085,7 @@ impl<'a> InspectorOverlay<'a> {
     /// Draw a widget name label at the top-left of its area.
     fn draw_label(&self, area: Rect, frame: &mut Frame, name: &str, style: &InspectorStyle) {
         let label = format!("[{name}]");
-        let label_len = label.len() as u16;
+        let label_len = display_width(&label) as u16;
 
         // Position label at top-left, clamped to area
         let x = area.x;
@@ -1099,14 +1100,8 @@ impl<'a> InspectorOverlay<'a> {
         );
 
         // Draw label text
-        for (i, ch) in label.chars().take(area.width as usize).enumerate() {
-            let cx = x + i as u16;
-            if let Some(cell) = frame.buffer.get_mut(cx, y) {
-                *cell = Cell::from_char(ch)
-                    .with_fg(style.label_fg)
-                    .with_bg(style.label_bg);
-            }
-        }
+        let label_style = Style::new().fg(style.label_fg).bg(style.label_bg);
+        draw_text_span(frame, x, y, &label, label_style, area.x + area.width);
     }
 
     /// Draw a warning message when something isn't available.
@@ -1117,7 +1112,7 @@ impl<'a> InspectorOverlay<'a> {
             .bg(style.label_bg);
 
         // Center the message
-        let msg_len = msg.len() as u16;
+        let msg_len = display_width(msg) as u16;
         let x = area.x + area.width.saturating_sub(msg_len) / 2;
         let y = area.y;
 
@@ -1127,17 +1122,7 @@ impl<'a> InspectorOverlay<'a> {
             warning_style,
         );
 
-        for (i, ch) in msg.chars().enumerate() {
-            let cx = x + i as u16;
-            if cx >= area.right() {
-                break;
-            }
-            if let Some(cell) = frame.buffer.get_mut(cx, y) {
-                *cell = Cell::from_char(ch);
-                cell.fg = PackedRgba::rgb(255, 200, 0);
-                cell.bg = style.label_bg;
-            }
-        }
+        draw_text_span(frame, x, y, msg, warning_style, area.x + area.width);
     }
 
     /// Render the detail panel showing selected widget info.

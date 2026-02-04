@@ -973,6 +973,23 @@ Intuition: short, important jobs finish quickly, but long‑waiting jobs still r
 
 These aren’t academic decorations—they’re directly tied to throughput, latency, and determinism under real terminal workloads.
 
+### Visual FX Math At a Glance
+
+The visual effects screen is deterministic math, not “random shader noise.” Each effect is a concrete dynamical system or PDE with explicit time‑stepping.
+
+| Effect | Core Equation (MathJax) | What It Produces |
+|--------|--------------------------|------------------|
+| **Metaballs** | $F(x,y)=\sum_i \frac{r_i^2}{(x-x_i)^2+(y-y_i)^2}$, render iso‑surface $F\ge \tau$ | Smooth, organic blob fields |
+| **Plasma** | $v=\frac{1}{6}\sum_{k=1}^6 \sin(\phi_k(x,y,t))$ (wave interference in 2D) | Psychedelic interference bands |
+| **Gray‑Scott** | $\partial_t u = D_u\nabla^2u - uv^2 + F(1-u)$; $\partial_t v = D_v\nabla^2v + uv^2 - (F+k)v$ | Reaction‑diffusion morphogenesis |
+| **Clifford Attractor** | $x_{t+1}=\sin(a y_t)+c\cos(a x_t)$; $y_{t+1}=\sin(b x_t)+d\cos(b y_t)$ | Chaotic strange‑attractor filaments |
+| **Mandelbrot / Julia** | $z_{n+1}=z_n^2+c$ (escape‑time coloring) | Fractal boundaries + deep zooms |
+| **Lissajous / Harmonograph** | $x=A\sin(a t+\delta)$, $y=B\sin(b t+\phi)$ (optionally $e^{-\gamma t}$ damping) | Elegant phase‑locked curves |
+| **Flow Field** | $\vec v(x,y)=(\cos 2\pi N,\ \sin 2\pi N)$; $p_{t+1}=p_t+\vec v\,\Delta t$ | Particle ribbons through a vector field |
+| **Wave Interference** | $I(x,t)=\sum_i \sin(k_i\|x-s_i\|-\omega_i t)$ | Multi‑source ripple patterns |
+| **Spiral Galaxy** | $r=a e^{b\theta}$ with $\theta(t)=\theta_0+\omega t$ | Logarithmic spiral starfields |
+| **Spin Lattice (LLG)** | $\frac{d\vec S}{dt}=-\vec S\times \vec H-\alpha\,\vec S\times(\vec S\times\vec H)$ | Magnetic domain dynamics |
+
 ### Math At a Glance
 
 | Technique | Where It’s Used | Core Formula / Idea (MathJax) | Performance Impact |

@@ -9,6 +9,7 @@ use ftui_render::cell::PackedRgba;
 use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::{Style, StyleFlags};
+use ftui_text::display_width;
 use ftui_widgets::Widget;
 use ftui_widgets::align::{Align, VerticalAlignment};
 use ftui_widgets::block::{Alignment, Block};
@@ -710,7 +711,7 @@ impl LayoutLab {
         let aligned = Align::new(content)
             .horizontal(h_align)
             .vertical(v_align)
-            .child_width(pos_name.len() as u16)
+            .child_width(display_width(pos_name) as u16)
             .child_height(1);
 
         let demo_block = Block::new()

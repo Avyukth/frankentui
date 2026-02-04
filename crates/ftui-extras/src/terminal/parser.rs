@@ -247,9 +247,7 @@ impl AnsiParser {
     /// maintains state between calls to handle sequences that span chunks.
     pub fn parse<H: AnsiHandler>(&mut self, data: &[u8], handler: &mut H) {
         let mut adapter = VteAdapter { handler };
-        for &byte in data {
-            self.inner.advance(&mut adapter, byte);
-        }
+        self.inner.advance(&mut adapter, data);
     }
 
     /// Reset the parser to initial state.

@@ -223,6 +223,8 @@ impl<'a> StatefulWidget for List<'a> {
         set_style_area(&mut frame.buffer, list_area, self.style);
 
         if self.items.is_empty() {
+            state.selected = None;
+            state.offset = 0;
             return;
         }
 

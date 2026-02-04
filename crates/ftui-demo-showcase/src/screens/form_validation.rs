@@ -261,7 +261,7 @@ impl FormValidationDemo {
 
     /// Validate password confirmation matches password.
     fn validate_password_match(&self) -> Option<ValidationError> {
-        let password = if let Some(FormField::Text { value, .. }) = self.form.field(2) {
+        let pass_value = if let Some(FormField::Text { value, .. }) = self.form.field(2) {
             value.clone()
         } else {
             return None;
@@ -273,7 +273,7 @@ impl FormValidationDemo {
             return None;
         };
 
-        if !confirm.is_empty() && password != confirm {
+        if !confirm.is_empty() && pass_value != confirm {
             Some(ValidationError {
                 field: 3,
                 message: "Passwords do not match".into(),

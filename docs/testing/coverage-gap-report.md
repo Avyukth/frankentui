@@ -5,6 +5,36 @@ Tool: `cargo llvm-cov` (workspace, all targets)
 Total tests: 2,630 passing
 Overall line coverage: **89.73%**
 
+## Audit Notes (2026-02-04) — bd-112f Coverage Gap Map
+
+Full workspace `cargo llvm-cov` was attempted but hung on long-running demo
+tests. Until a full run completes, the 2026-02-02 coverage numbers remain the
+latest verified baseline. The prioritized gap map below is derived from that
+baseline and current code review.
+
+**Priority 0 (Critical coverage gaps)**
+- `crates/ftui-runtime/src/program.rs` (34.05%): add `ProgramSimulator` tests
+  covering `Cmd::Batch`, `Cmd::Sequence`, `Cmd::Task` (effects), `Cmd::Tick`,
+  `Cmd::SaveState`/`RestoreState`, and exit paths. Focus on model lifecycle,
+  command ordering, and deterministic state updates without relying on real TTY.
+
+**Priority 1 (High-impact module gaps)**
+- `crates/ftui-extras/src/image.rs` (46.46%): add decode/format/error-path tests.
+- `crates/ftui-extras/src/pty_capture.rs` (74.71%): add PTY integration tests
+  for partial reads and deterministic capture.
+- `crates/ftui-core/src/terminal_session.rs`: add panic-cleanup idempotence test.
+
+**Priority 2 (Widget + text hot spots)**
+- `crates/ftui-widgets/src/log_viewer.rs`: large scrollback + markup edge cases.
+- `crates/ftui-widgets/src/input.rs`: multi-codepoint + clipboard + boundary movement.
+- `crates/ftui-widgets/src/virtualized.rs`: scroll acceleration + dynamic height.
+- `crates/ftui-widgets/src/block.rs`: complex borders + multi-title layouts.
+- `crates/ftui-text/src/text.rs`: Display + From conversions edge cases.
+
+**Priority 3 (Lower-impact but worth closing)**
+- `crates/ftui-render/src/frame.rs`: hit grid + nested scissor edges.
+- `crates/ftui-render/src/terminal_model.rs`: rare ANSI and scroll-region edges.
+
 ## Per-Crate Coverage Summary
 
 | Crate | Target | Actual (lines) | Status | Key Gaps |

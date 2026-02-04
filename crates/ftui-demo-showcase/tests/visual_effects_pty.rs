@@ -61,10 +61,11 @@ fn send_key(
 // ---------------------------------------------------------------------------
 
 #[test]
-fn pty_visual_effects_input_no_panic() {
+fn pty_visual_effects_input_no_panic() -> Result<(), String> {
     let start = Instant::now();
-    let demo_bin = std::env::var("CARGO_BIN_EXE_ftui-demo-showcase")
-        .expect("CARGO_BIN_EXE_ftui-demo-showcase must be set for PTY tests");
+    let demo_bin = std::env::var("CARGO_BIN_EXE_ftui-demo-showcase").map_err(|err| {
+        format!("CARGO_BIN_EXE_ftui-demo-showcase must be set for PTY tests: {err}")
+    })?;
 
     log_jsonl(
         "env",
@@ -86,7 +87,8 @@ fn pty_visual_effects_input_no_panic() {
     let mut cmd = CommandBuilder::new(demo_bin);
     cmd.arg("--screen=14");
 
-    let mut session = spawn_command(config, cmd).expect("spawn demo in PTY");
+    let mut session =
+        spawn_command(config, cmd).map_err(|err| format!("spawn demo in PTY: {err}"))?;
     std::thread::sleep(Duration::from_millis(250));
     let _ = session.read_output_result();
 
@@ -108,8 +110,9 @@ fn pty_visual_effects_input_no_panic() {
         if let Err(err) = send_key(&mut session, label, key, step_delay, &mut last_key) {
             let output = session.read_output();
             let tail = tail_output(&output, 2048);
-            eprintln!("PTY send failed at key={label}: {err}\nTAIL:\n{tail}");
-            panic!("PTY send failed at key={label}: {err}");
+            let msg = format!("PTY send failed at key={label}: {err}\nTAIL:\n{tail}");
+            eprintln!("{msg}");
+            return Err(msg);
         }
     }
 
@@ -145,21 +148,25 @@ fn pty_visual_effects_input_no_panic() {
                     ("output_bytes", output.len().to_string()),
                 ],
             );
+            Ok(())
         }
         Ok((Ok(status), output)) => {
             let tail = tail_output(&output, 2048);
-            eprintln!("PTY exit status failure: {status:?}\nTAIL:\n{tail}");
-            panic!("PTY exit status failure: {status:?}");
+            let msg = format!("PTY exit status failure: {status:?}\nTAIL:\n{tail}");
+            eprintln!("{msg}");
+            Err(msg)
         }
         Ok((Err(err), output)) => {
             let tail = tail_output(&output, 2048);
-            eprintln!("PTY wait_and_drain error: {err}\nTAIL:\n{tail}");
-            panic!("PTY wait_and_drain error: {err}");
+            let msg = format!("PTY wait_and_drain error: {err}\nTAIL:\n{tail}");
+            eprintln!("{msg}");
+            Err(msg)
         }
         Err(_) => {
             let tail = tail_output(&output_snapshot, 2048);
-            eprintln!("PTY timeout waiting for exit; last_key={last_key}\nTAIL:\n{tail}");
-            panic!("PTY timeout waiting for exit; last_key={last_key}");
+            let msg = format!("PTY timeout waiting for exit; last_key={last_key}\nTAIL:\n{tail}");
+            eprintln!("{msg}");
+            Err(msg)
         }
     }
 }

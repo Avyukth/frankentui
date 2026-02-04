@@ -38,7 +38,7 @@
 use crate::canvas::Painter;
 use crate::visual_fx::effects::metaballs::MetaballsParams;
 use crate::visual_fx::effects::plasma::PlasmaPalette;
-use crate::visual_fx::effects::sampling::{BallState, MetaballFieldSampler};
+use crate::visual_fx::effects::sampling::BallState;
 use crate::visual_fx::{FxQuality, ThemeInputs};
 use ftui_render::cell::PackedRgba;
 
@@ -67,13 +67,21 @@ pub struct PlasmaCanvasAdapter {
     /// sin/cos for diagonal term (wy * 1.2).
     y_diag_sin: Vec<f64>,
     y_diag_cos: Vec<f64>,
-    /// sin(wx * 2.0) for interference.
-    x_sin2: Vec<f64>,
-    /// cos(wy * 2.0) for interference.
-    y_cos2: Vec<f64>,
-    /// Pre-scaled radial distances for v4 (center) and v5 (offset).
-    radial_center_scaled: Vec<f64>,
-    radial_offset_scaled: Vec<f64>,
+    /// sin/cos base for v1 (wx * 1.5).
+    x_wave_sin_base: Vec<f64>,
+    x_wave_cos_base: Vec<f64>,
+    /// sin/cos base for v2 (wy * 1.8).
+    y_wave_sin_base: Vec<f64>,
+    y_wave_cos_base: Vec<f64>,
+    /// Precomputed sin/cos for radial term v4 (center).
+    radial_center_sin_base: Vec<f64>,
+    radial_center_cos_base: Vec<f64>,
+    /// Precomputed sin/cos for radial term v5 (offset center).
+    radial_offset_sin_base: Vec<f64>,
+    radial_offset_cos_base: Vec<f64>,
+    /// Precomputed sin/cos for interference base (x_sin2 * y_cos2).
+    interference_sin_base: Vec<f64>,
+    interference_cos_base: Vec<f64>,
     /// Per-frame scratch buffers for v1/v2.
     x_wave: Vec<f64>,
     y_wave: Vec<f64>,
@@ -93,10 +101,16 @@ impl PlasmaCanvasAdapter {
             x_diag_cos: Vec::new(),
             y_diag_sin: Vec::new(),
             y_diag_cos: Vec::new(),
-            x_sin2: Vec::new(),
-            y_cos2: Vec::new(),
-            radial_center_scaled: Vec::new(),
-            radial_offset_scaled: Vec::new(),
+            x_wave_sin_base: Vec::new(),
+            x_wave_cos_base: Vec::new(),
+            y_wave_sin_base: Vec::new(),
+            y_wave_cos_base: Vec::new(),
+            radial_center_sin_base: Vec::new(),
+            radial_center_cos_base: Vec::new(),
+            radial_offset_sin_base: Vec::new(),
+            radial_offset_cos_base: Vec::new(),
+            interference_sin_base: Vec::new(),
+            interference_cos_base: Vec::new(),
             x_wave: Vec::new(),
             y_wave: Vec::new(),
         }
@@ -128,10 +142,12 @@ impl PlasmaCanvasAdapter {
         self.wx.resize(w, 0.0);
         self.x_diag_sin.resize(w, 0.0);
         self.x_diag_cos.resize(w, 0.0);
-        self.x_sin2.resize(w, 0.0);
+        self.x_wave_sin_base.resize(w, 0.0);
+        self.x_wave_cos_base.resize(w, 0.0);
 
         let inv_w = if w > 0 { 1.0 / w as f64 } else { 0.0 };
-        for x in 0..w {
+        let mut x_sin2 = vec![0.0; w];
+        for (x, x_sin2_val) in x_sin2.iter_mut().enumerate().take(w) {
             let nx = (x as f64 + 0.5) * inv_w;
             let wx = nx * 6.0;
             self.wx[x] = wx;
@@ -139,16 +155,21 @@ impl PlasmaCanvasAdapter {
             let (sin, cos) = diag.sin_cos();
             self.x_diag_sin[x] = sin;
             self.x_diag_cos[x] = cos;
-            self.x_sin2[x] = (wx * 2.0).sin();
+            let (sin1, cos1) = (wx * 1.5).sin_cos();
+            self.x_wave_sin_base[x] = sin1;
+            self.x_wave_cos_base[x] = cos1;
+            *x_sin2_val = (wx * 2.0).sin();
         }
 
         self.wy.resize(h, 0.0);
         self.y_diag_sin.resize(h, 0.0);
         self.y_diag_cos.resize(h, 0.0);
-        self.y_cos2.resize(h, 0.0);
+        self.y_wave_sin_base.resize(h, 0.0);
+        self.y_wave_cos_base.resize(h, 0.0);
 
         let inv_h = if h > 0 { 1.0 / h as f64 } else { 0.0 };
-        for y in 0..h {
+        let mut y_cos2 = vec![0.0; h];
+        for (y, y_cos2_val) in y_cos2.iter_mut().enumerate().take(h) {
             let ny = (y as f64 + 0.5) * inv_h;
             let wy = ny * 6.0;
             self.wy[y] = wy;
@@ -156,26 +177,44 @@ impl PlasmaCanvasAdapter {
             let (sin, cos) = diag.sin_cos();
             self.y_diag_sin[y] = sin;
             self.y_diag_cos[y] = cos;
-            self.y_cos2[y] = (wy * 2.0).cos();
+            let (sin2, cos2) = (wy * 1.8).sin_cos();
+            self.y_wave_sin_base[y] = sin2;
+            self.y_wave_cos_base[y] = cos2;
+            *y_cos2_val = (wy * 2.0).cos();
         }
 
         let total = w.saturating_mul(h);
-        self.radial_center_scaled.resize(total, 0.0);
-        self.radial_offset_scaled.resize(total, 0.0);
+        self.radial_center_sin_base.resize(total, 0.0);
+        self.radial_center_cos_base.resize(total, 0.0);
+        self.radial_offset_sin_base.resize(total, 0.0);
+        self.radial_offset_cos_base.resize(total, 0.0);
+        self.interference_sin_base.resize(total, 0.0);
+        self.interference_cos_base.resize(total, 0.0);
 
-        for y in 0..h {
+        for (y, y_cos2_val) in y_cos2.iter().enumerate().take(h) {
             let wy = self.wy[y];
             let wy_sq = wy * wy;
             let wy_m3 = wy - 3.0;
             let wy_m3_sq = wy_m3 * wy_m3;
             let row_offset = y * w;
-            for x in 0..w {
+            for (x, x_sin2_val) in x_sin2.iter().enumerate().take(w) {
                 let wx = self.wx[x];
                 let wx_sq = wx * wx;
                 let wx_m3 = wx - 3.0;
                 let idx = row_offset + x;
-                self.radial_center_scaled[idx] = (wx_sq + wy_sq).sqrt() * 2.0;
-                self.radial_offset_scaled[idx] = ((wx_m3 * wx_m3) + wy_m3_sq).sqrt() * 1.8;
+                let radial_center = (wx_sq + wy_sq).sqrt() * 2.0;
+                let radial_offset = ((wx_m3 * wx_m3) + wy_m3_sq).sqrt() * 1.8;
+                let (sin_c, cos_c) = radial_center.sin_cos();
+                let (sin_o, cos_o) = radial_offset.sin_cos();
+                self.radial_center_sin_base[idx] = sin_c;
+                self.radial_center_cos_base[idx] = cos_c;
+                self.radial_offset_sin_base[idx] = sin_o;
+                self.radial_offset_cos_base[idx] = cos_o;
+
+                let base = *x_sin2_val * *y_cos2_val;
+                let (sin_b, cos_b) = base.sin_cos();
+                self.interference_sin_base[idx] = sin_b;
+                self.interference_cos_base[idx] = cos_b;
             }
         }
     }
@@ -216,16 +255,21 @@ impl PlasmaCanvasAdapter {
         let t3 = time * 0.6;
         let t4 = time * 1.2;
         let t6 = time * 0.5;
+        let (sin_t1, cos_t1) = t1.sin_cos();
+        let (sin_t2, cos_t2) = t2.sin_cos();
         let (sin_t3, cos_t3) = t3.sin_cos();
+        let (sin_t4, cos_t4) = t4.sin_cos();
+        let (sin_time, cos_time) = time.sin_cos();
+        let (sin_t6, cos_t6) = t6.sin_cos();
 
         self.x_wave.resize(w, 0.0);
         for (x, wave) in self.x_wave.iter_mut().enumerate().take(w) {
-            *wave = (self.wx[x] * 1.5 + t1).sin();
+            *wave = self.x_wave_sin_base[x] * cos_t1 + self.x_wave_cos_base[x] * sin_t1;
         }
 
         self.y_wave.resize(h, 0.0);
         for (y, wave) in self.y_wave.iter_mut().enumerate().take(h) {
-            *wave = (self.wy[y] * 1.8 + t2).sin();
+            *wave = self.y_wave_sin_base[y] * cos_t2 + self.y_wave_cos_base[y] * sin_t2;
         }
 
         let full = quality == FxQuality::Full;
@@ -235,7 +279,6 @@ impl PlasmaCanvasAdapter {
             let v2 = self.y_wave[y];
             let y_sin = self.y_diag_sin[y];
             let y_cos = self.y_diag_cos[y];
-            let y_cos2 = self.y_cos2[y];
             let row_offset = y * w;
 
             for x in 0..w {
@@ -250,13 +293,17 @@ impl PlasmaCanvasAdapter {
 
                 let wave = if full {
                     let idx = row_offset + x;
-                    let v4 = (self.radial_center_scaled[idx] - t4).sin();
-                    let v5 = (self.radial_offset_scaled[idx] + time).cos();
-                    let v6 = (self.x_sin2[x] * y_cos2 + t6).sin();
+                    let v4 = self.radial_center_sin_base[idx] * cos_t4
+                        - self.radial_center_cos_base[idx] * sin_t4;
+                    let v5 = self.radial_offset_cos_base[idx] * cos_time
+                        - self.radial_offset_sin_base[idx] * sin_time;
+                    let v6 = self.interference_sin_base[idx] * cos_t6
+                        + self.interference_cos_base[idx] * sin_t6;
                     (v1 + v2 + v3 + v4 + v5 + v6) / 6.0
                 } else if reduced {
                     let idx = row_offset + x;
-                    let v4 = (self.radial_center_scaled[idx] - t4).sin();
+                    let v4 = self.radial_center_sin_base[idx] * cos_t4
+                        - self.radial_center_cos_base[idx] * sin_t4;
                     (v1 + v2 + v3 + v4) / 4.0
                 } else if quality == FxQuality::Minimal {
                     (v1 + v2 + v3) / 3.0
@@ -291,6 +338,15 @@ pub struct MetaballsCanvasAdapter {
     params: MetaballsParams,
     /// Cached ball states for the current frame.
     ball_cache: Vec<BallState>,
+    /// Cached geometry for the current painter size.
+    cache_width: u16,
+    cache_height: u16,
+    /// Normalized x coordinates per column.
+    x_coords: Vec<f64>,
+    /// Normalized y coordinates per row.
+    y_coords: Vec<f64>,
+    /// Per-row scratch buffer for dy^2 per ball.
+    dy2_cache: Vec<f64>,
 }
 
 impl MetaballsCanvasAdapter {
@@ -299,6 +355,11 @@ impl MetaballsCanvasAdapter {
         Self {
             params: MetaballsParams::default(),
             ball_cache: Vec::new(),
+            cache_width: 0,
+            cache_height: 0,
+            x_coords: Vec::new(),
+            y_coords: Vec::new(),
+            dy2_cache: Vec::new(),
         }
     }
 
@@ -307,6 +368,11 @@ impl MetaballsCanvasAdapter {
         Self {
             params,
             ball_cache: Vec::new(),
+            cache_width: 0,
+            cache_height: 0,
+            x_coords: Vec::new(),
+            y_coords: Vec::new(),
+            dy2_cache: Vec::new(),
         }
     }
 
@@ -318,6 +384,31 @@ impl MetaballsCanvasAdapter {
     /// Get the current parameters.
     pub fn params(&self) -> &MetaballsParams {
         &self.params
+    }
+
+    fn ensure_coords(&mut self, width: u16, height: u16) {
+        if self.cache_width == width && self.cache_height == height {
+            return;
+        }
+
+        self.cache_width = width;
+        self.cache_height = height;
+
+        let w = width as usize;
+        let h = height as usize;
+
+        self.x_coords.resize(w, 0.0);
+        self.y_coords.resize(h, 0.0);
+
+        let inv_w = if w > 0 { 1.0 / w as f64 } else { 0.0 };
+        for x in 0..w {
+            self.x_coords[x] = (x as f64 + 0.5) * inv_w;
+        }
+
+        let inv_h = if h > 0 { 1.0 / h as f64 } else { 0.0 };
+        for y in 0..h {
+            self.y_coords[y] = (y as f64 + 0.5) * inv_h;
+        }
     }
 
     /// Prepare ball states for the current frame.
@@ -373,7 +464,7 @@ impl MetaballsCanvasAdapter {
     ///
     /// # No Allocations
     /// This method does not allocate after initial painter setup.
-    pub fn fill(&self, painter: &mut Painter, quality: FxQuality, theme: &ThemeInputs) {
+    pub fn fill(&mut self, painter: &mut Painter, quality: FxQuality, theme: &ThemeInputs) {
         if !quality.is_enabled() || self.ball_cache.is_empty() {
             return;
         }
@@ -383,36 +474,82 @@ impl MetaballsCanvasAdapter {
             return;
         }
 
+        self.ensure_coords(width, height);
+
         let (glow, threshold) = thresholds(&self.params);
-        let w = width as f64;
-        let h = height as f64;
-        let inv_w = 1.0 / w;
-        let inv_h = 1.0 / h;
         let stops = palette_stops(self.params.palette, theme);
 
-        for dy in 0..height {
-            let ny = (dy as f64 + 0.5) * inv_h;
+        let balls = &self.ball_cache;
+        let step = match quality {
+            FxQuality::Full => 1,
+            FxQuality::Reduced => {
+                if balls.len() > 4 {
+                    4
+                } else {
+                    1
+                }
+            }
+            FxQuality::Minimal => {
+                if balls.len() > 2 {
+                    2
+                } else {
+                    1
+                }
+            }
+            FxQuality::Off => return,
+        };
 
-            for dx in 0..width {
-                let nx = (dx as f64 + 0.5) * inv_w;
+        self.dy2_cache.resize(balls.len(), 0.0);
+        let w = width as usize;
+        let h = height as usize;
+        const EPS: f64 = 1e-8;
 
-                // Sample field and hue
-                let (field, avg_hue) = MetaballFieldSampler::sample_field_from_slice(
-                    &self.ball_cache,
-                    nx,
-                    ny,
-                    quality,
-                );
+        for y in 0..h {
+            let ny = self.y_coords[y];
+            for (i, ball) in balls.iter().enumerate() {
+                let dy = ny - ball.y;
+                self.dy2_cache[i] = dy * dy;
+            }
+            let dy2_cache = &self.dy2_cache;
 
-                if field > glow {
-                    let intensity = if field > threshold {
+            for x in 0..w {
+                let nx = self.x_coords[x];
+                let mut sum = 0.0;
+                let mut weighted_hue = 0.0;
+                let mut total_weight = 0.0;
+
+                for (i, ball) in balls.iter().enumerate() {
+                    if step > 1 && i % step != 0 {
+                        continue;
+                    }
+                    let dx = nx - ball.x;
+                    let dist_sq = dx * dx + dy2_cache[i];
+
+                    if dist_sq > EPS {
+                        let contrib = ball.r2 / dist_sq;
+                        sum += contrib;
+                        weighted_hue += ball.hue * contrib;
+                        total_weight += contrib;
+                    } else {
+                        sum += 100.0;
+                        weighted_hue += ball.hue * 100.0;
+                        total_weight += 100.0;
+                    }
+                }
+
+                if sum > glow {
+                    let avg_hue = if total_weight > EPS {
+                        weighted_hue / total_weight
+                    } else {
+                        0.0
+                    };
+                    let intensity = if sum > threshold {
                         1.0
                     } else {
-                        (field - glow) / (threshold - glow)
+                        (sum - glow) / (threshold - glow)
                     };
-
                     let color = color_at_with_stops(&stops, avg_hue, intensity, theme);
-                    painter.point_colored(dx as i32, dy as i32, color);
+                    painter.point_colored(x as i32, y as i32, color);
                 }
             }
         }

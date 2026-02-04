@@ -77,18 +77,12 @@ fn scan_row_changes_range(
         let old_block = &old_row[base..base + BLOCK_SIZE];
         let new_block = &new_row[base..base + BLOCK_SIZE];
 
-        // Compare each cell and push changes directly (unrolled for BLOCK_SIZE=4).
-        if !old_block[0].bits_eq(&new_block[0]) {
-            changes.push((base_x, y));
-        }
-        if !old_block[1].bits_eq(&new_block[1]) {
-            changes.push((base_x + 1, y));
-        }
-        if !old_block[2].bits_eq(&new_block[2]) {
-            changes.push((base_x + 2, y));
-        }
-        if !old_block[3].bits_eq(&new_block[3]) {
-            changes.push((base_x + 3, y));
+        // Compare each cell and push changes directly.
+        // We use a constant loop which the compiler will unroll.
+        for i in 0..BLOCK_SIZE {
+            if !old_block[i].bits_eq(&new_block[i]) {
+                changes.push((base_x + i as u16, y));
+            }
         }
     }
 

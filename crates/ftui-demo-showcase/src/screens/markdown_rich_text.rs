@@ -446,15 +446,15 @@ impl MarkdownRichText {
             strikethrough: Style::new().strikethrough(),
             list_bullet: Style::new().fg(theme::accent::PRIMARY),
             horizontal_rule: Style::new().fg(theme::fg::MUTED).dim(),
-            table_border: Style::new().fg(theme::fg::MUTED),
+            table_border: Style::new().fg(theme::accent::SECONDARY),
             table_header: Style::new()
-                .fg(theme::accent::INFO)
-                .bg(theme::alpha::SURFACE)
+                .fg(theme::fg::PRIMARY)
+                .bg(theme::alpha::ACCENT_PRIMARY)
                 .bold(),
             table_row: Style::new().fg(theme::fg::PRIMARY),
             table_row_alt: Style::new()
                 .fg(theme::fg::PRIMARY)
-                .bg(theme::alpha::SURFACE),
+                .bg(theme::alpha::OVERLAY),
             // GFM extensions - use themed colors
             task_done: Style::new().fg(theme::accent::SUCCESS),
             task_todo: Style::new().fg(theme::accent::INFO),

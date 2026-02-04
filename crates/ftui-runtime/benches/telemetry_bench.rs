@@ -180,7 +180,7 @@ fn bench_redaction(c: &mut Criterion) {
 
     group.bench_function("redact_env_var", |b| {
         let value = ["super", "_sec", "ret_", "api", "_key_", "12345"].concat();
-        b.iter(|| black_box(redact::env_var(black_box(value))))
+        b.iter(|| black_box(redact::env_var(black_box(&value))))
     });
 
     group.bench_function("redact_username", |b| {

@@ -36,13 +36,16 @@ impl CapturedError {
         widget_name: &'static str,
         area: Rect,
     ) -> Self {
-        let message = if let Some(s) = payload.downcast_ref::<&str>() {
+        let mut message = if let Some(s) = payload.downcast_ref::<&str>() {
             (*s).to_string()
         } else if let Some(s) = payload.downcast_ref::<String>() {
             s.clone()
         } else {
             "unknown panic".to_string()
         };
+        if let Some(stripped) = message.strip_prefix("internal error: entered unreachable code: ") {
+            message = stripped.to_string();
+        }
 
         Self {
             message,

@@ -3,6 +3,7 @@
 - Generated: 2026-02-02 03:15:52Z
 - Command: `cargo llvm-cov --workspace --all-targets --all-features --summary-only --json --output-path /tmp/ftui_coverage.json`
 - Notes: All tests passed; coverage run completed without `--ignore-run-fail`.
+  - 2026-02-04: attempted a fresh full run; hung on long-running demo tests. Baseline below remains authoritative.
 
 ## Failing Tests During Coverage Run
 - None.

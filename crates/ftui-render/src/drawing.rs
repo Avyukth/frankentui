@@ -210,19 +210,16 @@ impl Draw for Buffer {
                 break;
             }
 
-            let mut chars = grapheme.chars();
-            let Some(first) = chars.next() else {
+            let Some(first) = grapheme.chars().next() else {
                 continue;
             };
-            let is_multi = chars.next().is_some();
 
             // If we can't render the full grapheme, fall back to the first char
-            // and keep the fallback cell width to avoid visual gaps.
-            let width = if is_multi {
-                CellContent::from_char(first).width()
-            } else {
-                grapheme_width(grapheme)
-            };
+            // but preserve the grapheme's display width to avoid layout gaps.
+            let mut width = grapheme_width(grapheme);
+            if width == 0 {
+                width = CellContent::from_char(first).width();
+            }
             if width == 0 {
                 continue;
             }

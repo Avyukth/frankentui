@@ -32,7 +32,7 @@
 //!
 //! impl MeasurableWidget for Label {
 //!     fn measure(&self, _available: Size) -> SizeConstraints {
-//!         let width = self.text.len() as u16;
+//!         let width = ftui_text::display_width(self.text.as_str()) as u16;
 //!         SizeConstraints {
 //!             min: Size::new(1, 1),           // At least show something
 //!             preferred: Size::new(width, 1), // Ideal: full text on one line
@@ -261,7 +261,9 @@ impl Default for SizeConstraints {
 /// impl MeasurableWidget for Icon {
 ///     fn measure(&self, _available: Size) -> SizeConstraints {
 ///         // Icons are always 1x1 (or 2x1 for wide chars)
-///         let width = unicode_width::UnicodeWidthChar::width(self.glyph).unwrap_or(1) as u16;
+///         let mut buf = [0u8; 4];
+///         let glyph = self.glyph.encode_utf8(&mut buf);
+///         let width = ftui_text::grapheme_width(glyph) as u16;
 ///         SizeConstraints::exact(Size::new(width, 1))
 ///     }
 ///

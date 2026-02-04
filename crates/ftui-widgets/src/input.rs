@@ -303,9 +303,11 @@ impl TextInput {
         let current_count = self.grapheme_count();
         let avail = if let Some(max) = self.max_length {
             if current_count >= max {
-                return;
+                // Allow trying to insert 1 grapheme to see if it merges (combining char)
+                1
+            } else {
+                max - current_count
             }
-            max - current_count
         } else {
             usize::MAX
         };
@@ -330,8 +332,27 @@ impl TextInput {
 
         let byte_offset = self.grapheme_byte_offset(self.cursor);
         self.value.insert_str(byte_offset, to_insert);
+
+        // Check if we exceeded max_length
+        let new_total = self.grapheme_count();
+        if let Some(max) = self.max_length
+            && new_total > max
+        {
+            // Revert change
+            self.value.drain(byte_offset..byte_offset + to_insert.len());
+            return;
+        }
+
         self.cursor += insert_count;
         // Clamp cursor when combining characters merge with adjacent graphemes
+        // Note: insert_count might be > 0, but if it merged, total count didn't increase as much.
+        // We need to be careful with cursor positioning.
+        // If we inserted "´" (1 grapheme) and it merged, total count increased by 0.
+        // But `insert_count` is 1.
+        // `self.cursor` becomes old_cursor + 1.
+        // `gc` (new total) is old_total.
+        // If old_cursor == old_total, then new_cursor > gc. Clamped to gc.
+        // Correct.
         let gc = self.grapheme_count();
         if self.cursor > gc {
             self.cursor = gc;
@@ -515,16 +536,13 @@ impl TextInput {
             pos -= 1;
         }
 
-        if pos == 0 {
-            self.cursor = 0;
-            return;
+        // 2. Skip trailing punctuation
+        while pos > 0 && Self::get_grapheme_class(graphemes[pos - 1]) == 2 {
+            pos -= 1;
         }
 
-        // 2. Determine target class from the character before cursor
-        let target_class = Self::get_grapheme_class(graphemes[pos - 1]);
-
-        // 3. Skip contiguous characters of that class
-        while pos > 0 && Self::get_grapheme_class(graphemes[pos - 1]) == target_class {
+        // 3. Skip the previous word
+        while pos > 0 && Self::get_grapheme_class(graphemes[pos - 1]) == 1 {
             pos -= 1;
         }
 
@@ -547,16 +565,13 @@ impl TextInput {
 
         let mut pos = self.cursor;
 
-        // 1. Determine target class from current character
-        let target_class = Self::get_grapheme_class(graphemes[pos]);
-
-        // 2. Skip contiguous characters of that class
-        while pos < max && Self::get_grapheme_class(graphemes[pos]) == target_class {
+        // 1. Skip current word
+        while pos < max && Self::get_grapheme_class(graphemes[pos]) == 1 {
             pos += 1;
         }
 
-        // 3. Skip trailing whitespace
-        while pos < max && Self::get_grapheme_class(graphemes[pos]) == 0 {
+        // 2. Skip whitespace and punctuation
+        while pos < max && Self::get_grapheme_class(graphemes[pos]) != 1 {
             pos += 1;
         }
 
@@ -579,7 +594,9 @@ impl TextInput {
 
     fn grapheme_width(&self, g: &str) -> usize {
         if let Some(mask) = self.mask_char {
-            unicode_width::UnicodeWidthChar::width(mask).unwrap_or(1)
+            let mut buf = [0u8; 4];
+            let mask_str = mask.encode_utf8(&mut buf);
+            grapheme_width(mask_str)
         } else {
             grapheme_width(g)
         }

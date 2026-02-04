@@ -1048,7 +1048,7 @@ impl StatefulWidget for LogViewer {
                 total_lines.saturating_sub(end_idx)
             };
             let indicator = format!(" {} ", lines_below);
-            let indicator_len = indicator.len() as u16;
+            let indicator_len = display_width(&indicator) as u16;
             if indicator_len < area.width {
                 let indicator_x = area.right().saturating_sub(indicator_len);
                 let indicator_y = area.bottom().saturating_sub(1);
@@ -1068,7 +1068,7 @@ impl StatefulWidget for LogViewer {
             && area.width >= 10
         {
             let search_indicator = format!(" {}/{} ", current, total);
-            let ind_len = search_indicator.len() as u16;
+            let ind_len = display_width(&search_indicator) as u16;
             if ind_len < area.width {
                 let ind_x = area.x;
                 let ind_y = area.bottom().saturating_sub(1);

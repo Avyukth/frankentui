@@ -14,6 +14,7 @@ use ftui_render::cell::{Cell, PackedRgba};
 use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::{Style, StyleFlags};
+use ftui_text::display_width;
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
@@ -122,10 +123,10 @@ pub struct DiagnosticEntry {
     pub preset: Option<String>,
     /// Selected preset index.
     pub preset_index: Option<usize>,
-    /// Selected token name.
-    pub token: Option<String>,
-    /// Selected token index.
-    pub token_index: Option<usize>,
+    /// Selected swatch name.
+    pub swatch: Option<String>,
+    /// Selected swatch index.
+    pub swatch_index: Option<usize>,
     /// Exported payload size.
     pub export_bytes: Option<usize>,
     /// Current tick count.
@@ -154,8 +155,8 @@ impl DiagnosticEntry {
             focus: None,
             preset: None,
             preset_index: None,
-            token: None,
-            token_index: None,
+            swatch: None,
+            swatch_index: None,
             export_bytes: None,
             tick,
             context: None,
@@ -184,17 +185,18 @@ impl DiagnosticEntry {
         self
     }
 
-    /// Set token name.
+    /// Set swatch name.
     #[must_use]
-    pub fn with_token(mut self, token: impl Into<String>) -> Self {
-        self.token = Some(token.into());
+    pub fn with_swatch(mut self, label: impl Into<String>) -> Self {
+        let label = label.into();
+        self.swatch = Some(label);
         self
     }
 
-    /// Set token index.
+    /// Set swatch index.
     #[must_use]
-    pub fn with_token_index(mut self, token_index: usize) -> Self {
-        self.token_index = Some(token_index);
+    pub fn with_swatch_index(mut self, swatch_index: usize) -> Self {
+        self.swatch_index = Some(swatch_index);
         self
     }
 
@@ -228,8 +230,8 @@ impl DiagnosticEntry {
             self.focus.as_deref().unwrap_or(""),
             self.preset.as_deref().unwrap_or(""),
             self.preset_index.unwrap_or(0),
-            self.token.as_deref().unwrap_or(""),
-            self.token_index.unwrap_or(0),
+            self.swatch.as_deref().unwrap_or(""),
+            self.swatch_index.unwrap_or(0),
             self.export_bytes.unwrap_or(0),
             self.tick
         );
@@ -260,11 +262,11 @@ impl DiagnosticEntry {
         if let Some(index) = self.preset_index {
             parts.push(format!("\"preset_index\":{index}"));
         }
-        if let Some(ref token) = self.token {
-            let escaped = token.replace('\\', "\\\\").replace('"', "\\\"");
+        if let Some(ref swatch) = self.swatch {
+            let escaped = swatch.replace('\\', "\\\\").replace('"', "\\\"");
             parts.push(format!("\"token\":\"{escaped}\""));
         }
-        if let Some(index) = self.token_index {
+        if let Some(index) = self.swatch_index {
             parts.push(format!("\"token_index\":{index}"));
         }
         if let Some(bytes) = self.export_bytes {
@@ -556,8 +558,8 @@ pub struct ThemeStudioDemo {
     pub focus: Focus,
     /// Selected preset index.
     pub preset_index: usize,
-    /// Selected token index.
-    pub token_index: usize,
+    /// Selected swatch index.
+    pub swatch_index: usize,
     /// List of color tokens for inspection (private, implementation detail).
     tokens: Vec<ColorToken>,
     /// Tick counter for animations.
@@ -588,7 +590,7 @@ impl ThemeStudioDemo {
         Self {
             focus: Focus::default(),
             preset_index: theme::current_theme().index(),
-            token_index: 0,
+            swatch_index: 0,
             tokens,
             tick_count: 0,
             export_status: None,
@@ -636,7 +638,7 @@ impl ThemeStudioDemo {
     }
 
     fn current_token_name(&self) -> Option<&'static str> {
-        self.tokens.get(self.token_index).map(|token| token.name)
+        self.tokens.get(self.swatch_index).map(|token| token.name)
     }
 
     /// Build the list of inspectable color tokens.
@@ -919,7 +921,7 @@ palette = 7={}
                 break;
             }
 
-            let is_selected = i == self.token_index && is_focused;
+            let is_selected = i == self.swatch_index && is_focused;
             let color = (token.get_color)();
             let contrast = Self::contrast_ratio(color, bg_color);
             let (rating, rating_color) = Self::wcag_rating(contrast);
@@ -993,10 +995,11 @@ palette = 7={}
 
             // Render WCAG rating
             let rating_x = ratio_x + 7;
-            if rating_x + rating.len() as u16 <= line_area.x + line_area.width {
+            let rating_width = display_width(rating) as u16;
+            if rating_x + rating_width <= line_area.x + line_area.width {
                 let rating_style = Style::new().fg(rating_color).attrs(StyleFlags::BOLD);
                 Paragraph::new(rating).style(rating_style).render(
-                    Rect::new(rating_x, line_area.y, rating.len() as u16, 1),
+                    Rect::new(rating_x, line_area.y, rating_width, 1),
                     frame,
                 );
             }
@@ -1032,7 +1035,7 @@ impl Screen for ThemeStudioDemo {
         self.export_status = None;
         let prev_focus = self.focus;
         let prev_preset = self.preset_index;
-        let prev_token = self.token_index;
+        let prev_index = self.swatch_index;
 
         if let Event::Key(KeyEvent {
             code,
@@ -1053,8 +1056,8 @@ impl Screen for ThemeStudioDemo {
                         }
                     }
                     Focus::TokenInspector => {
-                        if self.token_index > 0 {
-                            self.token_index -= 1;
+                        if self.swatch_index > 0 {
+                            self.swatch_index -= 1;
                         }
                     }
                 },
@@ -1065,8 +1068,8 @@ impl Screen for ThemeStudioDemo {
                         }
                     }
                     Focus::TokenInspector => {
-                        if self.token_index < self.tokens.len() - 1 {
-                            self.token_index += 1;
+                        if self.swatch_index < self.tokens.len() - 1 {
+                            self.swatch_index += 1;
                         }
                     }
                 },
@@ -1074,13 +1077,15 @@ impl Screen for ThemeStudioDemo {
                 KeyCode::Home | KeyCode::Char('g') if !modifiers.contains(Modifiers::SHIFT) => {
                     match self.focus {
                         Focus::Presets => self.preset_index = 0,
-                        Focus::TokenInspector => self.token_index = 0,
+                        Focus::TokenInspector => self.swatch_index = 0,
                     }
                 }
                 // End: Jump to last item (or G for vim-style)
                 KeyCode::End | KeyCode::Char('G') => match self.focus {
                     Focus::Presets => self.preset_index = ThemeId::ALL.len().saturating_sub(1),
-                    Focus::TokenInspector => self.token_index = self.tokens.len().saturating_sub(1),
+                    Focus::TokenInspector => {
+                        self.swatch_index = self.tokens.len().saturating_sub(1);
+                    }
                 },
                 // PageUp: Move up by 10 items
                 KeyCode::PageUp => match self.focus {
@@ -1088,7 +1093,7 @@ impl Screen for ThemeStudioDemo {
                         self.preset_index = self.preset_index.saturating_sub(10);
                     }
                     Focus::TokenInspector => {
-                        self.token_index = self.token_index.saturating_sub(10);
+                        self.swatch_index = self.swatch_index.saturating_sub(10);
                     }
                 },
                 // PageDown: Move down by 10 items
@@ -1098,8 +1103,8 @@ impl Screen for ThemeStudioDemo {
                             (self.preset_index + 10).min(ThemeId::ALL.len().saturating_sub(1));
                     }
                     Focus::TokenInspector => {
-                        self.token_index =
-                            (self.token_index + 10).min(self.tokens.len().saturating_sub(1));
+                        self.swatch_index =
+                            (self.swatch_index + 10).min(self.tokens.len().saturating_sub(1));
                     }
                 },
                 // Apply preset
@@ -1178,9 +1183,9 @@ impl Screen for ThemeStudioDemo {
                     .with_focus(self.focus.as_str())
                     .with_preset(self.current_preset_name())
                     .with_preset_index(self.preset_index)
-                    .with_token_index(self.token_index);
+                    .with_swatch_index(self.swatch_index);
             if let Some(name) = self.current_token_name() {
-                entry = entry.with_token(name);
+                entry = entry.with_swatch(name);
             }
             self.record_diagnostic(entry);
         }
@@ -1194,15 +1199,15 @@ impl Screen for ThemeStudioDemo {
             );
         }
 
-        if self.token_index != prev_token {
+        if self.swatch_index != prev_index {
             let mut entry =
                 DiagnosticEntry::new(DiagnosticEventKind::TokenChanged, self.tick_count)
                     .with_focus(self.focus.as_str())
                     .with_preset(self.current_preset_name())
                     .with_preset_index(self.preset_index)
-                    .with_token_index(self.token_index);
+                    .with_swatch_index(self.swatch_index);
             if let Some(name) = self.current_token_name() {
-                entry = entry.with_token(name);
+                entry = entry.with_swatch(name);
             }
             self.record_diagnostic(entry);
         }
@@ -1339,7 +1344,7 @@ mod tests {
         let b = ThemeStudioDemo::default();
         assert_eq!(a.focus, b.focus);
         assert_eq!(a.preset_index, b.preset_index);
-        assert_eq!(a.token_index, b.token_index);
+        assert_eq!(a.swatch_index, b.swatch_index);
     }
 
     #[test]
@@ -1515,12 +1520,12 @@ mod tests {
     #[test]
     fn token_navigation_requires_focus() {
         let mut demo = ThemeStudioDemo::new();
-        demo.token_index = 0;
+        demo.swatch_index = 0;
         // Switch to TokenInspector
         demo.update(&press(KeyCode::Tab));
-        demo.token_index = 0;
+        demo.swatch_index = 0;
         demo.update(&press(KeyCode::Down));
-        assert_eq!(demo.token_index, 1, "Should navigate tokens when focused");
+        assert_eq!(demo.swatch_index, 1, "Should navigate tokens when focused");
     }
 
     #[test]
@@ -1576,9 +1581,9 @@ mod tests {
         let mut demo = ThemeStudioDemo::new();
         // Switch to token inspector which has more items
         demo.update(&press(KeyCode::Tab));
-        demo.token_index = 15;
+        demo.swatch_index = 15;
         demo.update(&press(KeyCode::PageUp));
-        assert_eq!(demo.token_index, 5);
+        assert_eq!(demo.swatch_index, 5);
     }
 
     #[test]
@@ -1594,9 +1599,9 @@ mod tests {
         let mut demo = ThemeStudioDemo::new();
         // Switch to token inspector which has more items
         demo.update(&press(KeyCode::Tab));
-        demo.token_index = 0;
+        demo.swatch_index = 0;
         demo.update(&press(KeyCode::PageDown));
-        assert_eq!(demo.token_index, 10.min(demo.tokens.len() - 1));
+        assert_eq!(demo.swatch_index, 10.min(demo.tokens.len() - 1));
     }
 
     #[test]
@@ -1611,11 +1616,11 @@ mod tests {
     fn home_end_work_in_token_inspector() {
         let mut demo = ThemeStudioDemo::new();
         demo.update(&press(KeyCode::Tab)); // Switch to TokenInspector
-        demo.token_index = 5;
+        demo.swatch_index = 5;
         demo.update(&press(KeyCode::Home));
-        assert_eq!(demo.token_index, 0);
+        assert_eq!(demo.swatch_index, 0);
         demo.update(&press(KeyCode::End));
-        assert_eq!(demo.token_index, demo.tokens.len() - 1);
+        assert_eq!(demo.swatch_index, demo.tokens.len() - 1);
     }
 
     // -----------------------------------------------------------------------

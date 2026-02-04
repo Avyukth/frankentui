@@ -51,6 +51,9 @@ pub mod clipboard;
 #[cfg(feature = "diagram")]
 pub mod diagram;
 
+#[cfg(feature = "diagram")]
+pub mod mermaid;
+
 #[cfg(feature = "export")]
 pub mod export;
 

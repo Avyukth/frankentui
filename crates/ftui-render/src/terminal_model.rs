@@ -25,8 +25,10 @@
 //! assert_eq!(model.cell(0, 0).text, "H");
 //! ```
 
-use crate::cell::{CellAttrs, PackedRgba, StyleFlags};
-use unicode_width::UnicodeWidthChar;
+use crate::{
+    cell::{CellAttrs, PackedRgba, StyleFlags},
+    char_width,
+};
 
 /// A single cell in the terminal model grid.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -558,7 +560,7 @@ impl TerminalModel {
     }
 
     fn put_char(&mut self, ch: char) {
-        let width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        let width = char_width(ch);
 
         // Zero-width (combining) character handling
         if width == 0 {

@@ -787,9 +787,7 @@ fn integration_override_affects_screen_rendering() {
 fn profile_from_str_roundtrip() {
     for profile in TerminalProfile::all_predefined() {
         let name = profile.as_str();
-        let parsed: TerminalProfile = name
-            .parse()
-            .unwrap_or_else(|()| panic!("Failed to parse profile name: {name}"));
+        let parsed: TerminalProfile = name.parse().expect("Failed to parse profile name");
         assert_eq!(*profile, parsed, "Roundtrip failed for {name}");
     }
 

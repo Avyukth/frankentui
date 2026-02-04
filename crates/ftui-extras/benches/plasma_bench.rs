@@ -12,7 +12,8 @@
 //!
 //! Run with: cargo bench -p ftui-extras --bench plasma_bench --features visual-fx
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 
 #[cfg(feature = "visual-fx")]
 use ftui_extras::visual_fx::{

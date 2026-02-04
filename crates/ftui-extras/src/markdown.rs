@@ -837,15 +837,15 @@ impl Default for MarkdownTheme {
             horizontal_rule: Style::new().fg(PackedRgba::rgb(100, 100, 100)).dim(),
 
             // Tables: cool borders with subtle zebra rows
-            table_border: Style::new().fg(PackedRgba::rgb(110, 110, 130)).dim(),
+            table_border: Style::new().fg(PackedRgba::rgb(145, 160, 190)),
             table_header: Style::new()
-                .fg(PackedRgba::rgb(240, 240, 255))
-                .bg(PackedRgba::rgb(35, 35, 55))
+                .fg(PackedRgba::rgb(250, 250, 255))
+                .bg(PackedRgba::rgb(55, 75, 115))
                 .bold(),
-            table_row: Style::new().fg(PackedRgba::rgb(210, 210, 220)),
+            table_row: Style::new().fg(PackedRgba::rgb(225, 230, 240)),
             table_row_alt: Style::new()
-                .fg(PackedRgba::rgb(210, 210, 220))
-                .bg(PackedRgba::rgb(25, 25, 35)),
+                .fg(PackedRgba::rgb(225, 230, 240))
+                .bg(PackedRgba::rgb(30, 35, 50)),
 
             // Task lists: green for done, cyan for todo
             task_done: Style::new().fg(PackedRgba::rgb(120, 220, 120)),

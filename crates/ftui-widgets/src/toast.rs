@@ -26,7 +26,6 @@ use ftui_render::cell::Cell;
 use ftui_render::frame::Frame;
 use ftui_style::Style;
 use ftui_text::display_width;
-
 use crate::{Widget, set_style_area};
 
 /// Unique identifier for a toast notification.
@@ -1357,17 +1356,19 @@ impl Widget for Toast {
                 Style::default()
             };
 
-            for (i, c) in title.chars().enumerate() {
-                if i as u16 >= content_width {
-                    break;
-                }
-                if let Some(cell) = frame.buffer.get_mut(content_x + i as u16, content_y) {
-                    *cell = Cell::from_char(c);
-                    if deg.apply_styling() {
-                        crate::apply_style(cell, title_style);
-                    }
-                }
-            }
+            let title_style = if deg.apply_styling() {
+                title_style
+            } else {
+                Style::default()
+            };
+            crate::draw_text_span(
+                frame,
+                content_x,
+                content_y,
+                title,
+                title_style,
+                content_x + content_width,
+            );
             content_y += 1;
         }
 
@@ -1381,35 +1382,44 @@ impl Widget for Toast {
                 icon.as_ascii()
             };
 
-            if let Some(cell) = frame.buffer.get_mut(msg_x, content_y) {
-                *cell = Cell::from_char(icon_char);
-                if deg.apply_styling() {
-                    let icon_style = self.icon_style.merge(&self.style);
-                    crate::apply_style(cell, icon_style);
-                }
-            }
-            msg_x += 1;
-
-            // Space after icon
-            if let Some(cell) = frame.buffer.get_mut(msg_x, content_y) {
-                *cell = Cell::from_char(' ');
-            }
-            msg_x += 1;
+            let icon_style = if deg.apply_styling() {
+                self.icon_style.merge(&self.style)
+            } else {
+                Style::default()
+            };
+            let icon_str = icon_char.to_string();
+            msg_x = crate::draw_text_span(
+                frame,
+                msg_x,
+                content_y,
+                &icon_str,
+                icon_style,
+                content_x + content_width,
+            );
+            msg_x = crate::draw_text_span(
+                frame,
+                msg_x,
+                content_y,
+                " ",
+                Style::default(),
+                content_x + content_width,
+            );
         }
 
         // Draw message
-        let remaining_width = content_width.saturating_sub(msg_x - content_x);
-        for (i, c) in self.content.message.chars().enumerate() {
-            if i as u16 >= remaining_width {
-                break;
-            }
-            if let Some(cell) = frame.buffer.get_mut(msg_x + i as u16, content_y) {
-                *cell = Cell::from_char(c);
-                if deg.apply_styling() {
-                    crate::apply_style(cell, self.style);
-                }
-            }
-        }
+        let msg_style = if deg.apply_styling() {
+            self.style
+        } else {
+            Style::default()
+        };
+        crate::draw_text_span(
+            frame,
+            msg_x,
+            content_y,
+            &self.content.message,
+            msg_style,
+            content_x + content_width,
+        );
 
         // Draw action buttons if present
         if !self.actions.is_empty() {
@@ -1426,25 +1436,20 @@ impl Widget for Toast {
                     Style::default()
                 };
 
-                // Render [Label]
+                let max_x = content_x + content_width;
                 let label = format!("[{}]", action.label);
-                for (i, c) in label.chars().enumerate() {
-                    if btn_x + i as u16 >= content_x + content_width {
-                        break;
-                    }
-                    if let Some(cell) = frame.buffer.get_mut(btn_x + i as u16, content_y) {
-                        *cell = Cell::from_char(c);
-                        if deg.apply_styling() {
-                            crate::apply_style(cell, btn_style);
-                        }
-                    }
-                }
-
-                btn_x += label.len() as u16;
+                btn_x = crate::draw_text_span(frame, btn_x, content_y, &label, btn_style, max_x);
 
                 // Space between buttons
                 if idx + 1 < self.actions.len() {
-                    btn_x += 1;
+                    btn_x = crate::draw_text_span(
+                        frame,
+                        btn_x,
+                        content_y,
+                        " ",
+                        Style::default(),
+                        max_x,
+                    );
                 }
             }
         }

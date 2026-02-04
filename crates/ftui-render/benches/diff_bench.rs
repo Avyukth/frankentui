@@ -264,6 +264,8 @@ fn bench_selector_overhead(c: &mut Criterion) {
     let scenarios = [
         (200u16, 60u16, 2usize, 0.02f64, "200x60@2%"),
         (200u16, 60u16, 30usize, 0.5f64, "200x60@50%"),
+        (240u16, 80u16, 3usize, 0.02f64, "240x80@2%"),
+        (240u16, 80u16, 40usize, 0.35f64, "240x80@35%"),
     ];
 
     for (w, h, dirty_rows, p_actual, label) in scenarios {
@@ -276,8 +278,13 @@ fn bench_selector_overhead(c: &mut Criterion) {
                         ((p_actual * total_cells as f64).round() as usize).min(total_cells);
                     for _ in 0..64 {
                         let strategy = selector.select(w, h, dirty_rows);
+                        let scanned = match strategy {
+                            DiffStrategy::Full => total_cells,
+                            DiffStrategy::DirtyRows => dirty_rows.saturating_mul(w as usize),
+                            DiffStrategy::FullRedraw => 0,
+                        };
                         if strategy != DiffStrategy::FullRedraw {
-                            selector.observe(total_cells, changed);
+                            selector.observe(scanned, changed);
                         }
                         black_box(strategy);
                     }
@@ -293,7 +300,12 @@ fn bench_selector_overhead(c: &mut Criterion) {
 fn bench_selector_vs_fixed(c: &mut Criterion) {
     let mut group = c.benchmark_group("diff/selector_vs_fixed");
 
-    let scenarios = [(200u16, 60u16, 2.0f64), (200u16, 60u16, 50.0f64)];
+    let scenarios = [
+        (200u16, 60u16, 2.0f64),
+        (200u16, 60u16, 50.0f64),
+        (240u16, 80u16, 2.0f64),
+        (240u16, 80u16, 35.0f64),
+    ];
 
     for (w, h, pct) in scenarios {
         let (old, new) = make_pair(w, h, pct);
@@ -322,7 +334,8 @@ fn bench_selector_vs_fixed(c: &mut Criterion) {
                         }
                         DiffStrategy::DirtyRows => {
                             let diff = BufferDiff::compute_dirty(&old, &new);
-                            selector.observe(total_cells, diff.len());
+                            let scanned = dirty_rows.saturating_mul(w as usize);
+                            selector.observe(scanned, diff.len());
                             black_box(diff.len());
                         }
                         DiffStrategy::FullRedraw => {

@@ -203,7 +203,7 @@ impl Default for DiffStrategyConfig {
             decay: 0.95,
             conservative: false,
             conservative_quantile: 0.95,
-            min_observation_cells: 0,
+            min_observation_cells: 1,
             hysteresis_ratio: 0.05,
             uncertainty_guard_variance: 0.002,
         }
@@ -587,11 +587,19 @@ impl DiffStrategySelector {
         // Get expected change rate
         let uncertainty_guard = self.config.uncertainty_guard_variance > 0.0
             && self.posterior_variance() > self.config.uncertainty_guard_variance;
-        let p = if self.config.conservative || uncertainty_guard {
+        let mut guard_reason = if dirty_rows == 0 {
+            "zero_dirty_rows"
+        } else {
+            "none"
+        };
+        let mut p = if self.config.conservative || uncertainty_guard {
             self.upper_quantile(self.config.conservative_quantile)
         } else {
             self.posterior_mean()
         };
+        if dirty_rows == 0 {
+            p = 0.0;
+        }
 
         // Compute expected costs
         let cost_full =
@@ -610,9 +618,10 @@ impl DiffStrategySelector {
             DiffStrategy::FullRedraw
         };
 
-        let mut guard_reason = "none";
         if uncertainty_guard {
-            guard_reason = "uncertainty_variance";
+            if guard_reason == "none" {
+                guard_reason = "uncertainty_variance";
+            }
             if strategy == DiffStrategy::FullRedraw {
                 strategy = if cost_dirty <= cost_full {
                     DiffStrategy::DirtyRows
@@ -745,6 +754,21 @@ mod tests {
         assert!((config.prior_beta - 19.0).abs() < 1e-9);
         assert!((config.hysteresis_ratio - 0.05).abs() < 1e-9);
         assert!((config.uncertainty_guard_variance - 0.002).abs() < 1e-9);
+        assert_eq!(config.min_observation_cells, 1);
+    }
+
+    #[test]
+    fn test_decay_paused_on_empty_observation() {
+        let mut selector = DiffStrategySelector::with_defaults();
+        let initial_mean = selector.posterior_mean();
+
+        // Observe empty frames (e.g. idle)
+        for _ in 0..100 {
+            selector.observe(0, 0);
+        }
+
+        // Mean should not change (decay shouldn't happen)
+        assert!((selector.posterior_mean() - initial_mean).abs() < 1e-9);
     }
 
     #[test]
@@ -810,6 +834,17 @@ mod tests {
         // when few rows are dirty
         let strategy = selector.select(80, 24, 2); // Only 2 dirty rows
         assert_eq!(strategy, DiffStrategy::DirtyRows);
+    }
+
+    #[test]
+    fn test_select_dirty_rows_when_no_dirty() {
+        let mut selector = DiffStrategySelector::with_defaults();
+
+        let strategy = selector.select(80, 24, 0);
+        assert_eq!(strategy, DiffStrategy::DirtyRows);
+
+        let evidence = selector.last_evidence().expect("evidence stored");
+        assert_eq!(evidence.guard_reason, "zero_dirty_rows");
     }
 
     #[test]

@@ -45,6 +45,7 @@ use ftui_render::cell::Cell;
 use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::Style;
+use ftui_text::display_width;
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
@@ -1331,11 +1332,12 @@ impl SnapshotPlayer {
             self.blit_buffer(frame, inner, buf);
         } else {
             let msg = "No frames recorded";
-            let x = inner.x + (inner.width.saturating_sub(msg.len() as u16)) / 2;
+            let msg_width = display_width(msg) as u16;
+            let x = inner.x + (inner.width.saturating_sub(msg_width)) / 2;
             let y = inner.y + inner.height / 2;
             Paragraph::new(msg)
                 .style(Style::new().fg(theme::fg::MUTED))
-                .render(Rect::new(x, y, msg.len() as u16, 1), frame);
+                .render(Rect::new(x, y, msg_width, 1), frame);
         }
 
         inner

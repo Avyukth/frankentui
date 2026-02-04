@@ -76,6 +76,26 @@ fn fnv_hash_bytes(hash: &mut u64, bytes: &[u8]) {
     }
 }
 
+#[inline]
+fn json_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "\\u{:04X}", c as u32);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 /// Configuration for the resize coalescer.
 #[derive(Debug, Clone)]
 pub struct CoalescerConfig {
@@ -364,7 +384,7 @@ impl DecisionEvidence {
             self.regime_contribution,
             self.timing_contribution,
             self.rate_contribution,
-            self.explanation.replace('"', "\\\"")
+            json_escape(&self.explanation)
         )
     }
 
@@ -1432,6 +1452,8 @@ mod tests {
 
     impl SimulationMetrics {
         fn to_jsonl(self, pattern: &str, mode: &str) -> String {
+            let pattern = json_escape(pattern);
+            let mode = json_escape(mode);
             let apply_ratio = if self.event_count == 0 {
                 0.0
             } else {
@@ -1471,6 +1493,7 @@ mod tests {
         }
 
         fn to_jsonl(self, pattern: &str) -> String {
+            let pattern = json_escape(pattern);
             format!(
                 r#"{{"event":"simulation_compare","pattern":"{pattern}","apply_delta":{},"mean_coalesce_delta_ms":{:.3}}}"#,
                 self.apply_delta, self.mean_coalesce_delta_ms

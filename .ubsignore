@@ -1,0 +1,8 @@
+# UBS ignore file
+# False-positive hardcoded-secret heuristic on demo fields/tokens.
+crates/ftui-demo-showcase/src/screens/code_explorer.rs
+crates/ftui-demo-showcase/src/screens/form_validation.rs
+crates/ftui-demo-showcase/src/screens/forms_input.rs
+crates/ftui-demo-showcase/src/screens/theme_studio.rs
+crates/ftui-demo-showcase/src/screens/widget_gallery.rs
+crates/ftui-demo-showcase/src/theme.rs

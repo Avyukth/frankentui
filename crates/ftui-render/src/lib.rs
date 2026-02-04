@@ -21,10 +21,8 @@ pub mod spatial_hit_index;
 pub mod terminal_model;
 
 mod text_width {
-    use unicode_display_width::width as unicode_display_width;
+    use unicode_display_width::{is_double_width, width as unicode_display_width};
     use unicode_segmentation::UnicodeSegmentation;
-    use unicode_width::UnicodeWidthChar;
-
     #[inline]
     fn ascii_width(text: &str) -> Option<usize> {
         if text.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
@@ -92,20 +90,35 @@ mod text_width {
         if grapheme.chars().all(is_zero_width_codepoint) {
             return 0;
         }
-        let mut chars = grapheme.chars();
-        if let Some(first) = chars.next()
-            && chars.next().is_none()
+        let width = unicode_display_width(grapheme) as usize;
+        if width == 1
+            && (has_emoji_presentation_selector(grapheme)
+                || grapheme.chars().any(is_probable_emoji))
         {
-            let width = UnicodeWidthChar::width(first).unwrap_or(1);
-            if width == 1 && is_probable_emoji(first) {
-                return 2;
-            }
-            return width;
-        }
-        if has_emoji_presentation_selector(grapheme) || grapheme.chars().any(is_probable_emoji) {
             return 2;
         }
-        unicode_display_width(grapheme) as usize
+        width
+    }
+
+    #[inline]
+    pub(crate) fn char_width(ch: char) -> usize {
+        if ch.is_ascii() {
+            return match ch {
+                '\t' | '\n' | '\r' => 1,
+                ' '..='~' => 1,
+                _ => 0,
+            };
+        }
+        if is_zero_width_codepoint(ch) {
+            return 0;
+        }
+        if is_double_width(ch) {
+            return 2;
+        }
+        if is_probable_emoji(ch) {
+            return 2;
+        }
+        1
     }
 
     #[inline]
@@ -126,4 +139,4 @@ mod text_width {
     }
 }
 
-pub(crate) use text_width::{display_width, grapheme_width};
+pub(crate) use text_width::{char_width, display_width, grapheme_width};

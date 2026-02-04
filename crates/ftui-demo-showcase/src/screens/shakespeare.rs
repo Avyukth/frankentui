@@ -2,7 +2,7 @@
 
 //! Shakespeare Library screen — complete works with search and virtualized scroll.
 
-use std::cell::Cell;
+use std::cell::{Cell, OnceCell};
 
 use ftui_core::event::{Event, KeyCode, KeyEventKind, Modifiers, MouseButton, MouseEventKind};
 use ftui_core::geometry::Rect;
@@ -44,7 +44,7 @@ pub struct Shakespeare {
     /// Current scroll offset (top visible line).
     scroll_offset: usize,
     /// Table of contents entries.
-    toc_entries: Vec<TocEntry>,
+    toc_entries: OnceCell<Vec<TocEntry>>,
     /// Selected TOC entry.
     toc_selected: usize,
     /// Scroll offset for TOC list.
@@ -87,12 +87,11 @@ impl Default for Shakespeare {
 impl Shakespeare {
     pub fn new() -> Self {
         let lines: Vec<&'static str> = SHAKESPEARE_TEXT.lines().collect();
-        let toc_entries = Self::build_toc(&lines);
 
         let mut state = Self {
             lines,
             scroll_offset: 0,
-            toc_entries,
+            toc_entries: OnceCell::new(),
             toc_selected: 0,
             toc_scroll: Cell::new(0),
             search_input: TextInput::new()
@@ -167,6 +166,11 @@ impl Shakespeare {
         entries
     }
 
+    fn toc_entries(&self) -> &Vec<TocEntry> {
+        self.toc_entries
+            .get_or_init(|| Self::build_toc(&self.lines))
+    }
+
     fn total_lines(&self) -> usize {
         self.lines.len()
     }
@@ -239,7 +243,7 @@ impl Shakespeare {
     /// Determine the current play/section name based on scroll position.
     fn current_section(&self) -> &str {
         let mut section = "Preamble";
-        for entry in &self.toc_entries {
+        for entry in self.toc_entries().iter() {
             if entry.line <= self.scroll_offset {
                 section = &entry.title;
             } else {
@@ -430,9 +434,16 @@ impl Screen for Shakespeare {
                         let toc = self.layout_toc.get();
                         let rel_y = mouse.y.saturating_sub(toc.y);
                         let idx = self.toc_scroll.get() + rel_y as usize;
-                        if idx < self.toc_entries.len() {
+                        let line = {
+                            let toc_entries = self.toc_entries();
+                            if idx < toc_entries.len() {
+                                Some(toc_entries[idx].line)
+                            } else {
+                                None
+                            }
+                        };
+                        if let Some(line) = line {
                             self.toc_selected = idx;
-                            let line = self.toc_entries[idx].line;
                             self.scroll_to(line.saturating_sub(2));
                         }
                     }
@@ -520,9 +531,17 @@ impl Screen for Shakespeare {
                 (KeyCode::Down, Modifiers::NONE) => match self.focus {
                     FocusPanel::Navigator => self.next_match(),
                     FocusPanel::Toc => {
-                        if self.toc_selected + 1 < self.toc_entries.len() {
-                            self.toc_selected += 1;
-                            let line = self.toc_entries[self.toc_selected].line;
+                        let line = {
+                            let toc_entries = self.toc_entries();
+                            let next = self.toc_selected.saturating_add(1);
+                            if next < toc_entries.len() {
+                                Some(toc_entries[next].line)
+                            } else {
+                                None
+                            }
+                        };
+                        if let Some(line) = line {
+                            self.toc_selected = self.toc_selected.saturating_add(1);
                             self.scroll_to(line.saturating_sub(2));
                         }
                     }
@@ -533,7 +552,7 @@ impl Screen for Shakespeare {
                     FocusPanel::Toc => {
                         if self.toc_selected > 0 {
                             self.toc_selected -= 1;
-                            let line = self.toc_entries[self.toc_selected].line;
+                            let line = self.toc_entries()[self.toc_selected].line;
                             self.scroll_to(line.saturating_sub(2));
                         }
                     }
@@ -555,7 +574,7 @@ impl Screen for Shakespeare {
                 }
                 (KeyCode::Enter, Modifiers::NONE) => {
                     if self.focus == FocusPanel::Toc
-                        && let Some(entry) = self.toc_entries.get(self.toc_selected)
+                        && let Some(entry) = self.toc_entries().get(self.toc_selected)
                     {
                         self.scroll_to(entry.line.saturating_sub(2));
                     }
@@ -1085,11 +1104,12 @@ impl Shakespeare {
         }
 
         let visible = inner.height as usize;
-        if self.toc_selected >= self.toc_entries.len() {
+        let toc_entries = self.toc_entries();
+        if toc_entries.is_empty() || self.toc_selected >= toc_entries.len() {
             return;
         }
 
-        let max_scroll = self.toc_entries.len().saturating_sub(visible).max(0);
+        let max_scroll = toc_entries.len().saturating_sub(visible).max(0);
         let mut start = self.toc_scroll.get().min(max_scroll);
         if self.toc_selected < start {
             start = self.toc_selected;
@@ -1098,10 +1118,10 @@ impl Shakespeare {
         }
         self.toc_scroll.set(start);
 
-        let end = (start + visible).min(self.toc_entries.len());
+        let end = (start + visible).min(toc_entries.len());
         let is_focused = self.focus == FocusPanel::Toc;
 
-        for (i, entry) in self.toc_entries[start..end].iter().enumerate() {
+        for (i, entry) in toc_entries[start..end].iter().enumerate() {
             let row = inner.y + i as u16;
             let row_area = Rect::new(inner.x, row, inner.width, 1);
             let label = truncate_to_width(&entry.title, inner.width);
@@ -1632,7 +1652,7 @@ mod tests {
         let s = Shakespeare::new();
         assert_eq!(s.scroll_offset, 0);
         assert!(s.total_lines() > 100_000, "Should have 100K+ lines");
-        assert!(!s.toc_entries.is_empty(), "Should have TOC entries");
+        assert!(!s.toc_entries().is_empty(), "Should have TOC entries");
     }
 
     #[test]
@@ -1673,7 +1693,7 @@ mod tests {
     #[test]
     fn shakespeare_toc_has_plays() {
         let s = Shakespeare::new();
-        let titles: Vec<&str> = s.toc_entries.iter().map(|e| e.title.as_str()).collect();
+        let titles: Vec<&str> = s.toc_entries().iter().map(|e| e.title.as_str()).collect();
         // Should find major plays
         assert!(
             titles.iter().any(|t| t.contains("HAMLET")),

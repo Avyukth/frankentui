@@ -24,16 +24,7 @@
 //! - No heap allocation for 99% of cells
 //! - 24 bytes wastes cache, 32 bytes doubles bandwidth
 
-use unicode_width::UnicodeWidthChar;
-
-#[inline]
-fn is_probable_emoji_char(c: char) -> bool {
-    let u = c as u32;
-    matches!(
-        u,
-        0x1F000..=0x1FAFF | 0x2300..=0x23FF | 0x2600..=0x27BF | 0x2B00..=0x2BFF
-    ) && u != 0x2764
-}
+use crate::char_width;
 
 /// Grapheme ID: reference to an interned string in [`GraphemePool`].
 ///
@@ -209,8 +200,8 @@ impl CellContent {
     /// - Grapheme: width embedded in GraphemeId
     /// - Char: requires external width lookup (returns 1 as default for ASCII)
     ///
-    /// Note: For accurate char width, use unicode-width crate externally.
-    /// This method provides a fast path for known cases.
+    /// Note: For accurate char width, use the unicode-display-width-based
+    /// helpers in this crate. This method provides a fast path for known cases.
     #[inline]
     pub const fn width_hint(self) -> usize {
         if self.is_empty() || self.is_continuation() {
@@ -237,11 +228,7 @@ impl CellContent {
             let Some(c) = self.as_char() else {
                 return 1;
             };
-            let width = UnicodeWidthChar::width(c).unwrap_or(1);
-            if width == 1 && is_probable_emoji_char(c) {
-                return 2;
-            }
-            width
+            char_width(c)
         }
     }
 
@@ -1131,16 +1118,13 @@ mod tests {
 
     #[test]
     fn cell_content_width_control_chars() {
-        // Control characters like NUL have UnicodeWidthChar::width() = None,
-        // so width() falls through to unwrap_or(1)
+        // Control characters have width 0, except tab/newline/CR which are 1 cell
         // Note: NUL (0x00) is CellContent::EMPTY, so test with other controls
         let tab = CellContent::from_char('\t');
-        // Tab is not empty/continuation, and UnicodeWidthChar returns None,
-        // so it hits the unwrap_or(1) path
         assert_eq!(tab.width(), 1);
 
         let bel = CellContent::from_char('\x07');
-        assert_eq!(bel.width(), 1);
+        assert_eq!(bel.width(), 0);
     }
 
     #[test]
@@ -1607,9 +1591,8 @@ mod cell_proptests {
             c in (0x20u32..0x7Fu32).prop_map(|c| char::from_u32(c).unwrap()),
         ) {
             let cell = Cell::from_char(c);
-            let expected = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-            prop_assert_eq!(cell.width_hint(), expected,
-                "Cell width for '{}' doesn't match Unicode width", c);
+            prop_assert_eq!(cell.width_hint(), 1,
+                "Cell width hint for '{}' should be 1 for ASCII", c);
         }
     }
 
