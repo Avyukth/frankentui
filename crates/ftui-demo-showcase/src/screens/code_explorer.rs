@@ -372,9 +372,13 @@ impl CodeExplorer {
             self.match_density = vec![0.0; 48];
             return;
         }
+
+        // Optimization: Pre-compute lowercase query to avoid allocating a new String
+        // for every single line in the text.
+        let query_lower = query.to_ascii_lowercase();
+
         for (i, line) in self.lines.iter().enumerate() {
-            let results = search_ascii_case_insensitive(line, &query);
-            if !results.is_empty() {
+            if line_contains_ignore_case(line, &query_lower) {
                 self.search_matches.push(i);
             }
         }
@@ -1971,6 +1975,31 @@ impl CodeExplorer {
             .style(Style::new().fg(theme::fg::MUTED).bg(theme::alpha::SURFACE))
             .render(area, frame);
     }
+}
+
+/// Check if a line contains a query string (case-insensitive) without allocation.
+fn line_contains_ignore_case(line: &str, query_lower: &str) -> bool {
+    let line_bytes = line.as_bytes();
+    let query_bytes = query_lower.as_bytes();
+
+    if query_bytes.len() > line_bytes.len() {
+        return false;
+    }
+
+    // Naive search window
+    for i in 0..=line_bytes.len() - query_bytes.len() {
+        let mut match_found = true;
+        for j in 0..query_bytes.len() {
+            if line_bytes[i + j].to_ascii_lowercase() != query_bytes[j] {
+                match_found = false;
+                break;
+            }
+        }
+        if match_found {
+            return true;
+        }
+    }
+    false
 }
 
 fn truncate_to_width(text: &str, max_width: u16) -> String {

@@ -199,9 +199,14 @@ impl Shakespeare {
             self.match_density = vec![0.0; 48];
             return;
         }
+
+        // Optimization: Pre-compute lowercase query to avoid allocating a new String
+        // for every single line in the text (100k+ allocations).
+        let query_lower = query.to_ascii_lowercase();
+
         for (i, line) in self.lines.iter().enumerate() {
-            let results = search_ascii_case_insensitive(line, &query);
-            if !results.is_empty() {
+            // Use allocation-free check
+            if line_contains_ignore_case(line, &query_lower) {
                 self.search_matches.push(i);
             }
         }
@@ -406,6 +411,34 @@ fn is_title_line(s: &str) -> bool {
     let upper_count = s.chars().filter(|c| c.is_uppercase()).count();
     // At least 80% uppercase letters
     upper_count * 100 / alpha_count.max(1) >= 80
+}
+
+/// Check if a line contains a query string (case-insensitive) without allocation.
+fn line_contains_ignore_case(line: &str, query_lower: &str) -> bool {
+    if query_lower.is_empty() {
+        return true;
+    }
+    let line_bytes = line.as_bytes();
+    let query_bytes = query_lower.as_bytes();
+
+    if query_bytes.len() > line_bytes.len() {
+        return false;
+    }
+
+    // Naive search window
+    for i in 0..=line_bytes.len() - query_bytes.len() {
+        let mut match_found = true;
+        for j in 0..query_bytes.len() {
+            if line_bytes[i + j].to_ascii_lowercase() != query_bytes[j] {
+                match_found = false;
+                break;
+            }
+        }
+        if match_found {
+            return true;
+        }
+    }
+    false
 }
 
 impl Screen for Shakespeare {
