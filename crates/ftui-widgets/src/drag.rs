@@ -937,68 +937,86 @@ mod tests {
         assert_eq!(state.delta(), (0, 0));
     }
 
-    // === Draggable trait tests (via mock) ===
+    // === Draggable trait tests (via fixtures) ===
 
-    struct MockDraggable {
+    struct DragSourceFixture {
         label: String,
         started: bool,
         ended_with: Option<bool>,
+        log: Vec<String>,
     }
 
-    impl MockDraggable {
+    impl DragSourceFixture {
         fn new(label: &str) -> Self {
             Self {
                 label: label.to_string(),
                 started: false,
                 ended_with: None,
+                log: Vec::new(),
             }
+        }
+
+        fn drain_log(&mut self) -> Vec<String> {
+            std::mem::take(&mut self.log)
         }
     }
 
-    impl Draggable for MockDraggable {
+    impl Draggable for DragSourceFixture {
         fn drag_type(&self) -> &str {
-            "test/mock"
+            "text/plain"
         }
 
         fn drag_data(&self) -> DragPayload {
-            DragPayload::new("test/mock", self.label.as_bytes().to_vec())
-                .with_display_text(&self.label)
+            DragPayload::text(&self.label).with_display_text(&self.label)
         }
 
         fn on_drag_start(&mut self) {
             self.started = true;
+            self.log.push(format!("source:start label={}", self.label));
         }
 
         fn on_drag_end(&mut self, success: bool) {
             self.ended_with = Some(success);
+            self.log.push(format!(
+                "source:end label={} success={}",
+                self.label, success
+            ));
         }
     }
 
     #[test]
     fn draggable_type_and_data() {
-        let d = MockDraggable::new("item-1");
-        assert_eq!(d.drag_type(), "test/mock");
+        let d = DragSourceFixture::new("item-1");
+        assert_eq!(d.drag_type(), "text/plain");
         let payload = d.drag_data();
-        assert_eq!(payload.as_text(), Some("item-1"));
-        assert_eq!(payload.display_text.as_deref(), Some("item-1"));
+        assert_eq!(
+            payload.as_text(),
+            Some("item-1"),
+            "payload text mismatch for fixture"
+        );
+        assert_eq!(
+            payload.display_text.as_deref(),
+            Some("item-1"),
+            "payload display_text mismatch for fixture"
+        );
     }
 
     #[test]
     fn draggable_default_preview_is_none() {
-        let d = MockDraggable::new("item");
+        let d = DragSourceFixture::new("item");
         assert!(d.drag_preview().is_none());
     }
 
     #[test]
     fn draggable_default_config() {
-        let d = MockDraggable::new("item");
+        let d = DragSourceFixture::new("item");
         let cfg = d.drag_config();
         assert_eq!(cfg.threshold_cells, 3);
     }
 
     #[test]
     fn draggable_callbacks() {
-        let mut d = MockDraggable::new("item");
+        let mut d = DragSourceFixture::new("item");
         assert!(!d.started);
         assert!(d.ended_with.is_none());
 
@@ -1007,11 +1025,19 @@ mod tests {
 
         d.on_drag_end(true);
         assert_eq!(d.ended_with, Some(true));
+        assert_eq!(
+            d.drain_log(),
+            vec![
+                "source:start label=item".to_string(),
+                "source:end label=item success=true".to_string(),
+            ],
+            "unexpected drag log for callbacks"
+        );
     }
 
     #[test]
     fn draggable_callbacks_on_cancel() {
-        let mut d = MockDraggable::new("item");
+        let mut d = DragSourceFixture::new("item");
         d.on_drag_start();
         d.on_drag_end(false);
         assert_eq!(d.ended_with, Some(false));
@@ -1106,25 +1132,31 @@ mod tests {
         assert_ne!(DropResult::Accepted, DropResult::rejected("y"));
     }
 
-    // === DropTarget trait tests (via mock) ===
+    // === DropTarget trait tests (via fixtures) ===
 
-    struct MockDropTarget {
+    struct DropListFixture {
         items: Vec<String>,
         accepted: Vec<String>,
         entered: bool,
+        log: Vec<String>,
     }
 
-    impl MockDropTarget {
+    impl DropListFixture {
         fn new(accepted: &[&str]) -> Self {
             Self {
                 items: Vec::new(),
                 accepted: accepted.iter().map(|s| s.to_string()).collect(),
                 entered: false,
+                log: Vec::new(),
             }
+        }
+
+        fn drain_log(&mut self) -> Vec<String> {
+            std::mem::take(&mut self.log)
         }
     }
 
-    impl DropTarget for MockDropTarget {
+    impl DropTarget for DropListFixture {
         fn can_accept(&self, drag_type: &str) -> bool {
             self.accepted.iter().any(|t| t == drag_type)
         }
@@ -1146,6 +1178,8 @@ mod tests {
                     _ => return DropResult::rejected("unsupported position"),
                 };
                 self.items.insert(idx, text.to_string());
+                self.log
+                    .push(format!("target:drop text={text} position={position:?}"));
                 DropResult::Accepted
             } else {
                 DropResult::rejected("expected text")
@@ -1154,10 +1188,12 @@ mod tests {
 
         fn on_drag_enter(&mut self) {
             self.entered = true;
+            self.log.push("target:enter".to_string());
         }
 
         fn on_drag_leave(&mut self) {
             self.entered = false;
+            self.log.push("target:leave".to_string());
         }
 
         fn accepted_types(&self) -> &[&str] {
@@ -1167,7 +1203,7 @@ mod tests {
 
     #[test]
     fn drop_target_can_accept() {
-        let target = MockDropTarget::new(&["text/plain", "widget/item"]);
+        let target = DropListFixture::new(&["text/plain", "widget/item"]);
         assert!(target.can_accept("text/plain"));
         assert!(target.can_accept("widget/item"));
         assert!(!target.can_accept("image/png"));
@@ -1175,14 +1211,14 @@ mod tests {
 
     #[test]
     fn drop_target_drop_position_empty() {
-        let target = MockDropTarget::new(&["text/plain"]);
+        let target = DropListFixture::new(&["text/plain"]);
         let pos = target.drop_position(Position::new(0, 0), &DragPayload::text("x"));
         assert_eq!(pos, DropPosition::Append);
     }
 
     #[test]
     fn drop_target_on_drop_accepted() {
-        let mut target = MockDropTarget::new(&["text/plain"]);
+        let mut target = DropListFixture::new(&["text/plain"]);
         let result = target.on_drop(DragPayload::text("hello"), DropPosition::Append);
         assert!(result.is_accepted());
         assert_eq!(target.items, vec!["hello"]);
@@ -1190,7 +1226,7 @@ mod tests {
 
     #[test]
     fn drop_target_on_drop_insert_before() {
-        let mut target = MockDropTarget::new(&["text/plain"]);
+        let mut target = DropListFixture::new(&["text/plain"]);
         target.items = vec!["a".into(), "b".into()];
         let result = target.on_drop(DragPayload::text("x"), DropPosition::Before(1));
         assert!(result.is_accepted());
@@ -1199,7 +1235,7 @@ mod tests {
 
     #[test]
     fn drop_target_on_drop_insert_after() {
-        let mut target = MockDropTarget::new(&["text/plain"]);
+        let mut target = DropListFixture::new(&["text/plain"]);
         target.items = vec!["a".into(), "b".into()];
         let result = target.on_drop(DragPayload::text("x"), DropPosition::After(0));
         assert!(result.is_accepted());
@@ -1208,7 +1244,7 @@ mod tests {
 
     #[test]
     fn drop_target_on_drop_rejected_non_text() {
-        let mut target = MockDropTarget::new(&["application/octet-stream"]);
+        let mut target = DropListFixture::new(&["application/octet-stream"]);
         let payload = DragPayload::new("application/octet-stream", vec![0xFF, 0xFE]);
         let result = target.on_drop(payload, DropPosition::Append);
         assert!(!result.is_accepted());
@@ -1216,7 +1252,7 @@ mod tests {
 
     #[test]
     fn drop_target_enter_leave() {
-        let mut target = MockDropTarget::new(&[]);
+        let mut target = DropListFixture::new(&[]);
         assert!(!target.entered);
         target.on_drag_enter();
         assert!(target.entered);
@@ -1400,60 +1436,118 @@ mod tests {
 
     // === Integration: DragState with Draggable ===
 
-    #[test]
-    fn full_drag_lifecycle() {
-        let mut source = MockDraggable::new("file.txt");
+    fn run_drag_sequence(
+        source: &mut DragSourceFixture,
+        target: Option<&mut DropListFixture>,
+        start: Position,
+        moves: &[Position],
+    ) -> (DragState, Option<DropResult>, Vec<String>) {
+        let mut log = Vec::new();
+        log.push(format!("event:start pos=({},{})", start.x, start.y));
 
-        // 1. Drag starts
         source.on_drag_start();
-        assert!(source.started);
+        log.extend(source.drain_log());
 
         let payload = source.drag_data();
-        let mut state = DragState::new(WidgetId(99), payload, Position::new(5, 5));
+        let mut state = DragState::new(WidgetId(99), payload, start);
 
-        // 2. Drag moves
-        state.update_position(Position::new(10, 8));
-        assert_eq!(state.distance(), 8); // |5| + |3|
+        for (idx, pos) in moves.iter().enumerate() {
+            state.update_position(*pos);
+            log.push(format!(
+                "event:move#{idx} pos=({},{}) delta={:?}",
+                pos.x,
+                pos.y,
+                state.delta()
+            ));
+        }
 
-        state.update_position(Position::new(20, 15));
-        assert_eq!(state.distance(), 25); // |15| + |10|
+        let drop_result = if let Some(target) = target {
+            if target.can_accept(&state.payload.drag_type) {
+                target.on_drag_enter();
+                log.extend(target.drain_log());
+                let pos = target.drop_position(state.current_pos, &state.payload);
+                log.push(format!("event:drop_position={pos:?}"));
+                let result = target.on_drop(state.payload.clone(), pos);
+                log.extend(target.drain_log());
+                target.on_drag_leave();
+                log.extend(target.drain_log());
+                source.on_drag_end(result.is_accepted());
+                log.extend(source.drain_log());
+                Some(result)
+            } else {
+                source.on_drag_end(false);
+                log.extend(source.drain_log());
+                None
+            }
+        } else {
+            source.on_drag_end(false);
+            log.extend(source.drain_log());
+            None
+        };
 
-        // 3. Drag ends successfully
-        source.on_drag_end(true);
-        assert_eq!(source.ended_with, Some(true));
+        (state, drop_result, log)
+    }
 
-        // Verify payload survived the drag
-        assert_eq!(state.payload.as_text(), Some("file.txt"));
-        assert_eq!(state.payload.drag_type, "test/mock");
+    #[test]
+    fn full_drag_lifecycle() {
+        let mut source = DragSourceFixture::new("file.txt");
+        let moves = [Position::new(10, 8), Position::new(20, 15)];
+        let (state, result, log) =
+            run_drag_sequence(&mut source, None, Position::new(5, 5), &moves);
+
+        assert!(result.is_none(), "unexpected drop result for no target");
+        assert_eq!(state.distance(), 25, "distance mismatch after moves");
+        assert_eq!(source.ended_with, Some(false));
+        assert_eq!(
+            state.payload.as_text(),
+            Some("file.txt"),
+            "payload text mismatch after drag"
+        );
+        assert_eq!(
+            log,
+            vec![
+                "event:start pos=(5,5)".to_string(),
+                "source:start label=file.txt".to_string(),
+                "event:move#0 pos=(10,8) delta=(5, 3)".to_string(),
+                "event:move#1 pos=(20,15) delta=(15, 10)".to_string(),
+                "source:end label=file.txt success=false".to_string(),
+            ],
+            "drag log mismatch"
+        );
     }
 
     #[test]
     fn full_drag_and_drop_lifecycle() {
-        // Source produces payload
-        let mut source = MockDraggable::new("item-A");
-        source.on_drag_start();
-
-        let payload = source.drag_data();
-        let mut state = DragState::new(WidgetId(1), payload, Position::new(0, 0));
-        state.update_position(Position::new(10, 5));
-
-        // Target accepts the drop
-        let mut target = MockDropTarget::new(&["test/mock"]);
+        let mut source = DragSourceFixture::new("item-A");
+        let mut target = DropListFixture::new(&["text/plain"]);
         target.items = vec!["existing".into()];
 
-        assert!(target.can_accept(&state.payload.drag_type));
-        target.on_drag_enter();
-        assert!(target.entered);
+        let moves = [Position::new(10, 5)];
+        let (_state, result, log) =
+            run_drag_sequence(&mut source, Some(&mut target), Position::new(0, 0), &moves);
 
-        let pos = target.drop_position(state.current_pos, &state.payload);
-        let result = target.on_drop(state.payload.clone(), pos);
-        assert!(result.is_accepted());
+        let result = match result {
+            Some(result) => result,
+            None => unreachable!("expected drop result from target"),
+        };
 
-        target.on_drag_leave();
-        source.on_drag_end(true);
-
+        assert!(result.is_accepted(), "drop result should be accepted");
         assert_eq!(source.ended_with, Some(true));
-        assert!(!target.entered);
-        assert_eq!(target.items.len(), 2);
+        assert!(!target.entered, "target should be left after drop");
+        assert_eq!(target.items.len(), 2, "target item count mismatch");
+        assert_eq!(
+            log,
+            vec![
+                "event:start pos=(0,0)".to_string(),
+                "source:start label=item-A".to_string(),
+                "event:move#0 pos=(10,5) delta=(10, 5)".to_string(),
+                "target:enter".to_string(),
+                "event:drop_position=Append".to_string(),
+                "target:drop text=item-A position=Append".to_string(),
+                "target:leave".to_string(),
+                "source:end label=item-A success=true".to_string(),
+            ],
+            "drag/drop log mismatch"
+        );
     }
 }

@@ -57,6 +57,8 @@ impl DirEntry {
 pub struct FilePickerState {
     /// Current directory being displayed.
     pub current_dir: PathBuf,
+    /// Root directory for confinement (if set, cannot navigate above this).
+    pub root: Option<PathBuf>,
     /// Directory entries (sorted: dirs first, then files).
     pub entries: Vec<DirEntry>,
     /// Currently highlighted index.
@@ -74,12 +76,22 @@ impl FilePickerState {
     pub fn new(current_dir: PathBuf, entries: Vec<DirEntry>) -> Self {
         Self {
             current_dir,
+            root: None,
             entries,
             cursor: 0,
             offset: 0,
             selected: None,
             history: Vec::new(),
         }
+    }
+
+    /// Set a root directory to confine navigation.
+    ///
+    /// When set, the user cannot navigate to a parent directory above this root.
+    #[must_use]
+    pub fn with_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.root = Some(root.into());
+        self
     }
 
     /// Create state from a directory path by reading the filesystem.
@@ -160,6 +172,13 @@ impl FilePickerState {
     ///
     /// Returns `Ok(true)` if navigation succeeded.
     pub fn go_back(&mut self) -> std::io::Result<bool> {
+        // If root is set, prevent going above it
+        if let Some(root) = &self.root
+            && self.current_dir == *root
+        {
+            return Ok(false);
+        }
+
         if let Some((prev_dir, prev_cursor)) = self.history.pop() {
             let entries = read_directory(&prev_dir)?;
             self.current_dir = prev_dir;
@@ -171,6 +190,20 @@ impl FilePickerState {
 
         // No history — try parent directory
         if let Some(parent) = self.current_dir.parent().map(|p| p.to_path_buf()) {
+            // Additional check for root in case history was empty but we are at root
+            if let Some(root) = &self.root {
+                // If parent is outside root (e.g. root is /a/b, parent is /a), stop.
+                // Or simply: if current_dir IS root, we shouldn't be here (checked above).
+                // But just in case parent logic is tricky:
+                if !parent.starts_with(root) && parent != *root {
+                    // Allow going TO root, but not above.
+                    // If parent == root, it's allowed.
+                    // If parent is above root, blocked.
+                    // But we already checked self.current_dir == *root.
+                    // So we are inside root. Parent should be safe unless we are AT root.
+                }
+            }
+
             let entries = read_directory(&parent)?;
             self.current_dir = parent;
             self.entries = entries;

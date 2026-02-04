@@ -1394,18 +1394,15 @@ impl IncrementalScorer {
         self.stats.full_scans += 1;
         self.stats.total_evaluated += corpus.len() as u64;
 
-        let mut results: Vec<(usize, MatchResult)> = corpus
-            .iter()
-            .enumerate()
-            .map(|(i, title)| {
-                (
-                    i,
-                    self.scorer
-                        .score_with_query_lower(query, query_lower, title),
-                )
-            })
-            .filter(|(_, r)| r.score > 0.0)
-            .collect();
+        let mut results: Vec<(usize, MatchResult)> = Vec::with_capacity(corpus.len());
+        for (i, title) in corpus.iter().enumerate() {
+            let result = self
+                .scorer
+                .score_with_query_lower(query, query_lower, title);
+            if result.score > 0.0 {
+                results.push((i, result));
+            }
+        }
 
         results.sort_by(|a, b| {
             b.1.score
@@ -1428,19 +1425,15 @@ impl IncrementalScorer {
         self.stats.full_scans += 1;
         self.stats.total_evaluated += corpus.len() as u64;
 
-        let mut results: Vec<(usize, MatchResult)> = corpus
-            .iter()
-            .zip(corpus_lower.iter())
-            .enumerate()
-            .map(|(i, (title, title_lower))| {
-                (
-                    i,
-                    self.scorer
-                        .score_with_lowered_title(query, query_lower, title, title_lower),
-                )
-            })
-            .filter(|(_, r)| r.score > 0.0)
-            .collect();
+        let mut results: Vec<(usize, MatchResult)> = Vec::with_capacity(corpus.len());
+        for (i, (title, title_lower)) in corpus.iter().zip(corpus_lower.iter()).enumerate() {
+            let result =
+                self.scorer
+                    .score_with_lowered_title(query, query_lower, title, title_lower);
+            if result.score > 0.0 {
+                results.push((i, result));
+            }
+        }
 
         results.sort_by(|a, b| {
             b.1.score
@@ -1464,25 +1457,24 @@ impl IncrementalScorer {
         self.stats.full_scans += 1;
         self.stats.total_evaluated += corpus.len() as u64;
 
-        let mut results: Vec<(usize, MatchResult)> = corpus
+        let mut results: Vec<(usize, MatchResult)> = Vec::with_capacity(corpus.len());
+        for (i, ((title, title_lower), starts)) in corpus
             .iter()
             .zip(corpus_lower.iter())
             .zip(word_starts.iter())
             .enumerate()
-            .map(|(i, ((title, title_lower), starts))| {
-                (
-                    i,
-                    self.scorer.score_with_lowered_title_and_words(
-                        query,
-                        query_lower,
-                        title,
-                        title_lower,
-                        Some(starts),
-                    ),
-                )
-            })
-            .filter(|(_, r)| r.score > 0.0)
-            .collect();
+        {
+            let result = self.scorer.score_with_lowered_title_and_words(
+                query,
+                query_lower,
+                title,
+                title_lower,
+                Some(starts),
+            );
+            if result.score > 0.0 {
+                results.push((i, result));
+            }
+        }
 
         results.sort_by(|a, b| {
             b.1.score
@@ -1507,23 +1499,20 @@ impl IncrementalScorer {
         self.stats.total_pruned += pruned as u64;
         self.stats.total_evaluated += prev_match_count as u64;
 
-        let mut results: Vec<(usize, MatchResult)> = self
-            .cache
-            .iter()
-            .filter_map(|entry| {
-                if entry.corpus_index < corpus.len() {
-                    let result = self.scorer.score_with_query_lower(
-                        query,
-                        query_lower,
-                        corpus[entry.corpus_index],
-                    );
-                    if result.score > 0.0 {
-                        return Some((entry.corpus_index, result));
-                    }
+        let mut results: Vec<(usize, MatchResult)> =
+            Vec::with_capacity(self.cache.len().min(corpus.len()));
+        for entry in &self.cache {
+            if entry.corpus_index < corpus.len() {
+                let result = self.scorer.score_with_query_lower(
+                    query,
+                    query_lower,
+                    corpus[entry.corpus_index],
+                );
+                if result.score > 0.0 {
+                    results.push((entry.corpus_index, result));
                 }
-                None
-            })
-            .collect();
+            }
+        }
 
         results.sort_by(|a, b| {
             b.1.score
@@ -1550,26 +1539,20 @@ impl IncrementalScorer {
         self.stats.total_pruned += pruned as u64;
         self.stats.total_evaluated += prev_match_count as u64;
 
-        let mut results: Vec<(usize, MatchResult)> = self
-            .cache
-            .iter()
-            .filter_map(|entry| {
-                if entry.corpus_index < corpus.len() {
-                    let title = corpus[entry.corpus_index];
-                    let title_lower = corpus_lower[entry.corpus_index];
-                    let result = self.scorer.score_with_lowered_title(
-                        query,
-                        query_lower,
-                        title,
-                        title_lower,
-                    );
-                    if result.score > 0.0 {
-                        return Some((entry.corpus_index, result));
-                    }
+        let mut results: Vec<(usize, MatchResult)> =
+            Vec::with_capacity(self.cache.len().min(corpus.len()));
+        for entry in &self.cache {
+            if entry.corpus_index < corpus.len() {
+                let title = corpus[entry.corpus_index];
+                let title_lower = corpus_lower[entry.corpus_index];
+                let result =
+                    self.scorer
+                        .score_with_lowered_title(query, query_lower, title, title_lower);
+                if result.score > 0.0 {
+                    results.push((entry.corpus_index, result));
                 }
-                None
-            })
-            .collect();
+            }
+        }
 
         results.sort_by(|a, b| {
             b.1.score
@@ -1597,28 +1580,25 @@ impl IncrementalScorer {
         self.stats.total_pruned += pruned as u64;
         self.stats.total_evaluated += prev_match_count as u64;
 
-        let mut results: Vec<(usize, MatchResult)> = self
-            .cache
-            .iter()
-            .filter_map(|entry| {
-                if entry.corpus_index < corpus.len() {
-                    let title = &corpus[entry.corpus_index];
-                    let title_lower = &corpus_lower[entry.corpus_index];
-                    let starts = &word_starts[entry.corpus_index];
-                    let result = self.scorer.score_with_lowered_title_and_words(
-                        query,
-                        query_lower,
-                        title,
-                        title_lower,
-                        Some(starts),
-                    );
-                    if result.score > 0.0 {
-                        return Some((entry.corpus_index, result));
-                    }
+        let mut results: Vec<(usize, MatchResult)> =
+            Vec::with_capacity(self.cache.len().min(corpus.len()));
+        for entry in &self.cache {
+            if entry.corpus_index < corpus.len() {
+                let title = &corpus[entry.corpus_index];
+                let title_lower = &corpus_lower[entry.corpus_index];
+                let starts = &word_starts[entry.corpus_index];
+                let result = self.scorer.score_with_lowered_title_and_words(
+                    query,
+                    query_lower,
+                    title,
+                    title_lower,
+                    Some(starts),
+                );
+                if result.score > 0.0 {
+                    results.push((entry.corpus_index, result));
                 }
-                None
-            })
-            .collect();
+            }
+        }
 
         results.sort_by(|a, b| {
             b.1.score
@@ -2474,6 +2454,16 @@ mod perf_tests {
     use super::*;
     use std::time::Instant;
 
+    #[derive(Debug, Clone, Copy)]
+    struct PerfStats {
+        p50_us: u64,
+        p95_us: u64,
+        p99_us: u64,
+        mean_us: f64,
+        variance_us: f64,
+        samples: usize,
+    }
+
     /// Budget thresholds for single-query scoring.
     /// These are generous to avoid CI flakes but catch >2x regressions.
     const SINGLE_SCORE_BUDGET_US: u64 = 10; // 10µs per score call
@@ -2521,24 +2511,7 @@ mod perf_tests {
             .collect()
     }
 
-    /// Measure the median of N runs (returns microseconds).
-    fn measure_us(iterations: usize, mut f: impl FnMut()) -> u64 {
-        let mut times = Vec::with_capacity(iterations);
-        // Warmup
-        for _ in 0..3 {
-            f();
-        }
-        for _ in 0..iterations {
-            let start = Instant::now();
-            f();
-            times.push(start.elapsed().as_micros() as u64);
-        }
-        times.sort_unstable();
-        times[times.len() / 2] // p50
-    }
-
-    /// Measure p95 of N runs (returns microseconds).
-    fn measure_p95_us(iterations: usize, mut f: impl FnMut()) -> u64 {
+    fn measure_stats_us(iterations: usize, mut f: impl FnMut()) -> PerfStats {
         let mut times = Vec::with_capacity(iterations);
         // Warmup
         for _ in 0..3 {
@@ -2551,19 +2524,48 @@ mod perf_tests {
         }
         times.sort_unstable();
         let len = times.len();
-        times[((len as f64 * 0.95) as usize).min(len.saturating_sub(1))]
+        let p50 = times[len / 2];
+        let p95 = times[((len as f64 * 0.95) as usize).min(len.saturating_sub(1))];
+        let p99 = times[((len as f64 * 0.99) as usize).min(len.saturating_sub(1))];
+        let mean = times.iter().copied().map(|value| value as f64).sum::<f64>() / len as f64;
+        let variance = times
+            .iter()
+            .map(|value| {
+                let delta = *value as f64 - mean;
+                delta * delta
+            })
+            .sum::<f64>()
+            / len as f64;
+
+        PerfStats {
+            p50_us: p50,
+            p95_us: p95,
+            p99_us: p99,
+            mean_us: mean,
+            variance_us: variance,
+            samples: len,
+        }
     }
 
     #[test]
     fn perf_single_score_under_budget() {
         let scorer = BayesianScorer::fast();
-        let p50 = measure_us(200, || {
+        let stats = measure_stats_us(200, || {
             std::hint::black_box(scorer.score("git co", "Git: Commit"));
         });
+        eprintln!(
+            "{{\"ts\":\"2026-02-04T00:00:00Z\",\"event\":\"palette_score_single\",\"samples\":{},\"p50_us\":{},\"p95_us\":{},\"p99_us\":{},\"mean_us\":{:.2},\"variance_us\":{:.2}}}",
+            stats.samples,
+            stats.p50_us,
+            stats.p95_us,
+            stats.p99_us,
+            stats.mean_us,
+            stats.variance_us
+        );
         assert!(
-            p50 <= SINGLE_SCORE_BUDGET_US,
+            stats.p50_us <= SINGLE_SCORE_BUDGET_US,
             "Single score p50 = {}µs exceeds budget {}µs",
-            p50,
+            stats.p50_us,
             SINGLE_SCORE_BUDGET_US,
         );
     }
@@ -2572,7 +2574,7 @@ mod perf_tests {
     fn perf_corpus_100_under_budget() {
         let scorer = BayesianScorer::fast();
         let corpus = make_corpus(100);
-        let p95 = measure_p95_us(50, || {
+        let stats = measure_stats_us(50, || {
             let mut results: Vec<_> = corpus
                 .iter()
                 .map(|t| scorer.score("git co", t))
@@ -2581,10 +2583,19 @@ mod perf_tests {
             results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
             std::hint::black_box(&results);
         });
+        eprintln!(
+            "{{\"ts\":\"2026-02-04T00:00:00Z\",\"event\":\"palette_corpus_100\",\"samples\":{},\"p50_us\":{},\"p95_us\":{},\"p99_us\":{},\"mean_us\":{:.2},\"variance_us\":{:.2}}}",
+            stats.samples,
+            stats.p50_us,
+            stats.p95_us,
+            stats.p99_us,
+            stats.mean_us,
+            stats.variance_us
+        );
         assert!(
-            p95 <= CORPUS_100_BUDGET_US,
+            stats.p95_us <= CORPUS_100_BUDGET_US,
             "100-item corpus p95 = {}µs exceeds budget {}µs",
-            p95,
+            stats.p95_us,
             CORPUS_100_BUDGET_US,
         );
     }
@@ -2593,7 +2604,7 @@ mod perf_tests {
     fn perf_corpus_1000_under_budget() {
         let scorer = BayesianScorer::fast();
         let corpus = make_corpus(1_000);
-        let p95 = measure_p95_us(20, || {
+        let stats = measure_stats_us(20, || {
             let mut results: Vec<_> = corpus
                 .iter()
                 .map(|t| scorer.score("git co", t))
@@ -2602,10 +2613,19 @@ mod perf_tests {
             results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
             std::hint::black_box(&results);
         });
+        eprintln!(
+            "{{\"ts\":\"2026-02-04T00:00:00Z\",\"event\":\"palette_corpus_1000\",\"samples\":{},\"p50_us\":{},\"p95_us\":{},\"p99_us\":{},\"mean_us\":{:.2},\"variance_us\":{:.2}}}",
+            stats.samples,
+            stats.p50_us,
+            stats.p95_us,
+            stats.p99_us,
+            stats.mean_us,
+            stats.variance_us
+        );
         assert!(
-            p95 <= CORPUS_1000_BUDGET_US,
+            stats.p95_us <= CORPUS_1000_BUDGET_US,
             "1000-item corpus p95 = {}µs exceeds budget {}µs",
-            p95,
+            stats.p95_us,
             CORPUS_1000_BUDGET_US,
         );
     }
@@ -2614,7 +2634,7 @@ mod perf_tests {
     fn perf_corpus_5000_under_budget() {
         let scorer = BayesianScorer::fast();
         let corpus = make_corpus(5_000);
-        let p95 = measure_p95_us(10, || {
+        let stats = measure_stats_us(10, || {
             let mut results: Vec<_> = corpus
                 .iter()
                 .map(|t| scorer.score("git co", t))
@@ -2623,10 +2643,19 @@ mod perf_tests {
             results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
             std::hint::black_box(&results);
         });
+        eprintln!(
+            "{{\"ts\":\"2026-02-04T00:00:00Z\",\"event\":\"palette_corpus_5000\",\"samples\":{},\"p50_us\":{},\"p95_us\":{},\"p99_us\":{},\"mean_us\":{:.2},\"variance_us\":{:.2}}}",
+            stats.samples,
+            stats.p50_us,
+            stats.p95_us,
+            stats.p99_us,
+            stats.mean_us,
+            stats.variance_us
+        );
         assert!(
-            p95 <= CORPUS_5000_BUDGET_US,
+            stats.p95_us <= CORPUS_5000_BUDGET_US,
             "5000-item corpus p95 = {}µs exceeds budget {}µs",
-            p95,
+            stats.p95_us,
             CORPUS_5000_BUDGET_US,
         );
     }
@@ -2637,17 +2666,26 @@ mod perf_tests {
         let corpus_refs: Vec<&str> = corpus.iter().map(|s| s.as_str()).collect();
         let queries = ["g", "gi", "git", "git ", "git c", "git co", "git com"];
 
-        let p95 = measure_p95_us(30, || {
+        let stats = measure_stats_us(30, || {
             let mut inc = IncrementalScorer::new();
             for query in &queries {
                 let results = inc.score_corpus(query, &corpus_refs, None);
                 std::hint::black_box(&results);
             }
         });
+        eprintln!(
+            "{{\"ts\":\"2026-02-04T00:00:00Z\",\"event\":\"palette_incremental_7key_100\",\"samples\":{},\"p50_us\":{},\"p95_us\":{},\"p99_us\":{},\"mean_us\":{:.2},\"variance_us\":{:.2}}}",
+            stats.samples,
+            stats.p50_us,
+            stats.p95_us,
+            stats.p99_us,
+            stats.mean_us,
+            stats.variance_us
+        );
         assert!(
-            p95 <= INCREMENTAL_7KEY_100_BUDGET_US,
+            stats.p95_us <= INCREMENTAL_7KEY_100_BUDGET_US,
             "Incremental 7-key 100-item p95 = {}µs exceeds budget {}µs",
-            p95,
+            stats.p95_us,
             INCREMENTAL_7KEY_100_BUDGET_US,
         );
     }
@@ -2658,17 +2696,26 @@ mod perf_tests {
         let corpus_refs: Vec<&str> = corpus.iter().map(|s| s.as_str()).collect();
         let queries = ["g", "gi", "git", "git ", "git c", "git co", "git com"];
 
-        let p95 = measure_p95_us(10, || {
+        let stats = measure_stats_us(10, || {
             let mut inc = IncrementalScorer::new();
             for query in &queries {
                 let results = inc.score_corpus(query, &corpus_refs, None);
                 std::hint::black_box(&results);
             }
         });
+        eprintln!(
+            "{{\"ts\":\"2026-02-04T00:00:00Z\",\"event\":\"palette_incremental_7key_1000\",\"samples\":{},\"p50_us\":{},\"p95_us\":{},\"p99_us\":{},\"mean_us\":{:.2},\"variance_us\":{:.2}}}",
+            stats.samples,
+            stats.p50_us,
+            stats.p95_us,
+            stats.p99_us,
+            stats.mean_us,
+            stats.variance_us
+        );
         assert!(
-            p95 <= INCREMENTAL_7KEY_1000_BUDGET_US,
+            stats.p95_us <= INCREMENTAL_7KEY_1000_BUDGET_US,
             "Incremental 7-key 1000-item p95 = {}µs exceeds budget {}µs",
-            p95,
+            stats.p95_us,
             INCREMENTAL_7KEY_1000_BUDGET_US,
         );
     }
@@ -2680,7 +2727,7 @@ mod perf_tests {
         let scorer = BayesianScorer::fast();
         let queries = ["g", "gi", "git", "git ", "git c", "git co", "git com"];
 
-        let naive_p50 = measure_us(30, || {
+        let naive_stats = measure_stats_us(30, || {
             for query in &queries {
                 let mut results: Vec<_> = corpus
                     .iter()
@@ -2692,21 +2739,29 @@ mod perf_tests {
             }
         });
 
-        let inc_p50 = measure_us(30, || {
+        let inc_stats = measure_stats_us(30, || {
             let mut inc = IncrementalScorer::new();
             for query in &queries {
                 let results = inc.score_corpus(query, &corpus_refs, None);
                 std::hint::black_box(&results);
             }
         });
+        eprintln!(
+            "{{\"ts\":\"2026-02-04T00:00:00Z\",\"event\":\"palette_incremental_vs_naive\",\"samples\":{},\"naive_p50_us\":{},\"naive_p95_us\":{},\"inc_p50_us\":{},\"inc_p95_us\":{}}}",
+            naive_stats.samples,
+            naive_stats.p50_us,
+            naive_stats.p95_us,
+            inc_stats.p50_us,
+            inc_stats.p95_us
+        );
 
         // Incremental should not be more than 2x slower than naive
         // (in practice it's faster, but we set a relaxed threshold)
         assert!(
-            inc_p50 <= naive_p50 * 2 + 50, // +50µs tolerance for measurement noise
+            inc_stats.p50_us <= naive_stats.p50_us * 2 + 50, // +50µs tolerance for measurement noise
             "Incremental p50 = {}µs is >2x slower than naive p50 = {}µs",
-            inc_p50,
-            naive_p50,
+            inc_stats.p50_us,
+            naive_stats.p50_us,
         );
     }
 
@@ -2716,7 +2771,7 @@ mod perf_tests {
         let corpus_100 = make_corpus(100);
         let corpus_1000 = make_corpus(1_000);
 
-        let time_100 = measure_us(30, || {
+        let stats_100 = measure_stats_us(30, || {
             let mut results: Vec<_> = corpus_100
                 .iter()
                 .map(|t| scorer.score("git", t))
@@ -2726,7 +2781,7 @@ mod perf_tests {
             std::hint::black_box(&results);
         });
 
-        let time_1000 = measure_us(20, || {
+        let stats_1000 = measure_stats_us(20, || {
             let mut results: Vec<_> = corpus_1000
                 .iter()
                 .map(|t| scorer.score("git", t))
@@ -2735,10 +2790,14 @@ mod perf_tests {
             results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
             std::hint::black_box(&results);
         });
+        eprintln!(
+            "{{\"ts\":\"2026-02-04T00:00:00Z\",\"event\":\"palette_scaling\",\"samples_100\":{},\"p50_100_us\":{},\"samples_1000\":{},\"p50_1000_us\":{}}}",
+            stats_100.samples, stats_100.p50_us, stats_1000.samples, stats_1000.p50_us
+        );
 
         // 10x corpus should take less than 15x time (linear + sort overhead)
-        let ratio = if time_100 > 0 {
-            time_1000 as f64 / time_100 as f64
+        let ratio = if stats_100.p50_us > 0 {
+            stats_1000.p50_us as f64 / stats_100.p50_us as f64
         } else {
             0.0
         };
@@ -2746,8 +2805,8 @@ mod perf_tests {
             ratio < 15.0,
             "1000/100 scaling ratio = {:.1}x exceeds 15x threshold (100: {}µs, 1000: {}µs)",
             ratio,
-            time_100,
-            time_1000,
+            stats_100.p50_us,
+            stats_1000.p50_us,
         );
     }
 }
