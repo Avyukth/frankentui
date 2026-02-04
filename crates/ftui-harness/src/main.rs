@@ -51,7 +51,10 @@ use ftui_render::frame::{Frame, HitId, HitRegion};
 #[cfg(feature = "telemetry")]
 use ftui_runtime::TelemetryConfig;
 use ftui_runtime::locale::{Locale, LocaleContext, detect_system_locale, set_locale};
-use ftui_runtime::{Cmd, Every, Model, Program, ProgramConfig, ScreenMode, Subscription};
+use ftui_runtime::{
+    Cmd, ConformalConfig, Every, EvidenceSinkConfig, Model, Program, ProgramConfig, ScreenMode,
+    Subscription,
+};
 use ftui_style::Style;
 use ftui_text::WrapMode;
 use ftui_widgets::block::Alignment;
@@ -1323,6 +1326,19 @@ impl AgentHarness {
     }
 }
 
+fn env_flag(name: &str) -> Option<bool> {
+    let value = std::env::var(name).ok()?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let enabled = matches!(
+        trimmed,
+        "1" | "true" | "TRUE" | "True" | "yes" | "YES" | "on" | "ON"
+    );
+    Some(enabled)
+}
+
 fn main() -> std::io::Result<()> {
     if std::env::var("FTUI_HARNESS_FLICKER_ANALYZE").is_ok() {
         let input_path = std::env::var("FTUI_HARNESS_FLICKER_INPUT").map_err(|_| {
@@ -1450,6 +1466,30 @@ fn main() -> std::io::Result<()> {
     };
     if let Some(locale) = locale_base {
         config = config.with_locale(locale);
+    }
+    if let Some(enabled) = env_flag("FTUI_HARNESS_DIFF_BAYESIAN") {
+        config.diff_config = config.diff_config.with_bayesian_enabled(enabled);
+    }
+    if let Some(enabled) = env_flag("FTUI_HARNESS_BOCPD") {
+        if enabled {
+            config.resize_coalescer = config.resize_coalescer.with_bocpd();
+        } else {
+            config.resize_coalescer.enable_bocpd = false;
+            config.resize_coalescer.bocpd_config = None;
+        }
+    }
+    if let Some(enabled) = env_flag("FTUI_HARNESS_CONFORMAL") {
+        if enabled {
+            config = config.with_conformal_config(ConformalConfig::default());
+        } else {
+            config = config.without_conformal();
+        }
+    }
+    if let Ok(path) = std::env::var("FTUI_HARNESS_EVIDENCE_JSONL") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            config = config.with_evidence_sink(EvidenceSinkConfig::enabled_file(trimmed));
+        }
     }
 
     // Run the agent harness in inline mode
