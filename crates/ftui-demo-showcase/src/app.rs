@@ -335,6 +335,10 @@ pub enum ScreenId {
     WidgetBuilder,
     /// Command palette evidence lab (bd-iuvb.11).
     CommandPaletteLab,
+    /// Determinism lab (checksum equivalence) (bd-iuvb.2).
+    DeterminismLab,
+    /// Hyperlink playground (OSC-8 + hit regions) (bd-iuvb.14).
+    HyperlinkPlayground,
 }
 
 impl ScreenId {
@@ -374,6 +378,8 @@ impl ScreenId {
         Self::AccessibilityPanel,
         Self::WidgetBuilder,
         Self::CommandPaletteLab,
+        Self::DeterminismLab,
+        Self::HyperlinkPlayground,
     ];
 
     /// 0-based index in the ALL array.
@@ -430,6 +436,8 @@ impl ScreenId {
             Self::AccessibilityPanel => "Accessibility",
             Self::WidgetBuilder => "Widget Builder",
             Self::CommandPaletteLab => "Command Palette Evidence Lab",
+            Self::DeterminismLab => "Determinism Lab",
+            Self::HyperlinkPlayground => "Hyperlink Playground",
         }
     }
 
@@ -470,6 +478,8 @@ impl ScreenId {
             Self::AccessibilityPanel => "A11y",
             Self::WidgetBuilder => "Builder",
             Self::CommandPaletteLab => "Palette",
+            Self::DeterminismLab => "Determinism",
+            Self::HyperlinkPlayground => "Links",
         }
     }
 
@@ -510,6 +520,8 @@ impl ScreenId {
             Self::AccessibilityPanel => "AccessibilityPanel",
             Self::WidgetBuilder => "WidgetBuilder",
             Self::CommandPaletteLab => "CommandPaletteLab",
+            Self::DeterminismLab => "DeterminismLab",
+            Self::HyperlinkPlayground => "HyperlinkPlayground",
         }
     }
 
@@ -598,9 +610,13 @@ pub struct ScreenStates {
     pub widget_builder: screens::widget_builder::WidgetBuilder,
     /// Command palette evidence lab screen state (bd-iuvb.11).
     pub command_palette_lab: screens::command_palette_lab::CommandPaletteEvidenceLab,
+    /// Determinism lab screen state (bd-iuvb.2).
+    pub determinism_lab: screens::determinism_lab::DeterminismLab,
+    /// Hyperlink playground screen state (bd-iuvb.14).
+    pub hyperlink_playground: screens::hyperlink_playground::HyperlinkPlayground,
     /// Tracks whether each screen has errored during rendering.
     /// Indexed by `ScreenId::index()`.
-    screen_errors: [Option<String>; 34],
+    screen_errors: [Option<String>; 36],
 }
 
 impl Default for ScreenStates {
@@ -640,6 +656,8 @@ impl Default for ScreenStates {
             accessibility_panel: Default::default(),
             widget_builder: Default::default(),
             command_palette_lab: Default::default(),
+            determinism_lab: Default::default(),
+            hyperlink_playground: Default::default(),
             screen_errors: std::array::from_fn(|_| None),
         }
     }
@@ -752,6 +770,12 @@ impl ScreenStates {
             ScreenId::CommandPaletteLab => {
                 self.command_palette_lab.update(event);
             }
+            ScreenId::DeterminismLab => {
+                self.determinism_lab.update(event);
+            }
+            ScreenId::HyperlinkPlayground => {
+                self.hyperlink_playground.update(event);
+            }
         }
     }
 
@@ -806,6 +830,8 @@ impl ScreenStates {
             ScreenId::AccessibilityPanel => self.accessibility_panel.tick(tick_count),
             ScreenId::WidgetBuilder => self.widget_builder.tick(tick_count),
             ScreenId::CommandPaletteLab => self.command_palette_lab.tick(tick_count),
+            ScreenId::DeterminismLab => self.determinism_lab.tick(tick_count),
+            ScreenId::HyperlinkPlayground => self.hyperlink_playground.tick(tick_count),
         }
     }
 
@@ -870,6 +896,8 @@ impl ScreenStates {
                 ScreenId::AccessibilityPanel => self.accessibility_panel.view(frame, area),
                 ScreenId::WidgetBuilder => self.widget_builder.view(frame, area),
                 ScreenId::CommandPaletteLab => self.command_palette_lab.view(frame, area),
+                ScreenId::DeterminismLab => self.determinism_lab.view(frame, area),
+                ScreenId::HyperlinkPlayground => self.hyperlink_playground.view(frame, area),
             }
         }));
 
@@ -1772,6 +1800,8 @@ impl AppModel {
             ScreenId::AccessibilityPanel => self.screens.accessibility_panel.keybindings(),
             ScreenId::WidgetBuilder => self.screens.widget_builder.keybindings(),
             ScreenId::CommandPaletteLab => self.screens.command_palette_lab.keybindings(),
+            ScreenId::DeterminismLab => self.screens.determinism_lab.keybindings(),
+            ScreenId::HyperlinkPlayground => self.screens.hyperlink_playground.keybindings(),
         };
         // Convert screens::HelpEntry to chrome::HelpEntry (same struct, different module).
         entries
@@ -2543,7 +2573,7 @@ mod tests {
         assert_eq!(app.current_screen, ScreenId::Dashboard);
 
         app.update(AppMsg::PrevScreen);
-        assert_eq!(app.current_screen, ScreenId::AccessibilityPanel);
+        assert_eq!(app.current_screen, ScreenId::Dashboard.prev());
     }
 
     #[test]
@@ -2648,7 +2678,7 @@ mod tests {
     fn screen_next_prev_wraps() {
         assert_eq!(ScreenId::Dashboard.next(), ScreenId::Shakespeare);
         assert_eq!(ScreenId::VisualEffects.next(), ScreenId::ResponsiveDemo);
-        assert_eq!(ScreenId::Dashboard.prev(), ScreenId::CommandPaletteLab);
+        assert_eq!(ScreenId::Dashboard.prev(), ScreenId::HyperlinkPlayground);
         assert_eq!(ScreenId::Shakespeare.prev(), ScreenId::Dashboard);
     }
 
@@ -2827,7 +2857,7 @@ mod tests {
     /// Verify all screens have the expected count.
     #[test]
     fn all_screens_count() {
-        assert_eq!(ScreenId::ALL.len(), 34);
+        assert_eq!(ScreenId::ALL.len(), 36);
     }
 
     // -----------------------------------------------------------------------
@@ -2866,8 +2896,8 @@ mod tests {
     #[test]
     fn palette_has_actions_for_all_screens() {
         let app = AppModel::new();
-        // One action per screen + 5 global commands (quit, help, theme, debug, perf_hud)
-        let expected = ScreenId::ALL.len() + 5;
+        // One action per screen + 6 global commands (quit, help, theme, debug, perf_hud, evidence_ledger)
+        let expected = ScreenId::ALL.len() + 6;
         assert_eq!(app.command_palette.action_count(), expected);
     }
 

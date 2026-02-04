@@ -8,7 +8,9 @@
 //!
 //! Naming convention: `screen_name_scenario_WIDTHxHEIGHT`
 
-use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
+use ftui_core::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseEvent, MouseEventKind,
+};
 use ftui_core::geometry::Rect;
 use ftui_core::terminal_capabilities::TerminalProfile;
 use ftui_demo_showcase::app::{AppModel, ScreenId};
@@ -17,6 +19,7 @@ use ftui_demo_showcase::theme::{ScopedThemeLock, ThemeId};
 use ftui_harness::assert_snapshot;
 use ftui_render::frame::Frame;
 use ftui_render::grapheme_pool::GraphemePool;
+use ftui_render::link_registry::LinkRegistry;
 use ftui_runtime::Model;
 
 // ---------------------------------------------------------------------------
@@ -42,6 +45,10 @@ fn ctrl_press(code: KeyCode) -> Event {
         modifiers: Modifiers::CTRL,
         kind: KeyEventKind::Press,
     })
+}
+
+fn mouse_move(x: u16, y: u16) -> Event {
+    Event::Mouse(MouseEvent::new(MouseEventKind::Moved, x, y))
 }
 
 fn terminal_caps_env() -> ftui_demo_showcase::screens::terminal_capabilities::EnvSnapshot {
@@ -1855,4 +1862,86 @@ fn inline_mode_story_compare_top_120x40() {
     let area = Rect::new(0, 0, 120, 40);
     screen.view(&mut frame, area);
     assert_snapshot!("inline_mode_story_compare_top_120x40", &frame.buffer);
+}
+
+// ============================================================================
+// Determinism Lab (bd-iuvb.2)
+// ============================================================================
+
+#[test]
+fn determinism_lab_initial_80x24() {
+    let _theme_guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let screen = ftui_demo_showcase::screens::determinism_lab::DeterminismLab::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("determinism_lab_initial_80x24", &frame.buffer);
+}
+
+#[test]
+fn determinism_lab_fault_120x40() {
+    let _theme_guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen = ftui_demo_showcase::screens::determinism_lab::DeterminismLab::new();
+    screen.update(&press(KeyCode::Char('f')));
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    let area = Rect::new(0, 0, 120, 40);
+    screen.view(&mut frame, area);
+    assert_snapshot!("determinism_lab_fault_120x40", &frame.buffer);
+}
+
+// ============================================================================
+// Hyperlink Playground (bd-iuvb.14)
+// ============================================================================
+
+#[test]
+fn hyperlink_playground_initial_80x24() {
+    let screen = ftui_demo_showcase::screens::hyperlink_playground::HyperlinkPlayground::new();
+    let mut pool = GraphemePool::new();
+    let mut registry = LinkRegistry::new();
+    let mut frame = Frame::with_links(80, 24, &mut pool, &mut registry);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("hyperlink_playground_initial_80x24", &frame.buffer);
+}
+
+#[test]
+fn hyperlink_playground_hover_120x40() {
+    let mut screen = ftui_demo_showcase::screens::hyperlink_playground::HyperlinkPlayground::new();
+    let mut pool = GraphemePool::new();
+    let mut registry = LinkRegistry::new();
+    let area = Rect::new(0, 0, 120, 40);
+
+    {
+        let mut frame = Frame::with_links(120, 40, &mut pool, &mut registry);
+        screen.view(&mut frame, area);
+    }
+
+    let layouts = screen.link_layouts();
+    let target = layouts.get(1).expect("expected link layout");
+    screen.update(&mouse_move(target.rect.x, target.rect.y));
+
+    let mut frame = Frame::with_links(120, 40, &mut pool, &mut registry);
+    screen.view(&mut frame, area);
+    assert_snapshot!("hyperlink_playground_hover_120x40", &frame.buffer);
+}
+
+#[test]
+fn hyperlink_playground_focus_120x40() {
+    let mut screen = ftui_demo_showcase::screens::hyperlink_playground::HyperlinkPlayground::new();
+    let mut pool = GraphemePool::new();
+    let mut registry = LinkRegistry::new();
+    let area = Rect::new(0, 0, 120, 40);
+
+    {
+        let mut frame = Frame::with_links(120, 40, &mut pool, &mut registry);
+        screen.view(&mut frame, area);
+    }
+
+    screen.update(&press(KeyCode::Down));
+
+    let mut frame = Frame::with_links(120, 40, &mut pool, &mut registry);
+    screen.view(&mut frame, area);
+    assert_snapshot!("hyperlink_playground_focus_120x40", &frame.buffer);
 }

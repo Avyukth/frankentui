@@ -1,5 +1,75 @@
 # Session TODO List
 
+## Current Session (RoseValley) — bd-3e1t.8.3 Strategy Selector + Evidence Log (2026-02-04)
+- [x] Re-read all of `AGENTS.md` and `README.md`
+- [x] Load skills: `extreme-software-optimization`, `beads-bv`, `agent-mail`
+- [x] Run `bv --robot-triage` + `bv --robot-next` to confirm top pick
+- [x] `br show bd-3e1t.8.3` to review dependencies/acceptance criteria
+- [x] Mark bead in progress: `br update bd-3e1t.8.3 --status in_progress`
+- [x] Register Agent Mail session (RoseValley)
+- [x] Attempt file reservations for:
+- [x] `crates/ftui-runtime/src/terminal_writer.rs`
+- [x] `crates/ftui-render/src/diff_strategy.rs`
+- [x] `crates/ftui-runtime/src/program.rs`
+- [x] Notify StormyEagle of reservation overlap + send start message in thread `bd-3e1t.8.3`
+- [ ] Await reservation clearance before editing shared files
+- [x] Code investigation: map `TerminalWriter::decide_diff` + evidence JSONL fields
+- [x] Code investigation: review `DiffStrategySelector` cost model + evidence
+- [x] Code investigation: review `BufferDiff` scan path (`scan_row_changes_range`, span/tile paths)
+- [ ] Document architecture findings (paths + invariants) for selector + evidence log
+- [ ] Extreme optimization loop (per skill):
+- [x] Build bench binary: `cargo bench -p ftui-render --bench diff_bench --no-run`
+- [x] Baseline: `hyperfine --warmup 3 --runs 10 '/data/tmp/cargo-target/release/deps/diff_bench-63db0fbe6ae1341a "diff/full_vs_dirty/compute/200x60@2%"'` → mean 28.2 ms ± 1.1 ms
+- [x] Profile setup: build debuginfo + no-strip bench binary via `CARGO_PROFILE_BENCH_DEBUG=true CARGO_PROFILE_BENCH_STRIP=none cargo bench -p ftui-render --bench diff_bench --no-run`
+- [x] Profile run: `perf record -e cycles:u -g -o /tmp/perf.data.user -- /data/tmp/cargo-target/release/deps/diff_bench-31243d85cd28d208 --bench --measurement-time 1 --warm-up-time 0.5 "diff/full_vs_dirty/compute/200x60@2%"`
+- [x] Profile report: `perf report --stdio -i /tmp/perf.data.user --no-children --percent-limit 0.5` (criterion overhead dominates; ftui hotspots visible but small)
+- [ ] Build opportunity matrix (top 3 ftui hotspots with score ≥ 2.0)
+- [ ] Capture golden outputs + checksums (`sha256sum golden_outputs/* > golden_checksums.txt`)
+- [x] Design & implement single optimization lever aligned with bd-3e1t.8.3 (selector hysteresis/safety guard)
+- [x] Run quality gates after code changes:
+- [x] `cargo fmt --check`
+- [x] `cargo check --all-targets`
+- [x] `cargo clippy --all-targets -- -D warnings`
+- [ ] Verify checksums + re-profile; update opportunity matrix with before/after
+- [ ] Write isomorphism proof for change
+- [ ] Post Agent Mail progress update (thread `bd-3e1t.8.3`) — tool timing out, retry
+- [ ] Release file reservations when done
+
+## Current Session (RusticRobin) — bd-iuvb.2 Determinism Lab Demo (2026-02-04)
+- [x] Re-read `AGENTS.md` + `README.md` for constraints and architecture context
+- [x] Load skills: `beads-bv`, `br`, `agent-mail`
+- [x] Run `bv --robot-next` and `bv --robot-triage` to find top-impact open work
+- [x] List ready/open beads (`br ready --json`) and identify actionable candidates
+- [x] Inspect bead details: `br show bd-iuvb.2 --json`
+- [x] Claim bead: `br update bd-iuvb.2 --status in_progress`
+- [x] Register MCP Agent Mail session (RusticRobin)
+- [x] Announce start in Agent Mail thread `[bd-iuvb.2]` to demo owners
+- [x] Reserve files for demo changes:
+- [x] `crates/ftui-demo-showcase/src/**`
+- [x] `scripts/e2e_demo_showcase.sh`
+- [ ] Resolve test file reservation conflicts before editing snapshots:
+- [x] `crates/ftui-demo-showcase/tests/screen_snapshots.rs`
+- [x] Code investigation: locate Screen Registry + routing/palette integrations
+- [x] Code investigation: find existing checksum/trace APIs usable for determinism lab
+- [x] Decide checksum source (buffer checksum + diff-apply equivalence) and document rationale
+- [x] Implement Determinism Lab screen UI:
+- [x] Strategy toggles (Full/DirtyRows/Redraw) + seed control
+- [x] Per-frame checksum timeline (last N frames) + delta counts
+- [x] Mismatch banner with first differing coordinate + delta count
+- [x] Export verification report to JSONL (deterministic path)
+- [x] Register screen metadata (ScreenId/title/tab label)
+- [x] Add unit tests for checksum equivalence across strategies and seeds
+- [x] Add snapshot tests for match + mismatch UI states (80x24, 120x40)
+- [ ] Generate snapshot baselines for determinism lab (`BLESS=1 cargo test -p ftui-demo-showcase determinism_lab_*`) once snapshot reservations are available
+- [x] Extend `scripts/demo_showcase_e2e.sh` with determinism lab scenario
+- [ ] Run quality gates after code changes:
+- [x] `cargo fmt --check`
+- [x] `cargo check --all-targets`
+- [x] `cargo clippy --all-targets -- -D warnings`
+- [ ] Update bead status (`br close bd-iuvb.2 --reason "Completed"`)
+- [ ] Post completion message in Agent Mail thread `[bd-iuvb.2]`
+- [ ] Release file reservations
+
 ## Current Session (StormyEagle) — bd-3e1t.8.3 Strategy Selector + Evidence Log (2026-02-04)
 - [x] Read all of `AGENTS.md` and `README.md` to refresh constraints and architecture context
 - [x] Load skills: `extreme-software-optimization`, `beads-bv`, `agent-mail`
@@ -88,6 +158,15 @@
 - [ ] Update bd-3e1t.8 subtask statuses (e.g., bd-3e1t.8.6 partial complete)
 - [ ] Post Agent Mail update for `bd-3e1t.8`
 - [ ] Release file reservations
+ - [x] Fix render-trace compile errors (JSON formatting in `render_trace.rs`, `RenderTraceFrame` import + emit_stats init in `terminal_writer.rs`, restore `RenderTraceContext/Recorder` imports in `program.rs`)
+ - [x] Build bench binary in `/data/tmp/cargo-target` and run symbol-rich `perf record` (`perf_bench.data`)
+- [x] Inspect perf hotspots (scan_row_changes + cell equality dominates)
+- [x] Attempted optimization: `Cell` PartialEq → `bits_eq` (regressed ~25%, reverted)
+- [x] Micro-opt: precompute `base_x` in `scan_row_changes_range` (neutral vs baseline; kept)
+- [x] Code review fix: align render-trace replay checksum with runtime (`trace_replay.rs`, tests + expected checksums)
+- [x] Run `cargo check -p ftui-harness` and update trace replay tests
+- [ ] Re-run perf report after micro-opt for updated hotspot percentages
+- [ ] Retry Agent Mail update (send_message timed out)
 
 ## Current Session (PearlMoose) — Tile-Skip + Evidence Schema (bd-3e1t.7) (2026-02-04)
 - [x] Run `bv --robot-next` to confirm top pick and note bd-3e1t.7.3 already in progress

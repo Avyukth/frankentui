@@ -17,6 +17,8 @@
 # 12. Terminal capabilities report export (bd-iuvb.6)
 # 13. i18n stress lab report export (bd-iuvb.9)
 # 14. Widget builder export (bd-iuvb.10)
+# 15. Determinism lab report (bd-iuvb.2)
+# 16. Hyperlink playground JSONL (bd-iuvb.14)
 #
 # Usage:
 #   ./scripts/demo_showcase_e2e.sh              # Run all tests
@@ -242,7 +244,7 @@ run_in_pty() {
 if $QUICK; then
     TOTAL_STEPS=3
 else
-    TOTAL_STEPS=14  # Updated: added Layout Inspector + Terminal Caps + i18n + Widget Builder
+    TOTAL_STEPS=16  # Updated: added Layout Inspector + Terminal Caps + i18n + Widget Builder + Determinism Lab + Hyperlink Playground
 fi
 
 echo "=============================================="
@@ -358,19 +360,19 @@ if $CAN_SMOKE; then
     # ────────────────────────────────────────────────────────────────────────
     # Step 7: Screen Navigation
     #
-    # Launch the demo on each screen (--screen=1..31) with a
+    # Launch the demo on each screen (--screen=1..36) with a
     # short auto-exit. If any screen panics on startup, this catches it.
-    # Updated for 31 screens (bd-iuvb.7: includes Layout Inspector at screen 20)
+    # Updated for 36 screens (bd-iuvb.2: includes Determinism Lab at screen 35)
     # ────────────────────────────────────────────────────────────────────────
-    log_step "Screen navigation (all 31 screens)"
+    log_step "Screen navigation (all 36 screens)"
     log_info "Starting demo on each screen to verify no panics..."
     NAV_LOG="$LOG_DIR/07_navigation.log"
-    STEP_NAMES+=("Screen navigation (all 31)")
+    STEP_NAMES+=("Screen navigation (all 36)")
 
     nav_start=$(date +%s%N)
     {
         NAV_FAILURES=0
-        for screen_num in $(seq 1 31); do
+        for screen_num in $(seq 1 36); do
             echo "--- Screen $screen_num ---"
             if run_in_pty "FTUI_DEMO_EXIT_AFTER_MS=1500 timeout 8 $DEMO_BIN --screen=$screen_num" 2>&1; then
                 echo "  Screen $screen_num: OK"
@@ -990,13 +992,254 @@ PY
         STEP_STATUSES+=("FAIL")
     fi
 
+    # ────────────────────────────────────────────────────────────────────────
+    # Step 15: Determinism Lab JSONL (bd-iuvb.2)
+    #
+    # Runs the Determinism Lab (screen 35) and exports JSONL verification data.
+    # ────────────────────────────────────────────────────────────────────────
+    log_step "determinism lab report (screen 35)"
+    log_info "Running Determinism Lab and validating JSONL..."
+    DET_LOG="$LOG_DIR/15_determinism_lab.log"
+    DET_REPORT="$LOG_DIR/15_determinism_report_${TIMESTAMP}.jsonl"
+    DET_JSONL="$LOG_DIR/15_determinism_summary.jsonl"
+    STEP_NAMES+=("determinism lab report")
+
+    det_start=$(date +%s%N)
+    {
+        echo "=== Determinism Lab (Screen 35) ==="
+        echo "Bead: bd-iuvb.2"
+        echo "Report path: $DET_REPORT"
+        echo ""
+
+        det_cmd="stty rows 24 cols 80 2>/dev/null; (sleep 0.6; printf 'e' > /dev/tty) & FTUI_DETERMINISM_LAB_REPORT=\"$DET_REPORT\" FTUI_DEMO_EXIT_AFTER_MS=2200 FTUI_DEMO_SCREEN=35 timeout 8 $DEMO_BIN"
+
+        if run_in_pty "$det_cmd" 2>&1; then
+            det_run_exit=0
+        else
+            det_run_exit=$?
+        fi
+
+        if [ "$det_run_exit" -eq 124 ]; then
+            det_outcome="timeout"
+        elif [ "$det_run_exit" -eq 0 ]; then
+            det_outcome="pass"
+        else
+            det_outcome="fail"
+        fi
+
+        det_report_ok=false
+        if [ -s "$DET_REPORT" ]; then
+            det_report_ok=true
+        else
+            echo "Report file missing or empty: $DET_REPORT"
+            det_outcome="no_report"
+        fi
+
+        det_parse_ok=false
+        if $det_report_ok; then
+            if python3 - "$DET_REPORT" "$DET_JSONL" "$TIMESTAMP" "$det_outcome" "$det_run_exit" <<'PY'
+import json
+import sys
+
+report_path, summary_path, run_id, outcome, exit_code = sys.argv[1:6]
+
+lines = []
+with open(report_path, "r", encoding="utf-8") as handle:
+    for line in handle:
+        line = line.strip()
+        if not line:
+            continue
+        lines.append(json.loads(line))
+
+required = {"event", "frame", "seed", "width", "height", "strategy", "checksum", "changes", "mismatch_count"}
+strategies = set()
+missing = 0
+for entry in lines:
+    if entry.get("event") != "determinism_report":
+        continue
+    strategies.add(entry.get("strategy"))
+    if not required.issubset(entry.keys()):
+        missing += 1
+
+ok = len(strategies) >= 3 and missing == 0 and len(lines) >= 3
+
+summary = {
+    "event": "determinism_summary",
+    "run_id": run_id,
+    "outcome": outcome,
+    "exit_code": int(exit_code),
+    "line_count": len(lines),
+    "strategy_count": len(strategies),
+    "strategies": sorted([s for s in strategies if s]),
+    "missing_required": missing,
+}
+
+with open(summary_path, "w", encoding="utf-8") as handle:
+    handle.write(json.dumps(summary) + "\\n")
+
+print(json.dumps(summary))
+sys.exit(0 if ok else 2)
+PY
+            then
+                det_parse_ok=true
+            else
+                det_parse_ok=false
+            fi
+        fi
+
+        det_exit_ok=true
+        if [ "$det_run_exit" -ne 0 ] && [ "$det_run_exit" -ne 124 ]; then
+            det_exit_ok=false
+        fi
+
+        det_success=true
+        if ! $det_exit_ok; then det_success=false; fi
+        if ! $det_report_ok; then det_success=false; fi
+        if ! $det_parse_ok; then det_success=false; fi
+
+        echo "Outcome: $det_outcome"
+        echo "Summary JSONL: $DET_JSONL"
+
+        $det_success
+    } > "$DET_LOG" 2>&1
+    det_exit=$?
+    det_end=$(date +%s%N)
+    det_dur_ms=$(( (det_end - det_start) / 1000000 ))
+    det_dur_s=$(echo "scale=2; $det_dur_ms / 1000" | bc 2>/dev/null || echo "${det_dur_ms}ms")
+    STEP_DURATIONS+=("${det_dur_s}s")
+
+    if [ $det_exit -eq 0 ]; then
+        log_pass "Determinism lab report passed in ${det_dur_s}s"
+        PASS_COUNT=$((PASS_COUNT + 1))
+        STEP_STATUSES+=("PASS")
+    else
+        log_fail "Determinism lab report failed. See: $DET_LOG"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        STEP_STATUSES+=("FAIL")
+    fi
+
+    # ────────────────────────────────────────────────────────────────────────
+    # Step 16: Hyperlink Playground JSONL (bd-iuvb.14)
+    #
+    # Runs the Hyperlink Playground (screen 36) and captures JSONL events.
+    # ────────────────────────────────────────────────────────────────────────
+    log_step "hyperlink playground (screen 36)"
+    log_info "Running Hyperlink Playground and validating JSONL..."
+    LINK_LOG="$LOG_DIR/16_hyperlink_playground.log"
+    LINK_REPORT="$LOG_DIR/16_hyperlink_report_${TIMESTAMP}.jsonl"
+    LINK_JSONL="$LOG_DIR/16_hyperlink_summary.jsonl"
+    STEP_NAMES+=("hyperlink playground")
+
+    link_start=$(date +%s%N)
+    {
+        echo "=== Hyperlink Playground (Screen 36) ==="
+        echo "Bead: bd-iuvb.14"
+        echo "Report path: $LINK_REPORT"
+        echo ""
+
+        link_cmd="stty rows 24 cols 80 2>/dev/null; (sleep 0.5; printf '\\t\\r' > /dev/tty) & FTUI_LINK_REPORT_PATH=\"$LINK_REPORT\" FTUI_LINK_RUN_ID=\"$TIMESTAMP\" FTUI_DEMO_EXIT_AFTER_MS=2200 FTUI_DEMO_SCREEN=36 timeout 8 $DEMO_BIN"
+
+        if run_in_pty "$link_cmd" 2>&1; then
+            link_exit=0
+        else
+            link_exit=$?
+        fi
+
+        if [ "$link_exit" -eq 124 ]; then
+            link_outcome="timeout"
+        elif [ "$link_exit" -eq 0 ]; then
+            link_outcome="pass"
+        else
+            link_outcome="fail"
+        fi
+
+        link_report_ok=false
+        if [ -s "$LINK_REPORT" ]; then
+            link_report_ok=true
+        else
+            echo "Report file missing or empty: $LINK_REPORT"
+            link_outcome="no_report"
+        fi
+
+        link_parse_ok=false
+        if $link_report_ok; then
+            if python3 - "$LINK_REPORT" "$LINK_JSONL" "$TIMESTAMP" "$link_outcome" "$link_exit" <<'PY'
+import json
+import sys
+
+report_path, summary_path, run_id, outcome, exit_code = sys.argv[1:6]
+
+with open(report_path, "r", encoding="utf-8") as handle:
+    lines = [line for line in handle if line.strip()]
+if not lines:
+    raise SystemExit("Report JSONL is empty")
+
+events = []
+for line in lines:
+    data = json.loads(line)
+    for key in ("run_id", "link_id", "focus_idx", "action", "outcome"):
+        if key not in data:
+            raise SystemExit(f"Missing key: {key}")
+    events.append(data)
+
+payload = {
+    "run_id": run_id,
+    "event_count": len(events),
+    "actions": sorted({evt["action"] for evt in events}),
+    "outcome": outcome,
+    "exit_code": int(exit_code),
+}
+
+with open(summary_path, "a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+PY
+            then
+                link_parse_ok=true
+            else
+                echo "Failed to parse hyperlink report into summary JSONL"
+                link_outcome="parse_fail"
+            fi
+        fi
+
+        link_exit_ok=true
+        if [ "$link_exit" -ne 0 ] && [ "$link_exit" -ne 124 ]; then
+            link_exit_ok=false
+        fi
+
+        link_success=true
+        if ! $link_exit_ok; then link_success=false; fi
+        if ! $link_report_ok; then link_success=false; fi
+        if ! $link_parse_ok; then link_success=false; fi
+
+        echo "Outcome: $link_outcome"
+        echo "Summary JSONL: $LINK_JSONL"
+
+        $link_success
+    } > "$LINK_LOG" 2>&1
+    link_exit=$?
+    link_end=$(date +%s%N)
+    link_dur_ms=$(( (link_end - link_start) / 1000000 ))
+    link_dur_s=$(echo "scale=2; $link_dur_ms / 1000" | bc 2>/dev/null || echo "${link_dur_ms}ms")
+    STEP_DURATIONS+=("${link_dur_s}s")
+
+    if [ $link_exit -eq 0 ]; then
+        log_pass "Hyperlink playground passed in ${link_dur_s}s"
+        PASS_COUNT=$((PASS_COUNT + 1))
+        STEP_STATUSES+=("PASS")
+    else
+        log_fail "Hyperlink playground failed. See: $LINK_LOG"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        STEP_STATUSES+=("FAIL")
+    fi
+
 else
     # No PTY support — skip all smoke/interactive tests
     for step in "Smoke test (alt-screen)" "Smoke test (inline)" \
                 "Screen navigation" "Search test (Shakespeare)" \
                 "Resize (SIGWINCH) test" "VisualEffects backdrop" \
                 "Layout Inspector" "Terminal caps report" "i18n stress report" \
-                "Widget builder export"; do
+                "Widget builder export" "Determinism lab report" \
+                "Hyperlink playground"; do
         skip_step "$step" "$SMOKE_REASON"
     done
 fi
